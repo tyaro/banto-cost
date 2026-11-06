@@ -48,6 +48,11 @@ impl ByCostType {
     pub fn total(&self) -> Yen {
         CostType::ALL.iter().map(|t| self.get(*t)).sum()
     }
+    /// 費目に金額を加える（調整はマイナスで渡す）。
+    pub fn add(&mut self, t: CostType, v: Yen) {
+        let cur = self.get(t);
+        set(self, t, cur + v);
+    }
 }
 
 /// 完了見込版の費目別の行。

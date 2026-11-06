@@ -132,6 +132,94 @@ pub fn validate_new(
     Ok(())
 }
 
+/// 計算基準を使う明細（工数・費用・見込）の状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageStatus {
+    /// 下書き・申請中。承認時に新しい適用値で計算する。
+    Pending,
+    /// 承認済み。自動では変えない。
+    Approved,
+}
+
+/// 計算基準を使う明細の1件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Usage {
+    pub id: String,
+    pub item: String,
+    pub project: Option<String>,
+    pub on: Date,
+    pub status: UsageStatus,
+    /// 締め済み月の明細か。
+    pub closed: bool,
+    pub line_specific: Option<i64>,
+    /// 承認時に保存した適用値。
+    pub applied_value: Option<i64>,
+}
+
+/// 計算基準を追加したときの影響（設計書10.5、保存前に表示する件数）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Impact {
+    /// 適用値が変わる明細を持つ案件。
+    pub affected_projects: Vec<String>,
+    /// 会社基準の変更だが、案件の上書きで影響しない案件。
+    pub shielded_projects: Vec<String>,
+    /// 承認時に新しい値で計算される下書き・申請中の件数。
+    pub pending: usize,
+    /// 承認済みで適用値が変わる明細（再計算訂正の候補）。
+    pub correction_candidates: Vec<String>,
+    /// 影響を受ける明細に締め済み月が含まれるか。
+    pub includes_closed: bool,
+}
+
+/// 新しい行 `new` を追加した場合の影響を求める。`values`・明細は変更しない（T33）。
+pub fn impact(values: &[CalcValue], new: &CalcValue, usages: &[Usage]) -> Impact {
+    let mut after = values.to_vec();
+    after.push(new.clone());
+    let mut affected = std::collections::BTreeSet::new();
+    let mut shielded = std::collections::BTreeSet::new();
+    let mut out = Impact::default();
+    for u in usages.iter().filter(|u| u.item == new.item) {
+        let p = u.project.as_deref();
+        let before = resolve(values, &u.item, p, u.on, u.line_specific);
+        let next = resolve(&after, &u.item, p, u.on, u.line_specific);
+        if before == next {
+            // 会社基準だけを差し替えた場合に、案件の上書きが効いて影響しない案件。
+            let company_after = resolve(&after, &u.item, None, u.on, None);
+            let company_before = resolve(values, &u.item, None, u.on, None);
+            if new.scope == Scope::Company
+                && company_after != company_before
+                && matches!(
+                    before,
+                    Some(Resolved {
+                        source: Source::ProjectOverride { .. },
+                        ..
+                    })
+                )
+            {
+                if let Some(pid) = p {
+                    shielded.insert(pid.to_owned());
+                }
+            }
+            continue;
+        }
+        if let Some(pid) = p {
+            affected.insert(pid.to_owned());
+        }
+        out.includes_closed |= u.closed;
+        match u.status {
+            UsageStatus::Pending => out.pending += 1,
+            UsageStatus::Approved => {
+                if next.map(|r| r.value) != u.applied_value {
+                    out.correction_candidates.push(u.id.clone());
+                }
+            }
+        }
+    }
+    out.affected_projects = affected.into_iter().collect();
+    out.shielded_projects = shielded.into_iter().collect();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +337,102 @@ mod tests {
             resolve(&sample(), "emp_rate", None, d("2025-05-31"), None),
             None
         );
+    }
+
+    fn usage(
+        id: &str,
+        pid: &str,
+        on: &str,
+        status: UsageStatus,
+        closed: bool,
+        applied: Option<i64>,
+    ) -> Usage {
+        Usage {
+            id: id.into(),
+            item: "emp_rate".into(),
+            project: Some(pid.into()),
+            on: d(on),
+            status,
+            closed,
+            line_specific: None,
+            applied_value: applied,
+        }
+    }
+
+    #[test]
+    fn t33_さかのぼった単価変更は承認済みを変えず訂正候補を出す() {
+        let mut v = sample();
+        v.push(CalcValue {
+            item: "emp_rate".into(),
+            scope: Scope::Project("P-3".into()),
+            valid_from: d("2026-06-01"),
+            value: Some(6_000),
+            version: 1,
+        });
+        let usages = [
+            usage(
+                "U1",
+                "P-1",
+                "2026-07-10",
+                UsageStatus::Approved,
+                true,
+                Some(5_000),
+            ),
+            usage(
+                "U2",
+                "P-1",
+                "2026-06-20",
+                UsageStatus::Approved,
+                false,
+                Some(5_000),
+            ),
+            usage("U3", "P-2", "2026-08-01", UsageStatus::Pending, false, None),
+            usage(
+                "U4",
+                "P-3",
+                "2026-08-01",
+                UsageStatus::Approved,
+                false,
+                Some(6_000),
+            ),
+            usage(
+                "U5",
+                "P-4",
+                "2026-05-20",
+                UsageStatus::Approved,
+                true,
+                Some(4_800),
+            ),
+        ];
+        let before = (v.clone(), usages.clone());
+        // 2026-07-01 適用の 5,200円を、7月以降の工数がある時点で追加する。
+        let new = company("emp_rate", "2026-07-01", 5_200, 3);
+        let imp = impact(&v, &new, &usages);
+        assert_eq!(
+            imp,
+            Impact {
+                affected_projects: vec!["P-1".into(), "P-2".into()],
+                shielded_projects: vec!["P-3".into()],
+                pending: 1,
+                correction_candidates: vec!["U1".into()],
+                includes_closed: true,
+            }
+        );
+        assert_eq!((v, usages), before, "既存の基準・承認済みの値は変わらない");
+    }
+
+    #[test]
+    fn t32_案件の上書きはその案件の明細だけに影響() {
+        let v = sample();
+        let usages = [
+            usage("U1", "P-1", "2026-12-10", UsageStatus::Pending, false, None),
+            usage("U2", "P-2", "2026-12-10", UsageStatus::Pending, false, None),
+        ];
+        let new = project("P-1", "emp_rate", "2026-12-01", Some(5_500));
+        let imp = impact(&v, &new, &usages);
+        assert_eq!(imp.affected_projects, vec!["P-1".to_string()]);
+        assert_eq!(imp.pending, 1);
+        assert!(imp.shielded_projects.is_empty());
     }
 
     #[test]
