@@ -1,7 +1,7 @@
 /**
  * The `projects` resource (案件台帳, spec §5.1, banto-cost P3a): form schema +
  * registration object (docs/recipes/add-resource.md step 7, modelled on
- * items.ts). Wire shape: `admin_template_core::projects::Project` /
+ * the template's removed items.ts). Wire shape: `admin_template_core::projects::Project` /
  * `ProjectInput`; updates send back the `rowVersion` that was read. No delete.
  *
  * Status rule (spec §5.1 / §5.5, `ProjectStatus::can_edit_to`): before the order
@@ -13,7 +13,7 @@
  * `projectFormSchema()` to get the narrowed status field and an optional
  * customer / manager picker.
  *
- * Labels are lazy getters for the same reason as items.ts.
+ * Labels are lazy getters for the same reason as customers.ts.
  */
 import type { ResourceDefinition } from '@banto/admin-core';
 import type { FieldDef, FieldOption, FormSchema } from '@banto/forms';

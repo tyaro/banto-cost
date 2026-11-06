@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * 案件の詳細・編集 (banto-cost P3a, spec §5.1) + 案件見込 (§5.4,
-	 * PipelineSection.svelte). Same load/save shape as items/[id], without
+	 * PipelineSection.svelte). Same load/save shape as customers/[id], without
 	 * delete. The `rowVersion` read by `getOne` stays in the form values so
 	 * the update carries it back; a stale one is a `rowVersion` field error
 	 * that no field owns, listed above the form.
@@ -12,7 +12,7 @@
 	 * Viewing needs admin or `ViewProject` on this project (design 第2章);
 	 * `forbidden` shows a no-access state.
 	 *
-	 * As with items/[id], the (app) layout keys this page on its route params,
+	 * As with every detail page, the (app) layout keys this page on its route params,
 	 * so reading `page.params.id` once at setup is enough.
 	 */
 	import { page } from '$app/state';

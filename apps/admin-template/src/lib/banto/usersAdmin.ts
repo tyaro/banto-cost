@@ -8,7 +8,7 @@
  * `createHttpDataProvider`/`createHttpAuthProvider` use.
  *
  * Deliberately NOT built on `@banto/admin-core`'s generic
- * `DataProvider`/`getDataProvider()` (unlike items): the wire shapes here
+ * `DataProvider`/`getDataProvider()` (unlike customers / projects): the wire shapes here
  * don't fit that resource-CRUD convention -
  * `users_create`/`users_update`/`users_reset_password` take individual named
  * arguments rather than a `values` bag, `users_list` takes no `ListParams`,

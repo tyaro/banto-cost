@@ -1,13 +1,13 @@
 /**
  * The `customers` resource (顧客マスタ, banto-cost P3a): form schema +
  * registration object (docs/recipes/add-resource.md step 7, modelled on
- * items.ts). Wire shape: `admin_template_core::customers::Customer` /
+ * the template's removed items.ts). Wire shape: `admin_template_core::customers::Customer` /
  * `CustomerInput` - updates must send back the `rowVersion` that was read
  * (it rides along in the form values from `getOne`), a stale one comes back
  * as a validation error on `rowVersion`. There is no delete: a customer that
  * is no longer used is switched to inactive instead.
  *
- * Labels are lazy getters for the same reason as items.ts (locale is not
+ * Labels are lazy getters because the locale is not
  * resolved yet when this module is evaluated).
  */
 import type { ResourceDefinition } from '@banto/admin-core';
