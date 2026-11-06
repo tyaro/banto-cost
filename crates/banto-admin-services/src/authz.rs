@@ -203,7 +203,9 @@ pub enum Operation {
     ViewProjectAmounts { project_id: i64 },
     /// Enter one's own hours/expenses against a project.
     EnterTime { project_id: i64 },
-    /// Update and adopt the pipeline of a project.
+    /// Update and adopt the pipeline of a project. Entering and adopting
+    /// amounts presupposes seeing them, so this also needs `amount.view`
+    /// (PR #9 review: the saved version is returned with its amounts).
     EditPipeline { project_id: i64 },
     /// Budget drafts and remaining-cost outlook of a project.
     ManageProject { project_id: i64 },
@@ -357,6 +359,7 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         }
         Operation::EditPipeline { project_id } => {
             require(subject, Capability::PipelineEdit)?;
+            require(subject, Capability::AmountView)?;
             require_scope(subject.holds(project_id, MemberKind::Sales), project_id)?;
         }
         Operation::ManageProject { project_id } => {
@@ -1009,8 +1012,18 @@ mod tests {
 
     #[test]
     fn pipeline_edit_is_limited_to_own_sales_projects() {
-        let sales = subject(1, &[Capability::PipelineEdit], &[(P1, MemberKind::Sales)]);
+        let sales = subject(
+            1,
+            &[Capability::PipelineEdit, Capability::AmountView],
+            &[(P1, MemberKind::Sales)],
+        );
         allow(&sales, Operation::EditPipeline { project_id: P1 });
+        // Saving or adopting returns the version's amounts: no amount.view, no edit.
+        let blind = subject(4, &[Capability::PipelineEdit], &[(P1, MemberKind::Sales)]);
+        assert_eq!(
+            deny(&blind, Operation::EditPipeline { project_id: P1 }),
+            Denial::MissingCapability(Capability::AmountView)
+        );
         assert_eq!(
             deny(&sales, Operation::EditPipeline { project_id: P2 }),
             Denial::OutOfProjectScope { project_id: P2 }

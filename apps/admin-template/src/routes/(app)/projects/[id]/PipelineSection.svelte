@@ -41,9 +41,14 @@
 		/** Ordered-side projects keep their history but take no new versions. */
 		ordered: boolean;
 		canWrite: boolean;
+		/**
+		 * Reports whether the new-version form has unsaved input and whether a
+		 * save or adoption is in flight, for the page's leave guard.
+		 */
+		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, ordered, canWrite }: Props = $props();
+	let { projectId, ordered, canWrite, onPendingChange }: Props = $props();
 
 	const available = isPipelineAvailable();
 
@@ -80,6 +85,30 @@
 
 	const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
+	/** The form's values, to compare against the last prefill or save. */
+	function formSnapshot(): string {
+		return JSON.stringify([
+			stage,
+			expectedAmount,
+			probabilityPct,
+			expectedOrderMonth,
+			expectedStartMonth,
+			expectedEndMonth,
+			estCostAtOrder,
+			basis,
+			nextAction,
+			confirmedOn,
+			plan.map((line) => [line.month, line.undecided, line.amount])
+		]);
+	}
+	let cleanSnapshot = $state(formSnapshot());
+	$effect(() => {
+		onPendingChange?.({
+			dirty: formSnapshot() !== cleanSnapshot,
+			busy: saving || adoptingId !== null
+		});
+	});
+
 	function text(value: number | null): string {
 		return value === null ? '' : String(value);
 	}
@@ -102,6 +131,7 @@
 			undecided: line.month === null,
 			amount: String(line.amount)
 		}));
+		cleanSnapshot = formSnapshot();
 	}
 
 	async function reload() {
@@ -214,6 +244,7 @@
 			await createPipelineVersion(projectId, input);
 			notify('success', adopt ? m['pipeline.savedAdopted']() : m['pipeline.savedDraft']());
 			basis = '';
+			cleanSnapshot = formSnapshot();
 			await reload();
 		} catch (err) {
 			if (isProviderError(err) && err.body.kind === 'validation') {

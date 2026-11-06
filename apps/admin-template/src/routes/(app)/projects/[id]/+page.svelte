@@ -48,9 +48,12 @@
 	let managerName = $state('');
 	let formErrors = $state<string[]>([]);
 
+	// The pipeline section's own form counts too (PR #9 review).
+	let pipelineDirty = $state(false);
+	let pipelineBusy = $state(false);
 	const guard = guardUnsavedChanges({
-		isDirty: () => store?.isDirty ?? false,
-		isSaving: () => formResource?.saving ?? false
+		isDirty: () => (store?.isDirty ?? false) || pipelineDirty,
+		isSaving: () => (formResource?.saving ?? false) || pipelineBusy
 	});
 
 	async function loadForm() {
@@ -172,7 +175,15 @@
 	</div>
 
 	{#if schema && idValid}
-		<PipelineSection projectId={parsedId} {ordered} {canWrite} />
+		<PipelineSection
+			projectId={parsedId}
+			{ordered}
+			{canWrite}
+			onPendingChange={(pending) => {
+				pipelineDirty = pending.dirty;
+				pipelineBusy = pending.busy;
+			}}
+		/>
 	{/if}
 </div>
 
