@@ -10,6 +10,7 @@
 - 時間原価単価などは計算基準として版で管理し、案件ごと・項目ごとに上書きできる（設計案 第10章）。承認済み実績・採用済み見込・承認済み予算を自動で書き換えない。
 - 業務の権限は Banto の3ロールに加えて能力（capability）と案件範囲で判定する（設計案 第2章）。REST と Tauri の両経路で同じ判定を通す。
 - コミットは日本語の Conventional Commits。整形は `pnpm exec prettier --write <ファイル>` と `cargo fmt --all`。
+- Banto の `items`（商品）デモは削除済み（設計案 5.1）。新しいリソースは顧客・案件台帳（`customers` / `projects`）を手本にする。`scripts/scaffold.mjs` の items 除去は適用済みの状態と合わないので使わない。
 
 以下は Banto テンプレートの元の指針です。
 
