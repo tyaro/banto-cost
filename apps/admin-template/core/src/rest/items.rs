@@ -163,11 +163,7 @@ fn items_read_router(items: ItemsService, auth: AuthState) -> Router {
 /// two-tier reasoning as `attachments_write_router`/`backups_router`. The
 /// create/update routes on this router carry only a small single-item JSON
 /// body, so the raised cap is harmless for them.
-fn items_write_router(
-    items: ItemsService,
-    audit: AuditLogService,
-    auth: AuthState,
-) -> Router {
+fn items_write_router(items: ItemsService, audit: AuditLogService, auth: AuthState) -> Router {
     let state = ItemsWriteState {
         items,
         audit: audit.clone(),
@@ -199,14 +195,6 @@ fn items_write_router(
 /// `/api/items/*` (spec M10): merges the read (any role) and write
 /// (`editor`+) sub-routers, which share the same `/api/items/{id}` path
 /// split across HTTP methods.
-pub(super) fn items_router(
-    items: ItemsService,
-    audit: AuditLogService,
-    auth: AuthState,
-) -> Router {
-    items_read_router(items.clone(), auth.clone()).merge(items_write_router(
-        items,
-        audit,
-        auth,
-    ))
+pub(super) fn items_router(items: ItemsService, audit: AuditLogService, auth: AuthState) -> Router {
+    items_read_router(items.clone(), auth.clone()).merge(items_write_router(items, audit, auth))
 }

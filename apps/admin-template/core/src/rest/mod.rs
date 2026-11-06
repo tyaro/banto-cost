@@ -201,14 +201,12 @@
 //! reusing the same `broadcast::Sender` [`api_router`] already threads
 //! through for SSE.
 
-use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
-use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use banto_core::{BantoError, ListParams, ListResult};
+use banto_core::{ListParams, ListResult};
 use banto_server::routes::{
     actor_identity, audit_log_router, audit_logout_middleware, backups_router, extra_auth_router,
     record_write, require_role_at_least, system_info_router, ui_settings_router, users_router,
@@ -218,7 +216,6 @@ use banto_server::{
     auth_routes, require_auth, require_banto_client_header, sse_route, ApiError, AuthState,
     GrantRegistry, GrantSpec, ServerEvent,
 };
-use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -252,8 +249,6 @@ pub use banto_server::routes::user_auth_state;
 // [scaffold:items] begin
 use items::items_router;
 // [scaffold:items] end
-
-
 
 /// The already-cloneable service handles [`api_router`] threads into its
 /// route builders (spec §11.1). Bundled into one struct (M-review 2026-08
@@ -348,11 +343,7 @@ pub fn api_router(
         ))
         .merge(sse_route(auth.clone(), events.clone()))
         // [scaffold:items] begin
-        .merge(items_router(
-            items,
-            audit.clone(),
-            auth.clone(),
-        ))
+        .merge(items_router(items, audit.clone(), auth.clone()))
         // [scaffold:items] end
         .merge(users_router(users, audit.clone(), auth.clone()))
         .merge(audit_log_router(

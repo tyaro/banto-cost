@@ -3543,8 +3543,6 @@ async fn backups_cancel_restore(state: State<'_, AppState>) -> Result<(), BantoE
     backups_cancel_restore_body(&state).await
 }
 
-
-
 // [scaffold:items] begin
 //
 // D1-d: `items_export_csv_to_folder` is desktop-only CSV export - not
@@ -4792,8 +4790,6 @@ mod tests {
                 .expect("detail is json");
         assert_eq!(detail, serde_json::json!({ "autologinEnabled": false }));
     }
-
-
 
     // --- Issue #204: session revocation across transports and processes ----
     //

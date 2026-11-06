@@ -169,13 +169,13 @@ jobs:
       # in CI.
       # (clippy for it runs in tauri-check.yml, which has the system deps.)
       - name: Cargo check
-        run: cargo check -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p banto-attachments -p admin-template-core -p admin-template-fw-elev
+        run: cargo check -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p cost-domain -p admin-template-core -p admin-template-fw-elev
 
       - name: Clippy
-        run: cargo clippy -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p banto-attachments -p admin-template-core -p admin-template-fw-elev --all-targets -- -D warnings
+        run: cargo clippy -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p cost-domain -p admin-template-core -p admin-template-fw-elev --all-targets -- -D warnings
 
       - name: Cargo test
-        run: cargo test -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p banto-attachments -p admin-template-core -p admin-template-fw-elev
+        run: cargo test -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p cost-domain -p admin-template-core -p admin-template-fw-elev
 
   # banto-storage の PostgreSQL 接続ヘルパ（feature `postgres`）向け統合テスト。
   # 上の `rust` ジョブは default feature（sqlite のみ）でビルドしているため
@@ -257,14 +257,10 @@ jobs:
       # `--features postgres` keeps the default `sqlite` on too (the app crate
       # always links SQLite for the desktop path), so this exercises the
       # both-backends build that `init_db_from_target` selects at runtime.
-      # `pg_attachments` (Issue #208) creates and drops its own databases/role
-      # on the same server (the `postgres` superuser has CREATEDB/CREATEROLE)
-      # to check that attachments stay per-database and survive a password
-      # change.
       - name: Cargo test (admin-template-core, postgres smoke)
         env:
           BANTO_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/banto_app_test
-        run: cargo test -p admin-template-core --features postgres --test pg_smoke --test pg_attachments
+        run: cargo test -p admin-template-core --features postgres --test pg_smoke
 
       # Issue #277: 初回セットアップの並行実行で admin が1件だけ作られること
       # （LOCK TABLE + 条件付き INSERT）。専用スキーマを作るので public には触れない。
