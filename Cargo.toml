@@ -1,0 +1,98 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/banto-core",
+  "crates/banto-storage",
+  "crates/banto-server",
+  "crates/banto-admin-services",
+  "crates/cost-domain",
+  "apps/admin-template/core",
+  "apps/admin-template/src-tauri",
+  "apps/admin-template/elev",
+]
+
+[workspace.package]
+version = "6.10.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/tyaro/banto-cost"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sqlx = { version = "0.9", default-features = false }
+tokio = { version = "1" }
+axum = { version = "0.8", default-features = true, features = ["json"] }
+tower = "0.5"
+uuid = { version = "1", features = ["v4"] }
+rust-embed = "8"
+if-addrs = "0.13"
+futures-util = "0.3"
+async-stream = "0.3"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+argon2 = "0.5"
+password-hash = { version = "0.5", features = ["getrandom"] }
+# Desktop-only (spec M11 autologin): OS keyring storage for the auto-login
+# credential. Deliberately only referenced from `apps/admin-template/src-tauri`
+# (NOT `admin-template-core`) - CI's headless containers cannot build
+# `src-tauri` (no webkit2gtk) but must still be able to `cargo test` every
+# other crate, so keeping this off the core crate's dependency graph keeps
+# that path unaffected by this addition.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+# Desktop-only (spec M12 Glass theme): real window translucency (Windows
+# Acrylic) behind the glass theme preset. Referenced only from
+# `apps/admin-template/src-tauri`, and there only as a
+# Windows-target-specific dependency (docs/roadmap.md §6: Windows のみ) -
+# same CI reasoning as `keyring` above.
+window-vibrancy = "0.8"
+# Dev-only (spec M17 backup/restore tests): isolated temp directories so
+# `BackupService`'s filesystem-touching tests (create/list/read a real
+# `backups/` dir, stage a pending restore file) never collide with each
+# other or leave litter behind - `std::env::temp_dir()` alone is not enough
+# since tests run concurrently and would otherwise share one directory.
+tempfile = "3"
+# M20 attachments (spec docs/design/attachments-plan.md §3.4): sha256 of uploaded
+# bytes for integrity checking / future dedup. Was already present
+# transitively (via sqlx et al.); promoted to a direct dependency because
+# `banto-attachments` calls it explicitly rather than relying on whatever
+# version its transitive dependents happen to pull in.
+sha2 = "0.11"
+# ADR-0013 (Issue #185): CPU/memory usage for the admin System Info card.
+# An exception to §3's "add no dependency" default (conventions §3's "依存を
+# 足す側の例外" table, alongside Paraglide/ADR-0005) - std alone cannot read
+# cross-platform CPU%/memory (Linux `/proc`, Windows Win32 API, macOS
+# Mach/sysctl FFI), and three apps (this template + two downstream) were each
+# about to reimplement it. `default-features = false, features = ["system"]`
+# drops `component`/`disk`/`gpu`/`network`/`user` (the ADR's P1-5 ④
+# feature-limiting) - only process/CPU/memory stays. `sysinfo` 0.40 retains
+# the Rust 1.95 minimum already required by 0.39 for system-metrics builds.
+# Feature-gated behind `banto-admin-services`'s
+# `system-metrics` (off by default there; the template app crates turn it on
+# by default per the ADR - see their own Cargo.toml comments).
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
+# ADR-0021 decision 14 (Issue #219 stage 2): the third exception in
+# conventions §3's "依存を足す側の例外" - Win32 APIs (handle-based ACL checks,
+# known folders, the system directory) and the `requireAdministrator`
+# manifest for the UAC-elevated firewall helper (`apps/admin-template/elev`),
+# and later (E2) the small runas launch module of `src-tauri`. Only those use
+# them. Both are pinned to the versions ALREADY in Cargo.lock as transitive
+# dependencies (windows-sys 0.61.2, embed-resource 3.0.11), so no crate is
+# added to the build; when bumping, keep them equal to the transitive
+# versions. No default features here - each user lists the windows-sys
+# features it calls (see `apps/admin-template/elev/Cargo.toml`).
+windows-sys = "0.61"
+embed-resource = "3.0"
+banto-core = { path = "crates/banto-core" }
+banto-storage = { path = "crates/banto-storage" }
+banto-server = { path = "crates/banto-server" }
+banto-admin-services = { path = "crates/banto-admin-services" }
+
+# テスト・開発ビルドで argon2id のパスワードハッシュが opt-level 0 だと極端に遅く、
+# admin-template-core の rest::tests（ユーザー作成・ログインのたびにハッシュ）が
+# CI で Windows 79 秒 / ubuntu 36 秒かかっていた。依存の argon2 と blake2 だけを
+# 最適化する（ワークスペースのクレートと release は変えない。git 依存の利用側には効かない）。
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
