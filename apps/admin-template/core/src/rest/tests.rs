@@ -67,6 +67,9 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -120,6 +123,9 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     (
@@ -139,6 +145,9 @@ async fn router_with_token() -> (Router, String) {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth
@@ -153,6 +162,9 @@ async fn router_with_token() -> (Router, String) {
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     (api_router(services, auth, tx, false), token)
@@ -356,6 +368,9 @@ async fn update_via_rest_is_observable_on_the_event_channel() {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -367,6 +382,9 @@ async fn update_via_rest_is_observable_on_the_event_channel() {
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -743,6 +761,9 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
@@ -753,6 +774,9 @@ async fn router_with_setup(allow_setup: bool) -> Router {
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     api_router(services, auth, tx, allow_setup)
@@ -956,6 +980,9 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -969,6 +996,9 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     (api_router(services, auth, tx, allow_setup), audit)
@@ -1297,7 +1327,10 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let audit = AuditLogService::new(pool);
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let audit = AuditLogService::new(pool.clone());
 
     users
         .setup_first_user("admin", "password123", "管理者")
@@ -1311,6 +1344,8 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
         .create_user("viewer", "password123", "閲覧者", Role::Viewer)
         .await
         .expect("create viewer");
+    // banto-cost: projects 101 and 102 (no members) for the authz tests.
+    seed_projects(&pool).await;
 
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -1337,6 +1372,9 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1381,6 +1419,9 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
     let backup = BackupService::new(db_path, db.clone());
     let system_info = SystemInfoService::new(db.clone());
     let authz = banto_admin_services::authz::AuthzService::new(db.clone());
+    let customers = crate::customers::CustomersService::new(db.clone());
+    let projects = crate::projects::ProjectsService::new(db.clone());
+    let pipeline = crate::pipeline::PipelineService::new(db.clone());
     let audit = AuditLogService::new(db);
 
     users
@@ -1421,6 +1462,9 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1777,6 +1821,9 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -1804,6 +1851,9 @@ async fn system_info_reports_metrics_when_probe_is_present() {
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: Some(metrics),
     };
     let router = api_router(services, auth, tx, false);
@@ -2537,6 +2587,9 @@ async fn router_with_viewer_public(
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     settings
@@ -2559,6 +2612,9 @@ async fn router_with_viewer_public(
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     (
@@ -3258,6 +3314,9 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -3282,6 +3341,9 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics: None,
     };
     (api_router(services, auth, tx, false), users)
@@ -3590,6 +3652,19 @@ async fn role_guard_revalidates_when_require_auth_is_missing() {
 
 // --- banto-cost P2: capability × project scope (ADR-0028) ---------------
 
+/// A customer (id 1) and projects 101 / 102 managed by the admin (user 1),
+/// inserted directly so they carry no `project_members` rows.
+async fn seed_projects(db: &banto_storage::Db) {
+    let pool = db.as_sqlite().expect("tests run on SQLite");
+    for sql in [
+        "INSERT INTO customers (id, name) VALUES (1, '架空工業')",
+        "INSERT INTO projects (id, code, name, customer_id, manager_user_id, status) VALUES \
+         (101, 'P-101', '架空案件A', 1, 1, 'lead'), (102, 'P-102', '架空案件B', 1, 1, 'lead')",
+    ] {
+        sqlx::query(sql).execute(pool).await.expect("seed projects");
+    }
+}
+
 /// `router_with_role_tokens_and_audit` users: admin = 1, editor = 2, viewer = 3.
 const EDITOR_ID: i64 = 2;
 const VIEWER_ID: i64 = 3;
@@ -3818,4 +3893,286 @@ async fn rest_project_member_writes_validate_and_need_admin() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// --- banto-cost P3a: customers / projects / pipeline -------------------------
+
+fn post_auth(path: &str, token: &str) -> HttpRequest<Body> {
+    post_json_auth(path, token, json!(null))
+}
+
+async fn grant(router: &Router, admin: &str, user_id: i64, caps: serde_json::Value) {
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/users/{user_id}/capabilities"),
+            admin,
+            json!({ "capabilities": caps }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+fn project_body(code: &str, manager: i64) -> serde_json::Value {
+    json!({
+        "code": code,
+        "name": "架空の制御盤更新",
+        "customerId": 1,
+        "managerUserId": manager,
+        "status": "negotiating"
+    })
+}
+
+#[tokio::test]
+async fn t12_t21_rest_business_routes_follow_capability_and_scope() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["pipeline.edit", "amount.view"]),
+    )
+    .await;
+
+    // The sales editor registers a project and becomes its sales owner.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", 1),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    assert_eq!(project["customerName"], "架空工業");
+
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/pipeline-versions"),
+            &editor,
+            json!({
+                "stage": "negotiating",
+                "expectedAmount": 3_000_000,
+                "probabilityPct": 60,
+                "expectedOrderMonth": "2026-11",
+                "basis": "見積提出済み",
+                "revenuePlan": [{ "month": "2026-12", "amount": 3_000_000 }],
+                "adopt": true
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // T21 through the API: only the editor's own project is aggregated.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/pipeline/overview", &editor))
+        .await
+        .unwrap();
+    let overview = body_json(response).await;
+    assert_eq!(overview["totals"]["total"], 3_000_000);
+    assert_eq!(overview["totals"]["weighted"], 1_800_000);
+    assert_eq!(overview["rows"].as_array().unwrap().len(), 1);
+
+    // T12: lists and direct URLs agree - projects 101/102 are out of scope.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/projects/list", &editor, json!({})))
+        .await
+        .unwrap();
+    let list = body_json(response).await;
+    assert_eq!(list["totalCount"], 1);
+    for path in ["/api/projects/101", "/api/projects/101/pipeline-versions"] {
+        let response = router
+            .clone()
+            .oneshot(get_auth(path, &editor))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            "/api/projects/101",
+            &editor,
+            project_body("P-101", 1),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // The administrator sees every project's basic information, but no
+    // amounts: no pipeline rows and no versions.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/projects/list", &admin, json!({})))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["totalCount"], 3);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/pipeline/overview", &admin))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["rows"], json!([]));
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/projects/{id}/pipeline-versions"),
+            &admin,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // No company grant: no masters, an empty project list (T20).
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/customers/list", &viewer, json!({})))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/projects/list", &viewer, json!({})))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["totalCount"], 0);
+
+    // The viewer role cannot write business data whatever its capabilities.
+    grant(&router, &admin, VIEWER_ID, json!(["pipeline.edit"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &viewer,
+            project_body("P-009", 1),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let denied = denied_entries(&audit).await;
+    let resources: Vec<_> = denied.iter().map(|r| r.resource.as_str()).collect();
+    for expected in ["projects", "pipeline_versions", "customers", "business"] {
+        assert!(resources.contains(&expected), "{expected} in {resources:?}");
+    }
+    assert!(denied.iter().all(|r| r.origin == "rest"));
+    let writes: Vec<_> = audit
+        .list(ListParams::default())
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter(|r| {
+            r.result == "ok" && (r.resource == "projects" || r.resource == "pipeline_versions")
+        })
+        .map(|r| (r.action, r.resource))
+        .collect();
+    assert_eq!(
+        writes.len(),
+        2,
+        "one project create and one version create: {writes:?}"
+    );
+}
+
+#[tokio::test]
+async fn t13_rest_customer_update_with_a_stale_row_version_is_refused() {
+    let (router, _audit, admin, _editor, _viewer) = router_with_role_tokens_and_audit().await;
+    // The administrator maintains masters without a capability.
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            "/api/customers/1",
+            &admin,
+            json!({ "name": "架空工業（改）", "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            "/api/customers/1",
+            &admin,
+            json!({ "name": "架空工業（別）", "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(response).await;
+    assert_eq!(body["field_errors"][0]["field"], "rowVersion");
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/customers/1", &admin))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["name"], "架空工業（改）");
+}
+
+#[tokio::test]
+async fn rest_pipeline_draft_then_adopt() {
+    let (router, _audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["pipeline.edit", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", 1),
+        ))
+        .await
+        .unwrap();
+    let id = body_json(response).await["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/pipeline-versions"),
+            &editor,
+            json!({ "stage": "lead", "basis": "引合を受けた" }),
+        ))
+        .await
+        .unwrap();
+    let draft = body_json(response).await;
+    assert_eq!(draft["kind"], "draft");
+    assert_eq!(
+        draft["issues"],
+        json!([
+            "amount_missing",
+            "probability_missing",
+            "order_month_missing",
+            "plan_missing"
+        ])
+    );
+    let response = router
+        .clone()
+        .oneshot(post_auth(
+            &format!("/api/projects/{id}/pipeline-versions/{}/adopt", draft["id"]),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["kind"], "adopted");
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/projects/{id}/pipeline-versions"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await.as_array().unwrap().len(), 1);
 }

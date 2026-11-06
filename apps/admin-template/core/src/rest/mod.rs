@@ -37,6 +37,18 @@
 //! | GET    | `/api/projects/{id}/members` | -      | `ProjectMember[]` (admin, or `ViewProject` on that project; ADR-0028) |
 //! | PUT    | `/api/projects/{id}/members/{userId}/{kind}` | - | `ProjectMember[]` (admin; ADR-0028) |
 //! | DELETE | `/api/projects/{id}/members/{userId}/{kind}` | - | 204 (admin; ADR-0028) |
+//! | POST   | `/api/customers/list` | `ListParams`  | `ListResult<Customer>` (any role + admin or `ViewMasters`; P3a) |
+//! | GET    | `/api/customers/{id}` | -             | `Customer` (any role + admin or `ViewMasters`) |
+//! | POST   | `/api/customers`      | `CustomerInput` | `Customer` (editor+ + admin or `EditMasters`) |
+//! | PUT    | `/api/customers/{id}` | `CustomerInput` | `Customer` (editor+ + admin or `EditMasters`; `rowVersion`) |
+//! | POST   | `/api/projects/list`  | `ListParams`  | `ListResult<Project>` (any role; admin all, others `visible_projects`) |
+//! | GET    | `/api/projects/{id}`  | -             | `Project` (any role + admin or `ViewProject`) |
+//! | POST   | `/api/projects`       | `ProjectInput` | `Project` (editor+ + `CreateProject`) |
+//! | PUT    | `/api/projects/{id}`  | `ProjectInput` | `Project` (editor+ + `EditProject`; `rowVersion`) |
+//! | GET    | `/api/projects/{id}/pipeline-versions` | - | `PipelineVersion[]` (any role + `ViewProjectAmounts`) |
+//! | POST   | `/api/projects/{id}/pipeline-versions` | `PipelineVersionInput` | `PipelineVersion` (editor+ + `EditPipeline`) |
+//! | POST   | `/api/projects/{id}/pipeline-versions/{versionId}/adopt` | - | `PipelineVersion` (editor+ + `EditPipeline`) |
+//! | GET    | `/api/pipeline/overview` | -          | `PipelineOverview` (any role; scope `amount_projects`) |
 //! | GET    | `/api/ui-settings/{key}` | -          | `{value: string \| null}` (any role) |
 //! | PUT    | `/api/ui-settings/{key}` | `{value}`  | 204 (any role)          |
 //! | POST   | `/api/audit-log/list?asOfId=` | `ListParams` | `AuditLogList` (`ListResult` + `asOfId`/`deletionEpoch`, admin; #248) |
@@ -236,6 +248,7 @@ use crate::system_info::SystemInfoService;
 use crate::users::{Role, UsersService};
 
 mod authz;
+mod projects;
 // [scaffold:items] begin
 mod items;
 // [scaffold:items] end
@@ -278,6 +291,10 @@ pub struct Services {
     pub system_info: SystemInfoService,
     /// Capability × project-scope authorization (banto-cost P2, ADR-0028).
     pub authz: crate::authz::AuthzService,
+    /// banto-cost P3a: customers master, project ledger, pipeline versions.
+    pub customers: crate::customers::CustomersService,
+    pub projects: crate::projects::ProjectsService,
+    pub pipeline: crate::pipeline::PipelineService,
     /// CPU/memory probe (ADR-0013, Issue #185), or `None` when the
     /// `system-metrics` feature is off (or the host platform is
     /// unsupported) - the app layer builds the `Some` case, see
@@ -316,8 +333,18 @@ pub fn api_router(
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics,
     } = services;
+    let business = projects::BusinessServices {
+        customers,
+        projects,
+        pipeline,
+        authz: authz.clone(),
+        users: users.clone(),
+    };
 
     let audited_auth_routes = auth_routes(auth.clone()).layer(middleware::from_fn_with_state(
         LogoutAuditState {
@@ -370,6 +397,16 @@ pub fn api_router(
         .merge(authz::project_members_read_router(
             authz.clone(),
             users.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(projects::business_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(projects::business_write_router(
+            business,
             audit.clone(),
             auth.clone(),
         ))

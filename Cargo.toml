@@ -87,6 +87,7 @@ banto-core = { path = "crates/banto-core" }
 banto-storage = { path = "crates/banto-storage" }
 banto-server = { path = "crates/banto-server" }
 banto-admin-services = { path = "crates/banto-admin-services" }
+cost-domain = { path = "crates/cost-domain" }
 
 # テスト・開発ビルドで argon2id のパスワードハッシュが opt-level 0 だと極端に遅く、
 # admin-template-core の rest::tests（ユーザー作成・ログインのたびにハッシュ）が

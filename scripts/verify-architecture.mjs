@@ -400,6 +400,22 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'project_members_remove',
 			rest: 'DELETE /api/projects/{id}/members/{userId}/{kind}',
 			role: 'Admin'
+		},
+		// banto-cost P3a: 業務の書き込みは editor 床。その先の能力×案件範囲は
+		// 両経路とも AuthzService::authorize_audited が判定する（ADR-0028）。
+		{ tauri: 'customers_create', rest: 'POST /api/customers', role: 'Editor' },
+		{ tauri: 'customers_update', rest: 'PUT /api/customers/{id}', role: 'Editor' },
+		{ tauri: 'projects_create', rest: 'POST /api/projects', role: 'Editor' },
+		{ tauri: 'projects_update', rest: 'PUT /api/projects/{id}', role: 'Editor' },
+		{
+			tauri: 'pipeline_versions_create',
+			rest: 'POST /api/projects/{id}/pipeline-versions',
+			role: 'Editor'
+		},
+		{
+			tauri: 'pipeline_versions_adopt',
+			rest: 'POST /api/projects/{id}/pipeline-versions/{versionId}/adopt',
+			role: 'Editor'
 		}
 	];
 
@@ -414,7 +430,18 @@ const isAllowedPackageImport = (spec) =>
 		// その先の能力×案件範囲は両経路とも AuthzService::authorize_audited が判定する。
 		{ tauri: 'authz_me', rest: 'GET /api/authz/me', role: 'Viewer' },
 		{ tauri: 'authz_capabilities_get', rest: 'GET /api/users/{id}/capabilities', role: 'Admin' },
-		{ tauri: 'project_members_list', rest: 'GET /api/projects/{id}/members', role: 'Viewer' }
+		{ tauri: 'project_members_list', rest: 'GET /api/projects/{id}/members', role: 'Viewer' },
+		// banto-cost P3a の読み取り（ロール床は viewer、判定は各ハンドラ）。
+		{ tauri: 'customers_list', rest: 'POST /api/customers/list', role: 'Viewer' },
+		{ tauri: 'customers_get', rest: 'GET /api/customers/{id}', role: 'Viewer' },
+		{ tauri: 'projects_list', rest: 'POST /api/projects/list', role: 'Viewer' },
+		{ tauri: 'projects_get', rest: 'GET /api/projects/{id}', role: 'Viewer' },
+		{
+			tauri: 'pipeline_versions_list',
+			rest: 'GET /api/projects/{id}/pipeline-versions',
+			role: 'Viewer'
+		},
+		{ tauri: 'pipeline_overview', rest: 'GET /api/pipeline/overview', role: 'Viewer' }
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -459,6 +486,8 @@ const isAllowedPackageImport = (spec) =>
 		'auth_check',
 		'authz_capabilities_get',
 		'authz_me',
+		'customers_get',
+		'customers_list',
 		'auth_config_get',
 		'auth_identity',
 		'auth_resolve',
@@ -471,7 +500,11 @@ const isAllowedPackageImport = (spec) =>
 		'items_get',
 		'items_list',
 		'ping',
+		'pipeline_overview',
+		'pipeline_versions_list',
 		'project_members_list',
+		'projects_get',
+		'projects_list',
 		// Issue #219 PR-C2: the reach check of the live listener (admin, like
 		// server_status). Desktop-only by nature - no REST twin.
 		'reach_check_status',
@@ -494,6 +527,12 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/authz/me',
 		'GET /api/users/{id}/capabilities',
 		'GET /api/projects/{id}/members',
+		'GET /api/customers/{id}',
+		'GET /api/projects/{id}',
+		'GET /api/projects/{id}/pipeline-versions',
+		'GET /api/pipeline/overview',
+		'POST /api/customers/list',
+		'POST /api/projects/list',
 		'GET /api/ui-settings/{key}',
 		'GET /api/audit-log/config',
 		'GET /api/system/info',

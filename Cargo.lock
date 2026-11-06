@@ -39,6 +39,7 @@ dependencies = [
  "banto-core",
  "banto-server",
  "banto-storage",
+ "cost-domain",
  "futures-util",
  "rust-embed",
  "serde",

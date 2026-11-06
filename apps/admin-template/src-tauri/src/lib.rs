@@ -26,12 +26,18 @@ mod keyring_store;
 use admin_template_core::assets::FrontendAssets;
 use admin_template_core::audit::{AuditEntry, AuditLogList, AuditLogService};
 use admin_template_core::authz::{
-    Actor, AuthzService, Capability, MemberKind, Operation, Policy, ProjectMember,
+    amount_projects, visible_projects, Actor, AuthzService, Capability, MemberKind, Operation,
+    Policy, ProjectMember, ProjectScope, Subject,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
+use admin_template_core::customers::{Customer, CustomerInput, CustomersService};
 use admin_template_core::db::init_db;
 use admin_template_core::events::event_channel;
 use admin_template_core::first_boot::seed_first_boot_settings;
+use admin_template_core::pipeline::{
+    PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
+};
+use admin_template_core::projects::{Project, ProjectInput, ProjectsService};
 // [scaffold:items] begin
 use admin_template_core::items::{ImportResult, Item, ItemImportRow, ItemInput, ItemsService};
 // [scaffold:items] end
@@ -187,6 +193,10 @@ struct AppState {
     /// Capability × project-scope authorization (banto-cost P2, ADR-0028),
     /// shared with the embedded server's `/api/authz/*` routes.
     authz: AuthzService,
+    /// banto-cost P3a: customers master, project ledger, pipeline versions.
+    customers: CustomersService,
+    projects: ProjectsService,
+    pipeline: PipelineService,
     /// CPU/memory probe (ADR-0013, Issue #185): `Some` when the
     /// `system-metrics` feature is on and the host platform is supported;
     /// `None` otherwise, in which case the `system_info` command reports
@@ -2047,6 +2057,9 @@ async fn start_embedded_server(
     backup: BackupService,
     system_info: SystemInfoService,
     authz: AuthzService,
+    customers: CustomersService,
+    projects: ProjectsService,
+    pipeline: PipelineService,
     metrics: Option<MetricsProbe>,
     auth: AuthState,
     events: broadcast::Sender<ServerEvent>,
@@ -2071,6 +2084,9 @@ async fn start_embedded_server(
         backup,
         system_info,
         authz,
+        customers,
+        projects,
+        pipeline,
         metrics,
     };
     // Issue #219 (`docs/design/lan-reach-check-design.md` §5.2): the one
@@ -2668,6 +2684,9 @@ async fn server_apply_body(
                 state.backup.clone(),
                 state.system_info.clone(),
                 state.authz.clone(),
+                state.customers.clone(),
+                state.projects.clone(),
+                state.pipeline.clone(),
                 state.metrics.clone(),
                 state.rest_auth.clone(),
                 state.events.clone(),
@@ -3399,6 +3418,326 @@ async fn project_members_remove_body(
     Ok(())
 }
 
+// --- banto-cost P3a: customers, projects, pipeline (ADR-0028) ------------
+//
+// Tauri twins of `admin_template_core::rest::projects` (conventions §1): the
+// same role floors (session for reads, `editor` for writes), the same
+// `Operation`s through `authorize_audited` (`origin: "tauri"`), and the same
+// list scopes. The `admin` role passes only the master / basic-information
+// checks, never one that shows amounts.
+
+/// Decide `op` for the caller (recording a denial). `identity` is the one the
+/// role floor returned.
+async fn business_guard(
+    state: &AppState,
+    identity: &UserIdentity,
+    op: Operation,
+    resource: &str,
+) -> Result<(Subject, Option<i64>), BantoError> {
+    let session = current_session(state)
+        .await?
+        .ok_or(BantoError::Unauthorized)?;
+    let user_id = session_user_id(&session);
+    let (subject, _) = state
+        .authz
+        .authorize_audited(
+            &state.audit,
+            Actor {
+                user_id,
+                username: &identity.username,
+                role: identity.role.as_str(),
+            },
+            op,
+            Policy::default(),
+            resource,
+            "tauri",
+        )
+        .await?;
+    Ok((subject, user_id))
+}
+
+/// As [`business_guard`], but the `admin` role passes without a capability.
+async fn business_guard_or_admin(
+    state: &AppState,
+    identity: &UserIdentity,
+    op: Operation,
+    resource: &str,
+) -> Result<(), BantoError> {
+    if !identity.role.is_admin() {
+        business_guard(state, identity, op, resource).await?;
+    }
+    Ok(())
+}
+
+async fn caller_subject(state: &AppState) -> Result<Subject, BantoError> {
+    let session = current_session(state)
+        .await?
+        .ok_or(BantoError::Unauthorized)?;
+    state.authz.subject(session_user_id(&session)).await
+}
+
+#[tauri::command]
+async fn customers_list(
+    state: State<'_, AppState>,
+    params: ListParams,
+) -> Result<ListResult<Customer>, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "customers").await?;
+    business_guard_or_admin(&state, &identity, Operation::ViewMasters, "customers").await?;
+    state.customers.list(params).await
+}
+
+#[tauri::command]
+async fn customers_get(state: State<'_, AppState>, id: i64) -> Result<Customer, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "customers").await?;
+    business_guard_or_admin(&state, &identity, Operation::ViewMasters, "customers").await?;
+    state.customers.get(id).await
+}
+
+#[tauri::command]
+async fn customers_create(
+    state: State<'_, AppState>,
+    values: CustomerInput,
+) -> Result<Customer, BantoError> {
+    customers_create_body(&state, values).await
+}
+
+async fn customers_create_body(
+    state: &AppState,
+    values: CustomerInput,
+) -> Result<Customer, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    business_guard_or_admin(state, &actor, Operation::EditMasters, "customers").await?;
+    let customer = state.customers.create(values).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        "customers",
+        Some(&customer.id.to_string()),
+        Some(serde_json::json!({ "name": customer.name })),
+    )
+    .await;
+    Ok(customer)
+}
+
+#[tauri::command]
+async fn customers_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: CustomerInput,
+) -> Result<Customer, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    business_guard_or_admin(&state, &actor, Operation::EditMasters, "customers").await?;
+    let customer = state.customers.update(id, values).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        "customers",
+        Some(&id.to_string()),
+        Some(serde_json::json!({ "name": customer.name, "active": customer.active })),
+    )
+    .await;
+    Ok(customer)
+}
+
+#[tauri::command]
+async fn projects_list(
+    state: State<'_, AppState>,
+    params: ListParams,
+) -> Result<ListResult<Project>, BantoError> {
+    projects_list_body(&state, params).await
+}
+
+async fn projects_list_body(
+    state: &AppState,
+    params: ListParams,
+) -> Result<ListResult<Project>, BantoError> {
+    let identity = require_role(state, Role::Viewer, "projects").await?;
+    let scope = if identity.role.is_admin() {
+        ProjectScope::All
+    } else {
+        visible_projects(&caller_subject(state).await?)
+    };
+    state.projects.list(params, &scope).await
+}
+
+#[tauri::command]
+async fn projects_get(state: State<'_, AppState>, id: i64) -> Result<Project, BantoError> {
+    projects_get_body(&state, id).await
+}
+
+async fn projects_get_body(state: &AppState, id: i64) -> Result<Project, BantoError> {
+    let identity = require_role(state, Role::Viewer, "projects").await?;
+    business_guard_or_admin(
+        state,
+        &identity,
+        Operation::ViewProject { project_id: id },
+        "projects",
+    )
+    .await?;
+    state.projects.get(id).await
+}
+
+#[tauri::command]
+async fn projects_create(
+    state: State<'_, AppState>,
+    values: ProjectInput,
+) -> Result<Project, BantoError> {
+    projects_create_body(&state, values).await
+}
+
+async fn projects_create_body(
+    state: &AppState,
+    values: ProjectInput,
+) -> Result<Project, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (subject, user_id) =
+        business_guard(state, &actor, Operation::CreateProject, "projects").await?;
+    // A sales registrant becomes the project's sales owner (ADR-0028).
+    let sales = user_id.filter(|_| subject.has(Capability::PipelineEdit));
+    let project = state.projects.create(values, sales).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        "projects",
+        Some(&project.id.to_string()),
+        Some(serde_json::json!({ "code": project.code, "status": project.status })),
+    )
+    .await;
+    Ok(project)
+}
+
+#[tauri::command]
+async fn projects_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: ProjectInput,
+) -> Result<Project, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    business_guard(
+        &state,
+        &actor,
+        Operation::EditProject { project_id: id },
+        "projects",
+    )
+    .await?;
+    let project = state.projects.update(id, values).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        "projects",
+        Some(&id.to_string()),
+        Some(serde_json::json!({ "code": project.code, "status": project.status })),
+    )
+    .await;
+    Ok(project)
+}
+
+#[tauri::command]
+async fn pipeline_versions_list(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<Vec<PipelineVersion>, BantoError> {
+    pipeline_versions_list_body(&state, project_id).await
+}
+
+async fn pipeline_versions_list_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<Vec<PipelineVersion>, BantoError> {
+    let identity = require_role(state, Role::Viewer, "pipeline_versions").await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        "pipeline_versions",
+    )
+    .await?;
+    state.pipeline.versions(project_id).await
+}
+
+#[tauri::command]
+async fn pipeline_versions_create(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: PipelineVersionInput,
+) -> Result<PipelineVersion, BantoError> {
+    pipeline_versions_create_body(&state, project_id, values).await
+}
+
+async fn pipeline_versions_create_body(
+    state: &AppState,
+    project_id: i64,
+    values: PipelineVersionInput,
+) -> Result<PipelineVersion, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::EditPipeline { project_id },
+        "pipeline_versions",
+    )
+    .await?;
+    let version = state
+        .pipeline
+        .create_version(project_id, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        "pipeline_versions",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({ "versionNo": version.version_no, "kind": version.kind })),
+    )
+    .await;
+    Ok(version)
+}
+
+#[tauri::command]
+async fn pipeline_versions_adopt(
+    state: State<'_, AppState>,
+    project_id: i64,
+    version_id: i64,
+) -> Result<PipelineVersion, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        &state,
+        &actor,
+        Operation::EditPipeline { project_id },
+        "pipeline_versions",
+    )
+    .await?;
+    let version = state
+        .pipeline
+        .adopt(project_id, version_id, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "adopt",
+        "pipeline_versions",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({ "versionNo": version.version_no })),
+    )
+    .await;
+    Ok(version)
+}
+
+#[tauri::command]
+async fn pipeline_overview(state: State<'_, AppState>) -> Result<PipelineOverview, BantoError> {
+    pipeline_overview_body(&state).await
+}
+
+async fn pipeline_overview_body(state: &AppState) -> Result<PipelineOverview, BantoError> {
+    require_role(state, Role::Viewer, "pipeline").await?;
+    let scope = amount_projects(&caller_subject(state).await?);
+    state.pipeline.overview(&scope).await
+}
+
 /// `admin`-only (spec M10): the user-management screen's account list.
 #[tauri::command]
 async fn users_list(state: State<'_, AppState>) -> Result<Vec<UserSummary>, BantoError> {
@@ -3935,6 +4274,10 @@ pub fn run() {
             let system_info = SystemInfoService::new(db.clone());
             // banto-cost P2 (ADR-0028).
             let authz = AuthzService::new(db.clone());
+            // banto-cost P3a.
+            let customers = CustomersService::new(db.clone());
+            let projects = ProjectsService::new(db.clone());
+            let pipeline = PipelineService::new(db.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
             // same "share one stateful sampler" reasoning as `banto-serve`'s
             // main() - see `SystemMetricsSampler::sample`'s doc comment for
@@ -4158,6 +4501,9 @@ pub fn run() {
                     backup.clone(),
                     system_info.clone(),
                     authz.clone(),
+                    customers.clone(),
+                    projects.clone(),
+                    pipeline.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
                     events.clone(),
@@ -4226,6 +4572,9 @@ pub fn run() {
                 exports_dir,
                 system_info,
                 authz,
+                customers,
+                projects,
+                pipeline,
                 metrics,
                 started_at,
             });
@@ -4276,6 +4625,18 @@ pub fn run() {
             project_members_list,
             project_members_add,
             project_members_remove,
+            customers_list,
+            customers_get,
+            customers_create,
+            customers_update,
+            projects_list,
+            projects_get,
+            projects_create,
+            projects_update,
+            pipeline_versions_list,
+            pipeline_versions_create,
+            pipeline_versions_adopt,
+            pipeline_overview,
             users_update,
             users_reset_password,
             users_delete,
@@ -4346,6 +4707,9 @@ mod tests {
             ),
             system_info: SystemInfoService::new(pool.clone()),
             authz: AuthzService::new(pool.clone()),
+            customers: CustomersService::new(pool.clone()),
+            projects: ProjectsService::new(pool.clone()),
+            pipeline: PipelineService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
             metrics: None,
@@ -4404,6 +4768,9 @@ mod tests {
             backup: BackupService::new(db_path, pool.clone()),
             system_info: SystemInfoService::new(pool.clone()),
             authz: AuthzService::new(pool.clone()),
+            customers: CustomersService::new(pool.clone()),
+            projects: ProjectsService::new(pool.clone()),
+            pipeline: PipelineService::new(pool.clone()),
             metrics: None,
             exports_dir: dir.path().join("exports"),
             started_at: std::time::Instant::now(),
@@ -8873,9 +9240,58 @@ mod tests {
     // and `t19_t20_rest_role_without_company_grant_gets_no_business_data`
     // (conventions §1): same decisions, same audit shape, `origin: "tauri"`.
 
+    fn project_input(code: &str, manager_user_id: i64) -> ProjectInput {
+        ProjectInput {
+            code: code.to_string(),
+            name: "架空の制御盤更新".to_string(),
+            customer_id: 1,
+            manager_user_id,
+            status: "negotiating".to_string(),
+            planned_start: None,
+            planned_end: None,
+            order_no: None,
+            department: None,
+            note: None,
+            row_version: None,
+        }
+    }
+
+    /// A customer (id 1) and two projects managed by the admin, created
+    /// through the services (the admin becomes their `manager` member).
+    async fn seed_two_projects(state: &AppState) -> (i64, i64) {
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin exists");
+        state
+            .customers
+            .create(CustomerInput {
+                name: "架空工業".to_string(),
+                active: true,
+                note: None,
+                row_version: None,
+            })
+            .await
+            .expect("customer");
+        let a = state
+            .projects
+            .create(project_input("P-101", admin.id), None)
+            .await
+            .expect("project a");
+        let b = state
+            .projects
+            .create(project_input("P-102", admin.id), None)
+            .await
+            .expect("project b");
+        (a.id, b.id)
+    }
+
     #[tokio::test]
     async fn t12_tauri_project_members_follow_capability_and_project_scope() {
         let state = admin_app_state().await;
+        let (p1, p2) = seed_two_projects(&state).await;
         let editor = state
             .users
             .create_user("editor", "password123", "編集者", Role::Editor)
@@ -8884,24 +9300,21 @@ mod tests {
         authz_capabilities_set_body(&state, editor.id, &[Capability::ProjectManage])
             .await
             .expect("admin grants");
-        project_members_add_body(&state, 101, editor.id, MemberKind::Manager)
+        project_members_add_body(&state, p1, editor.id, MemberKind::Manager)
             .await
             .expect("admin assigns");
 
         state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
-        let members = project_members_list_body(&state, 101)
+        let members = project_members_list_body(&state, p1)
             .await
             .expect("in scope");
-        assert_eq!(
-            members,
-            vec![ProjectMember {
-                project_id: 101,
-                user_id: editor.id,
-                kind: MemberKind::Manager
-            }]
-        );
+        assert!(members.contains(&ProjectMember {
+            project_id: p1,
+            user_id: editor.id,
+            kind: MemberKind::Manager
+        }));
         assert!(matches!(
-            project_members_list_body(&state, 102).await,
+            project_members_list_body(&state, p2).await,
             Err(BantoError::Forbidden)
         ));
         assert!(matches!(
@@ -8923,7 +9336,7 @@ mod tests {
             .find(|r| r.resource == "project_members")
             .expect("the out-of-scope read is recorded");
         assert_eq!(scope.origin, "tauri");
-        assert_eq!(scope.entity_id.as_deref(), Some("102"));
+        assert_eq!(scope.entity_id.as_deref(), Some(p2.to_string().as_str()));
         let detail: serde_json::Value =
             serde_json::from_str(scope.detail.as_deref().expect("detail")).expect("json");
         assert_eq!(
@@ -8931,7 +9344,7 @@ mod tests {
             serde_json::json!({
                 "operation": "view_project",
                 "reason": "out_of_project_scope",
-                "projectId": 102
+                "projectId": p2
             })
         );
         assert!(denied.iter().any(|r| r.resource == "capabilities"));
@@ -8940,21 +9353,114 @@ mod tests {
     #[tokio::test]
     async fn t19_t20_tauri_role_without_company_grant_gets_no_business_data() {
         let state = admin_app_state().await;
+        let (p1, _) = seed_two_projects(&state).await;
         let viewer = state
             .users
             .create_user("viewer", "password123", "閲覧者", Role::Viewer)
             .await
             .expect("create viewer");
-        project_members_add_body(&state, 101, viewer.id, MemberKind::Worker)
+        project_members_add_body(&state, p1, viewer.id, MemberKind::Worker)
             .await
             .expect("admin assigns");
         state.set_session_for_test(Some(DesktopSession::Account(viewer.clone())));
         assert!(matches!(
-            project_members_list_body(&state, 101).await,
+            project_members_list_body(&state, p1).await,
             Err(BantoError::Forbidden)
         ));
         let me = authz_me_body(&state).await.expect("own view");
         assert!(me.capabilities.is_empty());
         assert_eq!(me.memberships.len(), 1);
+    }
+
+    // --- banto-cost P3a ----------------------------------------------------
+    // Tauri twin of `rest::tests::t12_t21_rest_business_routes_follow_capability_and_scope`.
+
+    #[tokio::test]
+    async fn t12_t21_tauri_business_commands_follow_capability_and_scope() {
+        let state = admin_app_state().await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let (p1, _) = seed_two_projects(&state).await;
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[Capability::PipelineEdit, Capability::AmountView],
+        )
+        .await
+        .expect("admin grants");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let own = projects_create_body(&state, project_input("P-001", admin.id))
+            .await
+            .expect("sales registers a project");
+        let version: PipelineVersionInput = serde_json::from_value(serde_json::json!({
+            "stage": "negotiating",
+            "expectedAmount": 3_000_000,
+            "probabilityPct": 60,
+            "expectedOrderMonth": "2026-11",
+            "basis": "見積提出済み",
+            "revenuePlan": [{ "month": "2026-12", "amount": 3_000_000 }],
+            "adopt": true
+        }))
+        .expect("input");
+        pipeline_versions_create_body(&state, own.id, version)
+            .await
+            .expect("own pipeline");
+        let overview = pipeline_overview_body(&state).await.expect("overview");
+        assert_eq!(
+            (overview.totals.total, overview.totals.weighted),
+            (3_000_000, 1_800_000)
+        );
+        assert_eq!(overview.rows.len(), 1);
+        let list = projects_list_body(&state, ListParams::default())
+            .await
+            .expect("list");
+        assert_eq!(list.total_count, 1);
+        assert!(matches!(
+            projects_get_body(&state, p1).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            pipeline_versions_list_body(&state, p1).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        // The administrator: every project's basics, no amounts.
+        state.set_session_for_test(Some(DesktopSession::Account(admin)));
+        let list = projects_list_body(&state, ListParams::default())
+            .await
+            .expect("list");
+        assert_eq!(list.total_count, 3);
+        assert!(pipeline_overview_body(&state)
+            .await
+            .expect("overview")
+            .rows
+            .is_empty());
+        assert!(matches!(
+            pipeline_versions_list_body(&state, own.id).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        let denied: Vec<_> = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows
+            .into_iter()
+            .filter(|r| r.action == "denied")
+            .collect();
+        assert!(denied.iter().all(|r| r.origin == "tauri"));
+        assert!(denied.iter().any(|r| r.resource == "projects"));
+        assert!(denied.iter().any(|r| r.resource == "pipeline_versions"));
     }
 }

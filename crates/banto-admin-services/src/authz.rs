@@ -203,7 +203,9 @@ pub enum Operation {
     ViewProjectAmounts { project_id: i64 },
     /// Enter one's own hours/expenses against a project.
     EnterTime { project_id: i64 },
-    /// Update and adopt the pipeline of a project.
+    /// Update and adopt the pipeline of a project. Entering and adopting
+    /// amounts presupposes seeing them, so this also needs `amount.view`
+    /// (PR #9 review: the saved version is returned with its amounts).
     EditPipeline { project_id: i64 },
     /// Budget drafts and remaining-cost outlook of a project.
     ManageProject { project_id: i64 },
@@ -217,6 +219,16 @@ pub enum Operation {
     FinanceClose,
     /// Company-wide aggregates and every project's details.
     ViewAllReports,
+    /// Read masters (customers, phases): any company member.
+    ViewMasters,
+    /// Maintain masters (customers). The `admin` role (system
+    /// administration, spec §4) is let through by the wiring layer.
+    EditMasters,
+    /// Register a new project (sales or project managers).
+    CreateProject,
+    /// Edit a project's ledger entry: its sales owner (`pipeline.edit`) or
+    /// its manager (`project.manage`).
+    EditProject { project_id: i64 },
 }
 
 impl Operation {
@@ -233,6 +245,10 @@ impl Operation {
             Operation::EditRates => "edit_rates",
             Operation::FinanceClose => "finance_close",
             Operation::ViewAllReports => "view_all_reports",
+            Operation::ViewMasters => "view_masters",
+            Operation::EditMasters => "edit_masters",
+            Operation::CreateProject => "create_project",
+            Operation::EditProject { .. } => "edit_project",
         }
     }
 
@@ -243,11 +259,15 @@ impl Operation {
             | Operation::EnterTime { project_id }
             | Operation::EditPipeline { project_id }
             | Operation::ManageProject { project_id }
-            | Operation::Approve { project_id, .. } => Some(project_id),
+            | Operation::Approve { project_id, .. }
+            | Operation::EditProject { project_id } => Some(project_id),
             Operation::ViewRates
             | Operation::EditRates
             | Operation::FinanceClose
-            | Operation::ViewAllReports => None,
+            | Operation::ViewAllReports
+            | Operation::ViewMasters
+            | Operation::EditMasters
+            | Operation::CreateProject => None,
         }
     }
 }
@@ -339,6 +359,7 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         }
         Operation::EditPipeline { project_id } => {
             require(subject, Capability::PipelineEdit)?;
+            require(subject, Capability::AmountView)?;
             require_scope(subject.holds(project_id, MemberKind::Sales), project_id)?;
         }
         Operation::ManageProject { project_id } => {
@@ -372,6 +393,33 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         Operation::ViewAllReports => {
             require(subject, Capability::ReportAll)?;
             require(subject, Capability::AmountView)?;
+        }
+        // Company membership (checked above) is all reading masters needs.
+        Operation::ViewMasters => {}
+        Operation::EditMasters => {
+            if !(subject.has(Capability::PipelineEdit)
+                || subject.has(Capability::ProjectManage)
+                || subject.has(Capability::FinanceClose))
+            {
+                return Err(Denial::MissingCapability(Capability::PipelineEdit));
+            }
+        }
+        Operation::CreateProject => {
+            if !(subject.has(Capability::PipelineEdit) || subject.has(Capability::ProjectManage)) {
+                return Err(Denial::MissingCapability(Capability::PipelineEdit));
+            }
+        }
+        Operation::EditProject { project_id } => {
+            let as_sales = subject.has(Capability::PipelineEdit)
+                && subject.holds(project_id, MemberKind::Sales);
+            let as_manager = subject.has(Capability::ProjectManage)
+                && subject.holds(project_id, MemberKind::Manager);
+            if !as_sales && !as_manager {
+                if subject.has(Capability::PipelineEdit) || subject.has(Capability::ProjectManage) {
+                    return Err(Denial::OutOfProjectScope { project_id });
+                }
+                return Err(Denial::MissingCapability(Capability::PipelineEdit));
+            }
         }
     }
     Ok(allowed)
@@ -694,6 +742,7 @@ impl AuthzService {
             });
         }
         self.ensure_user(member.user_id).await?;
+        self.ensure_project(member.project_id).await?;
         let sql = format!(
             "INSERT INTO project_members (project_id, user_id, kind) VALUES ({}, {}, {}) \
              ON CONFLICT (project_id, user_id, kind) DO NOTHING",
@@ -760,6 +809,30 @@ impl AuthzService {
             });
         }
         Ok(())
+    }
+
+    async fn ensure_project(&self, project_id: i64) -> Result<(), BantoError> {
+        let sql = format!("SELECT id FROM projects WHERE id = {}", self.ph(1));
+        let row: Option<(i64,)> = match &self.db {
+            Db::Sqlite(pool) => {
+                sqlx::query_as(sqlx::AssertSqlSafe(sql))
+                    .bind(project_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+            #[cfg(feature = "postgres")]
+            Db::Postgres(pool) => {
+                sqlx::query_as(sqlx::AssertSqlSafe(sql))
+                    .bind(project_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+        }
+        .map_err(banto_storage::storage_error)?;
+        row.map(|_| ()).ok_or_else(|| BantoError::NotFound {
+            resource: "projects".into(),
+            id: project_id.to_string(),
+        })
     }
 
     async fn ensure_user(&self, user_id: i64) -> Result<(), BantoError> {
@@ -939,8 +1012,18 @@ mod tests {
 
     #[test]
     fn pipeline_edit_is_limited_to_own_sales_projects() {
-        let sales = subject(1, &[Capability::PipelineEdit], &[(P1, MemberKind::Sales)]);
+        let sales = subject(
+            1,
+            &[Capability::PipelineEdit, Capability::AmountView],
+            &[(P1, MemberKind::Sales)],
+        );
         allow(&sales, Operation::EditPipeline { project_id: P1 });
+        // Saving or adopting returns the version's amounts: no amount.view, no edit.
+        let blind = subject(4, &[Capability::PipelineEdit], &[(P1, MemberKind::Sales)]);
+        assert_eq!(
+            deny(&blind, Operation::EditPipeline { project_id: P1 }),
+            Denial::MissingCapability(Capability::AmountView)
+        );
         assert_eq!(
             deny(&sales, Operation::EditPipeline { project_id: P2 }),
             Denial::OutOfProjectScope { project_id: P2 }
@@ -1015,6 +1098,43 @@ mod tests {
                 }
             ),
             Denial::SelfApproval
+        );
+    }
+
+    #[test]
+    fn masters_and_project_registration() {
+        let worker = subject(1, &[Capability::TimeEntry], &[(P1, MemberKind::Worker)]);
+        allow(&worker, Operation::ViewMasters);
+        assert_eq!(
+            deny(&worker, Operation::EditMasters),
+            Denial::MissingCapability(Capability::PipelineEdit)
+        );
+        assert_eq!(
+            deny(&worker, Operation::CreateProject),
+            Denial::MissingCapability(Capability::PipelineEdit)
+        );
+        let sales = subject(2, &[Capability::PipelineEdit], &[(P1, MemberKind::Sales)]);
+        allow(&sales, Operation::EditMasters);
+        allow(&sales, Operation::CreateProject);
+        allow(&sales, Operation::EditProject { project_id: P1 });
+        assert_eq!(
+            deny(&sales, Operation::EditProject { project_id: P2 }),
+            Denial::OutOfProjectScope { project_id: P2 }
+        );
+        // A worker on P1 cannot edit P1's ledger entry.
+        assert_eq!(
+            deny(&worker, Operation::EditProject { project_id: P1 }),
+            Denial::MissingCapability(Capability::PipelineEdit)
+        );
+        let pm = subject(
+            3,
+            &[Capability::ProjectManage],
+            &[(P2, MemberKind::Manager)],
+        );
+        allow(&pm, Operation::EditProject { project_id: P2 });
+        assert_eq!(
+            deny(&Subject::outsider(), Operation::ViewMasters),
+            Denial::NotCompanyMember
         );
     }
 
@@ -1095,6 +1215,10 @@ mod tests {
                 PRIMARY KEY (project_id, user_id, kind)
             )",
             "CREATE INDEX project_members_user ON project_members (user_id)",
+            // Only the column `ensure_project` reads; the full table is
+            // `0010_projects.sql`.
+            "CREATE TABLE projects (id INTEGER PRIMARY KEY)",
+            "INSERT INTO projects (id) VALUES (101), (102)",
             "CREATE TABLE audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1161,6 +1285,15 @@ mod tests {
     #[tokio::test]
     async fn unknown_users_and_bad_project_ids_are_rejected() {
         let (svc, _audit, _db) = service().await;
+        assert!(matches!(
+            svc.add_project_member(&ProjectMember {
+                project_id: 999,
+                user_id: 1,
+                kind: MemberKind::Worker
+            })
+            .await,
+            Err(BantoError::NotFound { .. })
+        ));
         assert!(matches!(
             svc.set_capabilities(99, &[Capability::TimeEntry]).await,
             Err(BantoError::NotFound { .. })

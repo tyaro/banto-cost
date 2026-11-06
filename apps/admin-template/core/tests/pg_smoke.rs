@@ -34,6 +34,8 @@ async fn reset_schema(url: &str) {
         .await
         .expect("connect for schema reset");
     for stmt in [
+        "DROP TABLE IF EXISTS pipeline_revenue_plan, pipeline_versions, projects, customers, \
+         project_members, user_capabilities CASCADE",
         "DROP TABLE IF EXISTS attachments, audit_log, users, settings, items CASCADE",
         "DROP TABLE IF EXISTS _sqlx_migrations",
     ] {
@@ -395,6 +397,91 @@ async fn app_layer_crud_round_trips_on_postgres() {
         backup.pending_restore().await.is_none(),
         "pending_restore reports nothing staged on Postgres"
     );
+
+    // banto-cost P3a: customers -> project (with its manager membership) ->
+    // pipeline versions -> overview, through the services' Postgres arms.
+    {
+        use admin_template_core::authz::{AuthzService, MemberKind, ProjectScope};
+        use admin_template_core::customers::{CustomerInput, CustomersService};
+        use admin_template_core::pipeline::{PipelineService, PipelineVersionInput};
+        use admin_template_core::projects::{ProjectInput, ProjectsService};
+
+        let manager = users
+            .create_user(
+                "p3a-manager",
+                "correct horse battery",
+                "案件責任者",
+                Role::Editor,
+            )
+            .await
+            .expect("manager account")
+            .id;
+        let customer = CustomersService::new(db.clone())
+            .create(CustomerInput {
+                name: "架空工業".into(),
+                active: true,
+                note: None,
+                row_version: None,
+            })
+            .await
+            .expect("customer on Postgres");
+        let projects = ProjectsService::new(db.clone());
+        let project = projects
+            .create(
+                ProjectInput {
+                    code: "P-PG-1".into(),
+                    name: "架空案件".into(),
+                    customer_id: customer.id,
+                    manager_user_id: manager,
+                    status: "negotiating".into(),
+                    planned_start: None,
+                    planned_end: None,
+                    order_no: None,
+                    department: None,
+                    note: None,
+                    row_version: None,
+                },
+                None,
+            )
+            .await
+            .expect("project on Postgres");
+        let members = AuthzService::new(db.clone())
+            .project_members(project.id)
+            .await
+            .unwrap();
+        assert_eq!(members[0].kind, MemberKind::Manager);
+        let listed = projects
+            .list(ListParams::default(), &ProjectScope::All)
+            .await
+            .unwrap();
+        assert_eq!(listed.total_count, 1);
+
+        let pipeline = PipelineService::new(db.clone());
+        let input: PipelineVersionInput = serde_json::from_value(serde_json::json!({
+            "stage": "negotiating",
+            "expectedAmount": 3_000_000,
+            "probabilityPct": 60,
+            "expectedOrderMonth": "2026-11",
+            "basis": "見積提出済み",
+            "revenuePlan": [{ "month": "2026-12", "amount": 3_000_000 }, { "amount": 0 }],
+            "adopt": false
+        }))
+        .unwrap();
+        let draft = pipeline
+            .create_version(project.id, input, Some(manager))
+            .await
+            .expect("version on Postgres");
+        pipeline
+            .adopt(project.id, draft.id, Some(manager))
+            .await
+            .expect("adopt on Postgres");
+        let overview = pipeline.overview(&ProjectScope::All).await.unwrap();
+        assert_eq!(
+            (overview.totals.total, overview.totals.weighted),
+            (3_000_000, 1_800_000)
+        );
+        assert_eq!(overview.rows[0].undated_amount, Some(0));
+    }
 }
 
 // Issue #248: `list_as_of` on PostgreSQL - the boundary pins the set across

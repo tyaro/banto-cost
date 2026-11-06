@@ -5,11 +5,14 @@
 //! services back the embedded REST server in M6.
 
 pub mod assets;
+pub mod customers;
 pub mod db;
 pub mod events;
 pub mod first_boot;
 // [scaffold:items] begin
 pub mod items;
+pub mod pipeline;
+pub mod projects;
 // [scaffold:items] end
 pub mod rest;
 
