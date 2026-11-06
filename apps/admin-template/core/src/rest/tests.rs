@@ -66,10 +66,10 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone()).with_events(tx.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -144,10 +144,10 @@ async fn router_with_token() -> (Router, String) {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone()).with_events(tx.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth
@@ -215,10 +215,10 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone()).with_events(tx.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
@@ -432,10 +432,10 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone()).with_events(tx.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let audit = AuditLogService::new(pool);
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -772,6 +772,22 @@ async fn ui_settings_routes_are_unauthorized_without_a_token() {
 ///   plain credential check since none of ITS callers care about audit
 ///   events.
 async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String, String, String) {
+    let (router, audit, admin, editor, viewer, _tx) =
+        router_with_role_tokens_audit_and_events().await;
+    (router, audit, admin, editor, viewer)
+}
+
+/// [`router_with_role_tokens_and_audit`] plus the app-wide event sender, so
+/// a test can `subscribe()` and see the `ResourceChanged` events the
+/// business routes emit (spec §3.5).
+async fn router_with_role_tokens_audit_and_events() -> (
+    Router,
+    AuditLogService,
+    String,
+    String,
+    String,
+    broadcast::Sender<ServerEvent>,
+) {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
     let users = UsersService::new(pool.clone());
@@ -779,10 +795,10 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone()).with_events(tx.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let audit = AuditLogService::new(pool.clone());
 
     users
@@ -830,8 +846,8 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
         orders,
         metrics: None,
     };
-    let router = api_router(services, auth, tx, false);
-    (router, audit, admin_token, editor_token, viewer_token)
+    let router = api_router(services, auth, tx.clone(), false);
+    (router, audit, admin_token, editor_token, viewer_token, tx)
 }
 
 /// Like `router_with_role_tokens_and_audit`, but for the M17
@@ -1273,10 +1289,10 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone()).with_events(tx.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -1919,10 +1935,10 @@ async fn router_with_viewer_public(
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone()).with_events(tx.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let audit = AuditLogService::new(pool);
 
     settings
@@ -2595,10 +2611,10 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
     let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
+    let customers = crate::customers::CustomersService::new(pool.clone()).with_events(tx.clone());
+    let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
+    let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -3396,6 +3412,51 @@ async fn t13_rest_customer_update_with_a_stale_row_version_is_refused() {
         .await
         .unwrap();
     assert_eq!(body_json(response).await["name"], "架空工業（改）");
+}
+
+#[tokio::test]
+async fn rest_customer_writes_emit_resource_changed_only_on_success() {
+    let (router, _audit, admin, _editor, _viewer, tx) =
+        router_with_role_tokens_audit_and_events().await;
+    let mut rx = tx.subscribe();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/customers",
+            &admin,
+            json!({ "name": "架空物産", "active": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            "/api/customers/1",
+            &admin,
+            json!({ "name": "架空工業（改）", "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    for _ in 0..2 {
+        match rx.try_recv().expect("one event per committed write") {
+            ServerEvent::ResourceChanged { resource } => assert_eq!(resource, "customers"),
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+    // A stale update is refused and sends nothing.
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            "/api/customers/1",
+            &admin,
+            json!({ "name": "架空工業（別）", "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(rx.try_recv().is_err());
 }
 
 #[tokio::test]

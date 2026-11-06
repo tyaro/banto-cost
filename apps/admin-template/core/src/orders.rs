@@ -27,7 +27,9 @@
 
 pub mod outlook;
 
+use banto_server::ServerEvent;
 use std::collections::{BTreeMap, BTreeSet};
+use tokio::sync::broadcast;
 
 use banto_core::{BantoError, FieldError};
 use banto_storage::{Db, Dialect};
@@ -686,11 +688,25 @@ fn plan_ops(state: &State, next: &OrderedRevenue) -> Vec<PlanOp> {
 #[derive(Clone)]
 pub struct OrdersService {
     db: Db,
+    events: Option<broadcast::Sender<ServerEvent>>,
 }
 
 impl OrdersService {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self { db, events: None }
+    }
+
+    /// Emit `ServerEvent::ResourceChanged { resource: "projects" }` after each
+    /// committed write (spec §3.5), so other clients' `projects` screens refetch
+    /// and their nav badge counts the change. Wired by `banto-serve` and
+    /// `src-tauri` with the app-wide `event_channel()` sender.
+    pub fn with_events(mut self, events: broadcast::Sender<ServerEvent>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    fn notify_changed(&self) {
+        crate::events::notify_changed(&self.events, "projects");
     }
 
     /// `?` placeholders as the backend wants them (`$1`, `$2`, … on Postgres).
@@ -1060,6 +1076,7 @@ impl OrdersService {
                 execute!(&mut *tx, insert_plan, project_id, month, *amount)?;
             }
         });
+        self.notify_changed();
         self.summary(project_id).await
     }
 
@@ -1117,6 +1134,7 @@ impl OrdersService {
             execute!(&mut *tx, insert, project_id, no, input.delta_amount, &plan_month,
                 &basis, actor_user_id)?;
         });
+        self.notify_changed();
         self.summary(project_id).await
     }
 
@@ -1182,6 +1200,7 @@ impl OrdersService {
             }),
         )
         .await?;
+        self.notify_changed();
         self.summary(project_id).await
     }
 
@@ -1249,6 +1268,7 @@ impl OrdersService {
             .map_err(|issues| revenue_errors("lines", &issues))?;
         let ops = plan_ops(&state, &next);
         self.write_plan(project_id, version, ops, None).await?;
+        self.notify_changed();
         self.summary(project_id).await
     }
 
@@ -1316,6 +1336,7 @@ impl OrdersService {
                 execute!(&mut *tx, insert_clearing, id, *plan_id, *amount)?;
             }
         });
+        self.notify_changed();
         self.summary(project_id).await
     }
 
@@ -1370,6 +1391,7 @@ impl OrdersService {
                 return Err(stale_version_error());
             }
         });
+        self.notify_changed();
         self.summary(project_id).await
     }
 }
@@ -1478,8 +1500,19 @@ pub(crate) mod tests {
     async fn t23_conversion_moves_the_project_to_the_ordered_side_once() {
         let db = fixture().await;
         let a = pipeline_project(&db, "P-001", 3_000_000, 60, "2026-12").await;
-        let svc = OrdersService::new(db.clone());
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let svc = OrdersService::new(db.clone()).with_events(tx);
         let rv = row_version(&db, a).await;
+        // A refused conversion (stale row_version) sends nothing.
+        assert!(svc
+            .convert(
+                a,
+                conversion(rv + 1, 2_800_000, vec![line(Some("2026-12"), 2_800_000)]),
+                Some(1),
+            )
+            .await
+            .is_err());
+        assert!(rx.try_recv().is_err());
         let s = svc
             .convert(
                 a,
@@ -1488,6 +1521,11 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
+        match rx.try_recv().expect("the conversion notifies once") {
+            ServerEvent::ResourceChanged { resource } => assert_eq!(resource, "projects"),
+            other => panic!("unexpected event {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
         assert_eq!(s.status, "ordered");
         assert_eq!(s.confirmed_amount, Some(2_800_000));
         assert_eq!(
