@@ -30,6 +30,10 @@ use admin_template_core::authz::{
     Operation, Policy, ProjectMember, ProjectScope, Subject,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
+use admin_template_core::calc_basis::{
+    audit_detail as calc_basis_audit_detail, CalcBasisService, CalcValueInput, CalcValueRow,
+    CompanyBasis, ImpactPreview, ProjectBasis,
+};
 use admin_template_core::customers::{Customer, CustomerInput, CustomersService};
 use admin_template_core::db::init_db;
 use admin_template_core::events::event_channel;
@@ -189,6 +193,8 @@ struct AppState {
     projects: ProjectsService,
     pipeline: PipelineService,
     orders: OrdersService,
+    /// banto-cost P4a: calc basis (company values and project overrides).
+    calc_basis: CalcBasisService,
     /// CPU/memory probe (ADR-0013, Issue #185): `Some` when the
     /// `system-metrics` feature is on and the host platform is supported;
     /// `None` otherwise, in which case the `system_info` command reports
@@ -1908,6 +1914,7 @@ async fn start_embedded_server(
     projects: ProjectsService,
     pipeline: PipelineService,
     orders: OrdersService,
+    calc_basis: CalcBasisService,
     metrics: Option<MetricsProbe>,
     auth: AuthState,
     events: broadcast::Sender<ServerEvent>,
@@ -1933,6 +1940,7 @@ async fn start_embedded_server(
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics,
     };
     // Issue #219 (`docs/design/lan-reach-check-design.md` §5.2): the one
@@ -2530,6 +2538,7 @@ async fn server_apply_body(
             state.projects.clone(),
             state.pipeline.clone(),
             state.orders.clone(),
+            state.calc_basis.clone(),
             state.metrics.clone(),
             state.rest_auth.clone(),
             state.events.clone(),
@@ -3922,6 +3931,172 @@ async fn outlook_snapshot_create(
     Ok(snapshot)
 }
 
+// --- banto-cost P4a: calc basis (design §10, ADR-0028) ---------------------
+//
+// Tauri twins of the `/api/calc-basis*` and `/api/projects/{id}/calc-basis*`
+// routes: the same role floors, the same `Operation`s through
+// `authorize_audited`, the same audit actions and detail (no rate values).
+
+/// `EditCalcBasis` for the item the request names.
+async fn company_basis_guard(
+    state: &AppState,
+    actor: &UserIdentity,
+    values: &CalcValueInput,
+) -> Result<Option<i64>, BantoError> {
+    let item = state.calc_basis.item_for(values).await?;
+    let (_, user_id) = business_guard(
+        state,
+        actor,
+        Operation::EditCalcBasis {
+            capability: item.capability()?,
+        },
+        "calc_basis",
+    )
+    .await?;
+    Ok(user_id)
+}
+
+/// `OverrideCalcBasis` on the project for the item the request names.
+async fn project_basis_guard(
+    state: &AppState,
+    actor: &UserIdentity,
+    project_id: i64,
+    values: &CalcValueInput,
+) -> Result<Option<i64>, BantoError> {
+    let item = state.calc_basis.item_for(values).await?;
+    let (_, user_id) = business_guard(
+        state,
+        actor,
+        Operation::OverrideCalcBasis {
+            project_id,
+            capability: item.capability()?,
+            managers_allowed: item.managers_may_override,
+        },
+        "calc_basis",
+    )
+    .await?;
+    Ok(user_id)
+}
+
+#[tauri::command]
+async fn calc_basis_get(
+    state: State<'_, AppState>,
+    on: String,
+) -> Result<CompanyBasis, BantoError> {
+    calc_basis_get_body(&state, on).await
+}
+
+async fn calc_basis_get_body(state: &AppState, on: String) -> Result<CompanyBasis, BantoError> {
+    let identity = require_role(state, Role::Viewer, "calc_basis").await?;
+    business_guard(state, &identity, Operation::ViewCalcBasis, "calc_basis").await?;
+    state.calc_basis.company(&on).await
+}
+
+#[tauri::command]
+async fn calc_basis_preview(
+    state: State<'_, AppState>,
+    values: CalcValueInput,
+) -> Result<ImpactPreview, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "calc_basis").await?;
+    company_basis_guard(&state, &identity, &values).await?;
+    state.calc_basis.preview(None, values).await
+}
+
+#[tauri::command]
+async fn calc_basis_add(
+    state: State<'_, AppState>,
+    values: CalcValueInput,
+) -> Result<CalcValueRow, BantoError> {
+    calc_basis_add_body(&state, values).await
+}
+
+async fn calc_basis_add_body(
+    state: &AppState,
+    values: CalcValueInput,
+) -> Result<CalcValueRow, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let user_id = company_basis_guard(state, &actor, &values).await?;
+    let row = state.calc_basis.add(None, values, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        "calc_basis",
+        Some(&row.id.to_string()),
+        Some(calc_basis_audit_detail(&row)),
+    )
+    .await;
+    Ok(row)
+}
+
+#[tauri::command]
+async fn project_calc_basis_get(
+    state: State<'_, AppState>,
+    project_id: i64,
+    on: String,
+) -> Result<ProjectBasis, BantoError> {
+    project_calc_basis_get_body(&state, project_id, on).await
+}
+
+async fn project_calc_basis_get_body(
+    state: &AppState,
+    project_id: i64,
+    on: String,
+) -> Result<ProjectBasis, BantoError> {
+    let identity = require_role(state, Role::Viewer, "calc_basis").await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        "calc_basis",
+    )
+    .await?;
+    state.calc_basis.project(project_id, &on).await
+}
+
+#[tauri::command]
+async fn project_calc_basis_preview(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: CalcValueInput,
+) -> Result<ImpactPreview, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "calc_basis").await?;
+    project_basis_guard(&state, &identity, project_id, &values).await?;
+    state.calc_basis.preview(Some(project_id), values).await
+}
+
+#[tauri::command]
+async fn project_calc_basis_add(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: CalcValueInput,
+) -> Result<CalcValueRow, BantoError> {
+    project_calc_basis_add_body(&state, project_id, values).await
+}
+
+async fn project_calc_basis_add_body(
+    state: &AppState,
+    project_id: i64,
+    values: CalcValueInput,
+) -> Result<CalcValueRow, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let user_id = project_basis_guard(state, &actor, project_id, &values).await?;
+    let row = state
+        .calc_basis
+        .add(Some(project_id), values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "override",
+        "calc_basis",
+        Some(&row.id.to_string()),
+        Some(calc_basis_audit_detail(&row)),
+    )
+    .await;
+    Ok(row)
+}
+
 /// `admin`-only (spec M10): the user-management screen's account list.
 #[tauri::command]
 async fn users_list(state: State<'_, AppState>) -> Result<Vec<UserSummary>, BantoError> {
@@ -4394,6 +4569,8 @@ pub fn run() {
             let pipeline = PipelineService::new(db.clone()).with_events(events.clone());
             // banto-cost P3b.
             let orders = OrdersService::new(db.clone()).with_events(events.clone());
+            // banto-cost P4a.
+            let calc_basis = CalcBasisService::new(db.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
             // same "share one stateful sampler" reasoning as `banto-serve`'s
             // main() - see `SystemMetricsSampler::sample`'s doc comment for
@@ -4618,6 +4795,7 @@ pub fn run() {
                     projects.clone(),
                     pipeline.clone(),
                     orders.clone(),
+                    calc_basis.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
                     events.clone(),
@@ -4686,6 +4864,7 @@ pub fn run() {
                 projects,
                 pipeline,
                 orders,
+                calc_basis,
                 metrics,
                 started_at,
             });
@@ -4750,6 +4929,12 @@ pub fn run() {
             outlook_snapshots_list,
             outlook_snapshot_get,
             outlook_snapshot_create,
+            calc_basis_get,
+            calc_basis_preview,
+            calc_basis_add,
+            project_calc_basis_get,
+            project_calc_basis_preview,
+            project_calc_basis_add,
             users_update,
             users_reset_password,
             users_delete,
@@ -4821,6 +5006,7 @@ mod tests {
             projects: ProjectsService::new(pool.clone()).with_events(events.clone()),
             pipeline: PipelineService::new(pool.clone()).with_events(events.clone()),
             orders: OrdersService::new(pool.clone()).with_events(events.clone()),
+            calc_basis: CalcBasisService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
             metrics: None,
@@ -4879,6 +5065,7 @@ mod tests {
             projects: ProjectsService::new(pool.clone()).with_events(events.clone()),
             pipeline: PipelineService::new(pool.clone()).with_events(events.clone()),
             orders: OrdersService::new(pool.clone()).with_events(events.clone()),
+            calc_basis: CalcBasisService::new(pool.clone()),
             metrics: None,
             started_at: std::time::Instant::now(),
         }
@@ -9443,5 +9630,104 @@ mod tests {
         assert!(denied.iter().all(|r| r.origin == "tauri"));
         assert!(denied.iter().any(|r| r.resource == "revenue_recognitions"));
         assert!(denied.iter().any(|r| r.resource == "orders"));
+    }
+
+    // --- banto-cost P4a ----------------------------------------------------
+    // Tauri twin of `rest::tests::t31_t32_t34_t35_rest_calc_basis_follows_the_item_capability`.
+
+    #[tokio::test]
+    async fn t31_t32_t34_t35_tauri_calc_basis_follows_the_item_capability() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        let input = |item: &str, from: &str, value: Option<i64>| -> CalcValueInput {
+            serde_json::from_value(serde_json::json!({
+                "itemKey": item,
+                "validFrom": from,
+                "value": value,
+                "reason": "テスト"
+            }))
+            .expect("input")
+        };
+
+        // T35: the administrator role sees no basis and changes none.
+        assert!(matches!(
+            calc_basis_get_body(&state, "2026-11-06".into()).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            calc_basis_add_body(&state, input("emp_rate", "2026-06-01", Some(5_000))).await,
+            Err(BantoError::Forbidden)
+        ));
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[
+                Capability::FinanceRate,
+                Capability::AmountView,
+                Capability::PipelineEdit,
+            ],
+        )
+        .await
+        .expect("admin grants");
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+
+        // T31.
+        let row = calc_basis_add_body(&state, input("emp_rate", "2026-06-01", Some(5_000)))
+            .await
+            .expect("company version");
+        assert_eq!(row.version_no, 1);
+        assert!(matches!(
+            calc_basis_add_body(&state, input("tax_rate", "2026-06-01", Some(10))).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        // T32 / T34 on the editor's own project.
+        let own = projects_create_body(&state, project_input("P-001", admin.id))
+            .await
+            .expect("sales registers a project");
+        project_calc_basis_add_body(&state, own.id, input("emp_rate", "2026-12-01", Some(5_500)))
+            .await
+            .expect("override");
+        let basis = project_calc_basis_get_body(&state, own.id, "2026-12-01".into())
+            .await
+            .expect("project basis");
+        assert_eq!(basis.items[0].applied_value, Some(5_500));
+        project_calc_basis_add_body(&state, own.id, input("emp_rate", "2027-01-01", None))
+            .await
+            .expect("revert");
+        let basis = project_calc_basis_get_body(&state, own.id, "2027-01-01".into())
+            .await
+            .expect("project basis");
+        assert_eq!(basis.items[0].applied_value, Some(5_000));
+        assert_eq!(basis.items[0].history.len(), 2);
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        let writes: Vec<_> = rows
+            .iter()
+            .filter(|r| r.resource == "calc_basis" && r.action != "denied")
+            .collect();
+        assert_eq!(writes.len(), 3);
+        assert!(writes
+            .iter()
+            .all(|r| !r.detail.clone().unwrap_or_default().contains("5500")));
+        assert!(rows
+            .iter()
+            .any(|r| r.resource == "calc_basis" && r.action == "denied" && r.origin == "tauri"));
     }
 }

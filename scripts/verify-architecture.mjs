@@ -440,7 +440,14 @@ const isAllowedPackageImport = (spec) =>
 			rest: 'POST /api/projects/{id}/order/recognitions/{recognitionId}/cancel',
 			role: 'Editor'
 		},
-		{ tauri: 'outlook_snapshot_create', rest: 'POST /api/outlook/snapshots', role: 'Editor' }
+		{ tauri: 'outlook_snapshot_create', rest: 'POST /api/outlook/snapshots', role: 'Editor' },
+		// banto-cost P4a: 計算基準の追加（会社基準・案件の上書き）も editor 床＋authorize_audited。
+		{ tauri: 'calc_basis_add', rest: 'POST /api/calc-basis', role: 'Editor' },
+		{
+			tauri: 'project_calc_basis_add',
+			rest: 'POST /api/projects/{id}/calc-basis',
+			role: 'Editor'
+		}
 	];
 
 	// ロール床を照合したい読み取り系の対（CR-6）。読み取りは rule 8 の存在対称の
@@ -470,7 +477,20 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'order_get', rest: 'GET /api/projects/{id}/order', role: 'Viewer' },
 		{ tauri: 'outlook_get', rest: 'GET /api/outlook', role: 'Viewer' },
 		{ tauri: 'outlook_snapshots_list', rest: 'GET /api/outlook/snapshots', role: 'Viewer' },
-		{ tauri: 'outlook_snapshot_get', rest: 'GET /api/outlook/snapshots/{id}', role: 'Viewer' }
+		{ tauri: 'outlook_snapshot_get', rest: 'GET /api/outlook/snapshots/{id}', role: 'Viewer' },
+		// banto-cost P4a の読み取り（影響の事前確認は保存しないので読み取り側）。
+		{ tauri: 'calc_basis_get', rest: 'GET /api/calc-basis', role: 'Viewer' },
+		{ tauri: 'calc_basis_preview', rest: 'POST /api/calc-basis/preview', role: 'Viewer' },
+		{
+			tauri: 'project_calc_basis_get',
+			rest: 'GET /api/projects/{id}/calc-basis',
+			role: 'Viewer'
+		},
+		{
+			tauri: 'project_calc_basis_preview',
+			rest: 'POST /api/projects/{id}/calc-basis/preview',
+			role: 'Viewer'
+		}
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -526,12 +546,16 @@ const isAllowedPackageImport = (spec) =>
 		// server_status). Desktop-only by nature - no REST twin.
 		'firewall_rule_status',
 		'ping',
+		'calc_basis_get',
+		'calc_basis_preview',
 		'order_get',
 		'outlook_get',
 		'outlook_snapshot_get',
 		'outlook_snapshots_list',
 		'pipeline_overview',
 		'pipeline_versions_list',
+		'project_calc_basis_get',
+		'project_calc_basis_preview',
 		'project_members_list',
 		'projects_get',
 		'projects_list',
@@ -564,6 +588,10 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/outlook',
 		'GET /api/outlook/snapshots',
 		'GET /api/outlook/snapshots/{id}',
+		'GET /api/calc-basis',
+		'POST /api/calc-basis/preview',
+		'GET /api/projects/{id}/calc-basis',
+		'POST /api/projects/{id}/calc-basis/preview',
 		'POST /api/customers/list',
 		'POST /api/projects/list',
 		'GET /api/ui-settings/{key}',

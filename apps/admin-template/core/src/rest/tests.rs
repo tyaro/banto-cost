@@ -70,6 +70,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
     let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -126,6 +127,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: None,
     };
     (
@@ -148,6 +150,7 @@ async fn router_with_token() -> (Router, String) {
     let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth
@@ -165,6 +168,7 @@ async fn router_with_token() -> (Router, String) {
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: None,
     };
     (api_router(services, auth, tx, false), token)
@@ -219,6 +223,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
@@ -232,6 +237,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: None,
     };
     api_router(services, auth, tx, allow_setup)
@@ -436,6 +442,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
     let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -452,6 +459,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: None,
     };
     (api_router(services, auth, tx, allow_setup), audit)
@@ -799,6 +807,7 @@ async fn router_with_role_tokens_audit_and_events() -> (
     let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let audit = AuditLogService::new(pool.clone());
 
     users
@@ -844,6 +853,7 @@ async fn router_with_role_tokens_audit_and_events() -> (
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: None,
     };
     let router = api_router(services, auth, tx.clone(), false);
@@ -891,6 +901,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
     let projects = crate::projects::ProjectsService::new(db.clone());
     let pipeline = crate::pipeline::PipelineService::new(db.clone());
     let orders = crate::orders::OrdersService::new(db.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(db.clone());
     let audit = AuditLogService::new(db);
 
     users
@@ -934,6 +945,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1293,6 +1305,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -1323,6 +1336,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: Some(metrics),
     };
     let router = api_router(services, auth, tx, false);
@@ -1939,6 +1953,7 @@ async fn router_with_viewer_public(
     let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     settings
@@ -1964,6 +1979,7 @@ async fn router_with_viewer_public(
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: None,
     };
     (
@@ -2615,6 +2631,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
     let projects = crate::projects::ProjectsService::new(pool.clone()).with_events(tx.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
+    let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -2642,6 +2659,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics: None,
     };
     (api_router(services, auth, tx, false), users)
@@ -3740,4 +3758,175 @@ async fn t23_t26_t27_rest_order_revenue_and_outlook() {
     let denied = denied_entries(&audit).await;
     assert!(denied.iter().any(|r| r.resource == "revenue_recognitions"));
     assert!(denied.iter().any(|r| r.resource == "outlook_snapshots"));
+}
+
+#[tokio::test]
+async fn t31_t32_t34_t35_rest_calc_basis_follows_the_item_capability() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    let company = json!({
+        "itemKey": "emp_rate",
+        "validFrom": "2026-06-01",
+        "value": 5_000,
+        "reason": "第13期の単価"
+    });
+
+    // T35: no capability, no basis - not even for the admin role (amounts).
+    for token in [&admin, &editor, &viewer] {
+        let response = router
+            .clone()
+            .oneshot(get_auth("/api/calc-basis?on=2026-11-06", token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/calc-basis", &admin, company.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["finance.rate", "amount.view", "pipeline.edit"]),
+    )
+    .await;
+    // T31: a company version.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/calc-basis", &editor, company))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let row = body_json(response).await;
+    assert_eq!(row["versionNo"], 1);
+    assert_eq!(row["value"], 5_000);
+    // T35: the tax rate is accounting's (finance.close), not the rate holder's.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/calc-basis",
+            &editor,
+            json!({ "itemKey": "tax_rate", "validFrom": "2026-06-01", "value": 10, "reason": "標準" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // T32: an override on one project, checked with a preview first.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", 1),
+        ))
+        .await
+        .unwrap();
+    let id = body_json(response).await["id"].as_i64().unwrap();
+    let override_body = json!({
+        "itemKey": "emp_rate",
+        "validFrom": "2026-12-01",
+        "value": 5_500,
+        "reason": "高単価の技術者が担当"
+    });
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/calc-basis/preview"),
+            &editor,
+            override_body.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview = body_json(response).await;
+    assert_eq!(preview["before"], 5_000);
+    assert_eq!(preview["after"], 5_500);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/calc-basis"),
+            &editor,
+            override_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/projects/{id}/calc-basis?on=2026-12-01"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let basis = body_json(response).await;
+    let emp = &basis["items"][0];
+    assert_eq!(emp["item"]["key"], "emp_rate");
+    assert_eq!(emp["appliedValue"], 5_500);
+    assert_eq!(emp["source"], "project");
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/calc-basis/preview",
+            &editor,
+            json!({ "itemKey": "emp_rate", "validFrom": "2027-06-01", "value": 5_200, "reason": "第14期" }),
+        ))
+        .await
+        .unwrap();
+    let preview = body_json(response).await;
+    assert_eq!(
+        preview["shieldedProjects"],
+        json!([{ "id": id, "code": "P-001" }])
+    );
+
+    // T34: back to the company basis.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/calc-basis"),
+            &editor,
+            json!({ "itemKey": "emp_rate", "validFrom": "2027-01-01", "value": null, "reason": "通常の体制に戻った" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/projects/{id}/calc-basis?on=2027-01-01"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    let basis = body_json(response).await;
+    assert_eq!(basis["items"][0]["appliedValue"], 5_000);
+    assert_eq!(basis["items"][0]["source"], "company");
+    assert_eq!(basis["items"][0]["history"].as_array().unwrap().len(), 2);
+
+    // Audit: the writes are recorded without the rate itself.
+    let writes: Vec<_> = audit
+        .list(ListParams::default())
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter(|row| row.resource == "calc_basis" && row.action != "denied")
+        .collect();
+    assert_eq!(writes.len(), 3, "{writes:?}");
+    for row in &writes {
+        let detail = row.detail.clone().unwrap_or_default();
+        assert!(
+            !detail.contains("5000") && !detail.contains("5500"),
+            "{detail}"
+        );
+    }
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "calc_basis"));
 }

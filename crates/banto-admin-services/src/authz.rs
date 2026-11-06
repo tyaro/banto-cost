@@ -233,6 +233,22 @@ pub enum Operation {
     /// its ordered revenue (banto-cost P3b): its sales owner or its manager,
     /// as for [`Operation::EditProject`], and the amounts must be visible.
     EditOrder { project_id: i64 },
+    /// Read the company calc basis (design §10: hourly cost rates, day
+    /// length, thresholds) and its history. Amounts, so `amount.view`, plus
+    /// a capability that works with the basis: rates, accounting, reports or
+    /// project management (banto-cost P4a).
+    ViewCalcBasis,
+    /// Add a company calc-basis row for an item whose change right is
+    /// `capability` (`calc_items.edit_capability`, design §10.3).
+    EditCalcBasis { capability: Capability },
+    /// Add (or revert) a project override of a calc-basis item. Whoever holds
+    /// the item's company change right (`capability`) may do it on any
+    /// project; when `managers_allowed`, so may the project's manager.
+    OverrideCalcBasis {
+        project_id: i64,
+        capability: Capability,
+        managers_allowed: bool,
+    },
 }
 
 impl Operation {
@@ -254,6 +270,9 @@ impl Operation {
             Operation::CreateProject => "create_project",
             Operation::EditProject { .. } => "edit_project",
             Operation::EditOrder { .. } => "edit_order",
+            Operation::ViewCalcBasis => "view_calc_basis",
+            Operation::EditCalcBasis { .. } => "edit_calc_basis",
+            Operation::OverrideCalcBasis { .. } => "override_calc_basis",
         }
     }
 
@@ -266,14 +285,17 @@ impl Operation {
             | Operation::ManageProject { project_id }
             | Operation::Approve { project_id, .. }
             | Operation::EditProject { project_id }
-            | Operation::EditOrder { project_id } => Some(project_id),
+            | Operation::EditOrder { project_id }
+            | Operation::OverrideCalcBasis { project_id, .. } => Some(project_id),
             Operation::ViewRates
             | Operation::EditRates
             | Operation::FinanceClose
             | Operation::ViewAllReports
             | Operation::ViewMasters
             | Operation::EditMasters
-            | Operation::CreateProject => None,
+            | Operation::CreateProject
+            | Operation::ViewCalcBasis
+            | Operation::EditCalcBasis { .. } => None,
         }
     }
 }
@@ -428,6 +450,37 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
                     return Err(Denial::OutOfProjectScope { project_id });
                 }
                 return Err(Denial::MissingCapability(Capability::PipelineEdit));
+            }
+        }
+        Operation::ViewCalcBasis => {
+            require(subject, Capability::AmountView)?;
+            if ![
+                Capability::FinanceRate,
+                Capability::FinanceClose,
+                Capability::ReportAll,
+                Capability::ProjectManage,
+            ]
+            .into_iter()
+            .any(|cap| subject.has(cap))
+            {
+                return Err(Denial::MissingCapability(Capability::FinanceRate));
+            }
+        }
+        Operation::EditCalcBasis { capability } => {
+            require(subject, Capability::AmountView)?;
+            require(subject, capability)?;
+        }
+        Operation::OverrideCalcBasis {
+            project_id,
+            capability,
+            managers_allowed,
+        } => {
+            require(subject, Capability::AmountView)?;
+            if !subject.has(capability) {
+                if !(managers_allowed && subject.has(Capability::ProjectManage)) {
+                    return Err(Denial::MissingCapability(capability));
+                }
+                require_scope(subject.holds(project_id, MemberKind::Manager), project_id)?;
             }
         }
     }
@@ -1159,6 +1212,109 @@ mod tests {
         assert_eq!(
             deny(&Subject::outsider(), Operation::ViewMasters),
             Denial::NotCompanyMember
+        );
+    }
+
+    #[test]
+    fn t35_calc_basis_changes_need_the_item_capability() {
+        let finance = subject(1, &[Capability::FinanceRate, Capability::AmountView], &[]);
+        allow(&finance, Operation::ViewCalcBasis);
+        allow(
+            &finance,
+            Operation::EditCalcBasis {
+                capability: Capability::FinanceRate,
+            },
+        );
+        assert_eq!(
+            deny(
+                &finance,
+                Operation::EditCalcBasis {
+                    capability: Capability::FinanceClose
+                }
+            ),
+            Denial::MissingCapability(Capability::FinanceClose)
+        );
+        // The company change right covers every project's override.
+        allow(
+            &finance,
+            Operation::OverrideCalcBasis {
+                project_id: P2,
+                capability: Capability::FinanceRate,
+                managers_allowed: false,
+            },
+        );
+
+        let pm = subject(
+            2,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P1, MemberKind::Manager)],
+        );
+        allow(&pm, Operation::ViewCalcBasis);
+        assert_eq!(
+            deny(
+                &pm,
+                Operation::EditCalcBasis {
+                    capability: Capability::FinanceRate
+                }
+            ),
+            Denial::MissingCapability(Capability::FinanceRate)
+        );
+        allow(
+            &pm,
+            Operation::OverrideCalcBasis {
+                project_id: P1,
+                capability: Capability::FinanceRate,
+                managers_allowed: true,
+            },
+        );
+        assert_eq!(
+            deny(
+                &pm,
+                Operation::OverrideCalcBasis {
+                    project_id: P2,
+                    capability: Capability::FinanceRate,
+                    managers_allowed: true,
+                }
+            ),
+            Denial::OutOfProjectScope { project_id: P2 }
+        );
+        assert_eq!(
+            deny(
+                &pm,
+                Operation::OverrideCalcBasis {
+                    project_id: P1,
+                    capability: Capability::FinanceRate,
+                    managers_allowed: false,
+                }
+            ),
+            Denial::MissingCapability(Capability::FinanceRate)
+        );
+
+        // Amounts are needed to see or change the basis at all.
+        let no_amounts = subject(3, &[Capability::FinanceRate], &[]);
+        assert_eq!(
+            deny(&no_amounts, Operation::ViewCalcBasis),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        let worker = subject(
+            4,
+            &[Capability::TimeEntry, Capability::AmountView],
+            &[(P1, MemberKind::Worker)],
+        );
+        assert_eq!(
+            deny(&worker, Operation::ViewCalcBasis),
+            Denial::MissingCapability(Capability::FinanceRate)
+        );
+        assert_eq!(
+            deny(
+                &worker,
+                Operation::OverrideCalcBasis {
+                    project_id: P1,
+                    capability: Capability::FinanceRate,
+                    managers_allowed: true,
+                }
+            ),
+            Denial::MissingCapability(Capability::FinanceRate)
         );
     }
 
