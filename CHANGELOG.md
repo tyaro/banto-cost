@@ -22,6 +22,8 @@
 
 ## [Unreleased]
 
+- banto-cost P2: 業務の権限を能力（capability）× 案件範囲で判定する `banto_admin_services::authz` と、能力の付与・案件メンバーの REST / Tauri 操作を追加（マイグレーション `0009_authz.sql`、ADR-0028、受入条件 T12/T19/T20 の両経路テスト）。
+
 ## [6.10.0] - 2026-11-05
 
 **v6.10.0 — グリッド・フォーム・設定画面のアクセシビリティ修正と、共通の入力スタイル（`@banto/theme` の opt-in クラス、`BantoForm` の `appearance="underline"`）の追加。** 版の種類: minor（機能追加。公開 API の削除・改名なし。挙動変更は下の「移行注意」を参照。[docs/publishing.md](docs/publishing.md)「バージョニング規約」）。

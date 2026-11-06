@@ -384,7 +384,23 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'backups_create', rest: 'POST /api/backups', role: 'Admin' },
 		{ tauri: 'backups_stage_restore', rest: 'POST /api/backups/restore', role: 'Admin' },
 		{ tauri: 'backups_stage_restore', rest: 'POST /api/backups/{fileName}/restore', role: 'Admin' },
-		{ tauri: 'backups_cancel_restore', rest: 'DELETE /api/backups/pending-restore', role: 'Admin' }
+		{ tauri: 'backups_cancel_restore', rest: 'DELETE /api/backups/pending-restore', role: 'Admin' },
+		// banto-cost P2（ADR-0028）: 能力の付与と案件メンバーの割当はシステム管理（admin）。
+		{
+			tauri: 'authz_capabilities_set',
+			rest: 'PUT /api/users/{id}/capabilities',
+			role: 'Admin'
+		},
+		{
+			tauri: 'project_members_add',
+			rest: 'PUT /api/projects/{id}/members/{userId}/{kind}',
+			role: 'Admin'
+		},
+		{
+			tauri: 'project_members_remove',
+			rest: 'DELETE /api/projects/{id}/members/{userId}/{kind}',
+			role: 'Admin'
+		}
 	];
 
 	// ロール床を照合したい読み取り系の対（CR-6）。読み取りは rule 8 の存在対称の
@@ -393,7 +409,12 @@ const isAllowedPackageImport = (spec) =>
 	const ROLE_READ = [
 		{ tauri: 'audit_config_get', rest: 'GET /api/audit-log/config', role: 'Admin' },
 		{ tauri: 'audit_log_list', rest: 'POST /api/audit-log/list', role: 'Admin' },
-		{ tauri: 'system_info', rest: 'GET /api/system/info', role: 'Admin' }
+		{ tauri: 'system_info', rest: 'GET /api/system/info', role: 'Admin' },
+		// banto-cost P2（ADR-0028）。案件メンバーの閲覧はロール床が viewer で、
+		// その先の能力×案件範囲は両経路とも AuthzService::authorize_audited が判定する。
+		{ tauri: 'authz_me', rest: 'GET /api/authz/me', role: 'Viewer' },
+		{ tauri: 'authz_capabilities_get', rest: 'GET /api/users/{id}/capabilities', role: 'Admin' },
+		{ tauri: 'project_members_list', rest: 'GET /api/projects/{id}/members', role: 'Viewer' }
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -436,6 +457,8 @@ const isAllowedPackageImport = (spec) =>
 		'audit_config_get',
 		'audit_log_list',
 		'auth_check',
+		'authz_capabilities_get',
+		'authz_me',
 		'auth_config_get',
 		'auth_identity',
 		'auth_resolve',
@@ -448,6 +471,7 @@ const isAllowedPackageImport = (spec) =>
 		'items_get',
 		'items_list',
 		'ping',
+		'project_members_list',
 		// Issue #219 PR-C2: the reach check of the live listener (admin, like
 		// server_status). Desktop-only by nature - no REST twin.
 		'reach_check_status',
@@ -467,6 +491,9 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/events',
 		'GET /api/items/{id}',
 		'GET /api/users',
+		'GET /api/authz/me',
+		'GET /api/users/{id}/capabilities',
+		'GET /api/projects/{id}/members',
 		'GET /api/ui-settings/{key}',
 		'GET /api/audit-log/config',
 		'GET /api/system/info',

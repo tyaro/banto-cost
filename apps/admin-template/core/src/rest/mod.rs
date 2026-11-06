@@ -31,6 +31,12 @@
 //! | PUT    | `/api/users/{id}`    | `{displayName,role}` | `UserSummary` (admin) |
 //! | POST   | `/api/users/{id}/reset-password` | `{newPassword}` | `{success}` (admin) |
 //! | DELETE | `/api/users/{id}`    | -              | 204 (admin)             |
+//! | GET    | `/api/authz/me`      | -              | `{capabilities,memberships}` (any role; ADR-0028) |
+//! | GET    | `/api/users/{id}/capabilities` | -    | `Capability[]` (admin; ADR-0028) |
+//! | PUT    | `/api/users/{id}/capabilities` | `{capabilities}` | `Capability[]` (admin; ADR-0028) |
+//! | GET    | `/api/projects/{id}/members` | -      | `ProjectMember[]` (admin, or `ViewProject` on that project; ADR-0028) |
+//! | PUT    | `/api/projects/{id}/members/{userId}/{kind}` | - | `ProjectMember[]` (admin; ADR-0028) |
+//! | DELETE | `/api/projects/{id}/members/{userId}/{kind}` | - | 204 (admin; ADR-0028) |
 //! | GET    | `/api/ui-settings/{key}` | -          | `{value: string \| null}` (any role) |
 //! | PUT    | `/api/ui-settings/{key}` | `{value}`  | 204 (any role)          |
 //! | POST   | `/api/audit-log/list?asOfId=` | `ListParams` | `AuditLogList` (`ListResult` + `asOfId`/`deletionEpoch`, admin; #248) |
@@ -229,6 +235,7 @@ use crate::settings::SettingsService;
 use crate::system_info::SystemInfoService;
 use crate::users::{Role, UsersService};
 
+mod authz;
 // [scaffold:items] begin
 mod items;
 // [scaffold:items] end
@@ -269,6 +276,8 @@ pub struct Services {
     pub audit: AuditLogService,
     pub backup: BackupService,
     pub system_info: SystemInfoService,
+    /// Capability × project-scope authorization (banto-cost P2, ADR-0028).
+    pub authz: crate::authz::AuthzService,
     /// CPU/memory probe (ADR-0013, Issue #185), or `None` when the
     /// `system-metrics` feature is off (or the host platform is
     /// unsupported) - the app layer builds the `Some` case, see
@@ -306,6 +315,7 @@ pub fn api_router(
         audit,
         backup,
         system_info,
+        authz,
         metrics,
     } = services;
 
@@ -345,6 +355,30 @@ pub fn api_router(
         // [scaffold:items] begin
         .merge(items_router(items, audit.clone(), auth.clone()))
         // [scaffold:items] end
+        .merge(authz::authz_me_router(
+            authz.clone(),
+            users.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(authz::capabilities_router(
+            authz.clone(),
+            users.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(authz::project_members_read_router(
+            authz.clone(),
+            users.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(authz::project_members_write_router(
+            authz,
+            users.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
         .merge(users_router(users, audit.clone(), auth.clone()))
         .merge(audit_log_router(
             audit.clone(),

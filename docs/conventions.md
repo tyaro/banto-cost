@@ -113,6 +113,12 @@ maintenance-review-2026-08 §5.3 で実測・是正済み）:
   サービスは actor / RBAC / HTTP を知らない（`audit.rs` doc:
   「This service does not know about actors, RBAC, or HTTP」）。
 
+banto-cost の例外（[ADR-0028](adr/0028-capability-project-scope-authz.md)）: 業務の権限
+（能力 × 案件範囲）は `banto_admin_services::authz` の一つの関数で判定し、
+`AuthzService::authorize_audited` が拒否の監査まで行う。REST と Tauri の判定を
+ずらさないための意図的な例外で、tauri / axum / HTTP 非依存は守る。ロール床と
+成功時の監査は引き続き配線層が付ける。
+
 効果: サービスは `cargo test` で `:memory:` プールから直接叩ける。各サービスの
 `#[cfg(test)] mod tests` がこの形を前提にしている。新サービスもこの契約を守る。
 

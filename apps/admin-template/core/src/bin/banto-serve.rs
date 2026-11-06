@@ -142,6 +142,7 @@ async fn main() {
     let backup = BackupService::new(db_path_buf.clone(), db.clone());
 
     let system_info = SystemInfoService::new(db.clone());
+    let authz = admin_template_core::authz::AuthzService::new(db.clone());
     // ADR-0013 (Issue #185): the sampler is stateful (CPU% needs a delta
     // between refreshes, see `SystemMetricsSampler::sample`'s doc comment),
     // so it is built once here and shared - same lifetime as `system_info`
@@ -238,6 +239,7 @@ async fn main() {
         audit,
         backup,
         system_info,
+        authz,
         metrics,
     };
     let app = with_security_headers(

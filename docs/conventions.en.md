@@ -131,6 +131,13 @@ All services (`ItemsService` / `AuditLogService` / `BackupService` /
   HTTP (`audit.rs` doc: "This service does not know about actors, RBAC, or
   HTTP").
 
+banto-cost exception ([ADR-0028](adr/0028-capability-project-scope-authz.en.md)): business
+permissions (capability × project scope) are decided by one function in
+`banto_admin_services::authz`, and `AuthzService::authorize_audited` also records
+the denial. This is deliberate, so REST and Tauri cannot drift apart; services
+still do not depend on tauri / axum / HTTP. Role floors and success audits stay
+in the wiring layers.
+
 Effect: services can be driven directly from a `:memory:` pool in
 `cargo test`. Each service's `#[cfg(test)] mod tests` assumes this shape. New
 services also keep this contract.
