@@ -66,6 +66,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -118,6 +119,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
         audit,
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     (
@@ -136,6 +138,7 @@ async fn router_with_token() -> (Router, String) {
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth
@@ -149,6 +152,7 @@ async fn router_with_token() -> (Router, String) {
         audit,
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     (api_router(services, auth, tx, false), token)
@@ -351,6 +355,7 @@ async fn update_via_rest_is_observable_on_the_event_channel() {
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -361,6 +366,7 @@ async fn update_via_rest_is_observable_on_the_event_channel() {
         audit,
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -736,6 +742,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
@@ -745,6 +752,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
         audit,
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     api_router(services, auth, tx, allow_setup)
@@ -947,6 +955,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -959,6 +968,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
         audit: audit.clone(),
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     (api_router(services, auth, tx, allow_setup), audit)
@@ -1286,6 +1296,7 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -1325,6 +1336,7 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
         audit: audit.clone(),
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1368,6 +1380,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
     let settings = SettingsService::new(db.clone());
     let backup = BackupService::new(db_path, db.clone());
     let system_info = SystemInfoService::new(db.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(db.clone());
     let audit = AuditLogService::new(db);
 
     users
@@ -1407,6 +1420,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
         audit,
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1762,6 +1776,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -1788,6 +1803,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
         audit,
         backup,
         system_info,
+        authz,
         metrics: Some(metrics),
     };
     let router = api_router(services, auth, tx, false);
@@ -2520,6 +2536,7 @@ async fn router_with_viewer_public(
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     settings
@@ -2541,6 +2558,7 @@ async fn router_with_viewer_public(
         audit: audit.clone(),
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     (
@@ -3239,6 +3257,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
     let system_info = SystemInfoService::new(pool.clone());
+    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -3262,6 +3281,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
         audit,
         backup,
         system_info,
+        authz,
         metrics: None,
     };
     (api_router(services, auth, tx, false), users)
@@ -3566,4 +3586,236 @@ async fn role_guard_revalidates_when_require_auth_is_missing() {
         status_of(&guarded, request(&token)).await,
         StatusCode::FORBIDDEN
     );
+}
+
+// --- banto-cost P2: capability × project scope (ADR-0028) ---------------
+
+/// `router_with_role_tokens_and_audit` users: admin = 1, editor = 2, viewer = 3.
+const EDITOR_ID: i64 = 2;
+const VIEWER_ID: i64 = 3;
+
+async fn denied_entries(audit: &AuditLogService) -> Vec<crate::audit::AuditLogEntry> {
+    audit
+        .list(ListParams::default())
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter(|row| row.action == "denied")
+        .collect()
+}
+
+#[tokio::test]
+async fn t12_rest_project_members_follow_capability_and_project_scope() {
+    let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+
+    // The administrator grants the editor project.manage and makes it the
+    // manager of project 101 (both audited writes).
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/users/{EDITOR_ID}/capabilities"),
+            &admin,
+            json!({ "capabilities": ["project.manage", "amount.view"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await,
+        json!(["project.manage", "amount.view"])
+    );
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/projects/101/members/{EDITOR_ID}/manager"),
+            &admin,
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // In scope: the member list of 101.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/projects/101/members", &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await,
+        json!([{ "projectId": 101, "userId": EDITOR_ID, "kind": "manager" }])
+    );
+
+    // Out of scope: project 102, even by its direct URL.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/projects/102/members", &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // The role floor still applies: the editor cannot grant itself more.
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/users/{EDITOR_ID}/capabilities"),
+            &editor,
+            json!({ "capabilities": ["report.all"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // The administrator maintains assignments on every project.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/projects/102/members", &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let denied = denied_entries(&audit).await;
+    let scope = denied
+        .iter()
+        .find(|row| row.resource == "project_members")
+        .expect("the out-of-scope read is recorded");
+    assert_eq!(scope.actor_username.as_deref(), Some("editor"));
+    assert_eq!(scope.entity_id.as_deref(), Some("102"));
+    assert_eq!(scope.origin, "rest");
+    let detail: serde_json::Value = serde_json::from_str(scope.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        detail,
+        json!({ "operation": "view_project", "reason": "out_of_project_scope", "projectId": 102 })
+    );
+    assert!(denied.iter().any(
+        |row| row.resource == "capabilities" && row.actor_username.as_deref() == Some("editor")
+    ));
+
+    let writes: Vec<_> = audit
+        .list(ListParams::default())
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter(|row| row.result == "ok" && row.resource != "auth")
+        .map(|row| (row.action, row.resource, row.entity_id))
+        .collect();
+    assert!(writes.contains(&(
+        "update".to_string(),
+        "capabilities".to_string(),
+        Some(EDITOR_ID.to_string())
+    )));
+    assert!(writes.contains(&(
+        "create".to_string(),
+        "project_members".to_string(),
+        Some("101".to_string())
+    )));
+}
+
+#[tokio::test]
+async fn t19_t20_rest_role_without_company_grant_gets_no_business_data() {
+    let (router, audit, admin, _editor, viewer) = router_with_role_tokens_and_audit().await;
+    // The viewer is assigned to project 101 but holds no capability in this
+    // database: membership alone is not company membership.
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/projects/101/members/{VIEWER_ID}/worker"),
+            &admin,
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/projects/101/members", &viewer))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let denied = denied_entries(&audit).await;
+    assert_eq!(denied.len(), 1);
+    let detail: serde_json::Value =
+        serde_json::from_str(denied[0].detail.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["reason"], "not_company_member");
+
+    // Its own view shows no grant (the screen can explain why).
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/authz/me", &viewer))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await,
+        json!({
+            "capabilities": [],
+            "memberships": [{ "projectId": 101, "userId": VIEWER_ID, "kind": "worker" }]
+        })
+    );
+
+    // Once granted explicitly, the same request succeeds.
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/users/{VIEWER_ID}/capabilities"),
+            &admin,
+            json!({ "capabilities": ["time.entry"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/projects/101/members", &viewer))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn rest_project_member_writes_validate_and_need_admin() {
+    let (router, _audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/projects/101/members/{EDITOR_ID}/owner"),
+            &admin,
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            "/api/projects/101/members/99/worker",
+            &admin,
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/projects/101/members/{EDITOR_ID}/worker"),
+            &editor,
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(delete_auth(
+            &format!("/api/projects/101/members/{EDITOR_ID}/worker"),
+            &admin,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

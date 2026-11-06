@@ -25,6 +25,9 @@ mod keyring_store;
 
 use admin_template_core::assets::FrontendAssets;
 use admin_template_core::audit::{AuditEntry, AuditLogList, AuditLogService};
+use admin_template_core::authz::{
+    Actor, AuthzService, Capability, MemberKind, Operation, Policy, ProjectMember,
+};
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
 use admin_template_core::db::init_db;
 use admin_template_core::events::event_channel;
@@ -181,6 +184,9 @@ struct AppState {
     /// DB-only (dialect/latency/migration version/attachment size); the
     /// command folds in `app_version`/`uptime_secs`/`active_sessions`.
     system_info: SystemInfoService,
+    /// Capability × project-scope authorization (banto-cost P2, ADR-0028),
+    /// shared with the embedded server's `/api/authz/*` routes.
+    authz: AuthzService,
     /// CPU/memory probe (ADR-0013, Issue #185): `Some` when the
     /// `system-metrics` feature is on and the host platform is supported;
     /// `None` otherwise, in which case the `system_info` command reports
@@ -2040,6 +2046,7 @@ async fn start_embedded_server(
     audit: AuditLogService,
     backup: BackupService,
     system_info: SystemInfoService,
+    authz: AuthzService,
     metrics: Option<MetricsProbe>,
     auth: AuthState,
     events: broadcast::Sender<ServerEvent>,
@@ -2063,6 +2070,7 @@ async fn start_embedded_server(
         audit,
         backup,
         system_info,
+        authz,
         metrics,
     };
     // Issue #219 (`docs/design/lan-reach-check-design.md` §5.2): the one
@@ -2659,6 +2667,7 @@ async fn server_apply_body(
                 state.audit.clone(),
                 state.backup.clone(),
                 state.system_info.clone(),
+                state.authz.clone(),
                 state.metrics.clone(),
                 state.rest_auth.clone(),
                 state.events.clone(),
@@ -3185,6 +3194,209 @@ impl From<UserIdentity> for UserIdentityResult {
             role: identity.role,
         }
     }
+}
+
+// --- banto-cost P2: capability × project scope (ADR-0028) ---------------
+//
+// Tauri twins of `admin_template_core::rest::authz` (conventions §1): the
+// same `AuthzService` calls and the same `authorize_audited` guard, with
+// `origin: "tauri"`. Role floors match the REST routers (session only for
+// `authz_me` / `project_members_list`, admin for the writes).
+
+/// The caller's `users.id`, or `None` for auth-disabled mode's synthetic
+/// session (no account behind it - never a company member, spec T20).
+fn session_user_id(session: &DesktopSession) -> Option<i64> {
+    match session {
+        DesktopSession::Account(identity) => Some(identity.id),
+        DesktopSession::AuthDisabledLocal(_) => None,
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MyAuthz {
+    capabilities: Vec<Capability>,
+    memberships: Vec<ProjectMember>,
+}
+
+/// Session only: the caller's own capabilities and memberships.
+#[tauri::command]
+async fn authz_me(state: State<'_, AppState>) -> Result<MyAuthz, BantoError> {
+    authz_me_body(&state).await
+}
+
+async fn authz_me_body(state: &AppState) -> Result<MyAuthz, BantoError> {
+    require_role(state, Role::Viewer, "authz").await?;
+    let session = current_session(state)
+        .await?
+        .ok_or(BantoError::Unauthorized)?;
+    let user_id = session_user_id(&session);
+    let subject = state.authz.subject(user_id).await?;
+    let memberships = subject
+        .memberships
+        .iter()
+        .flat_map(|(project_id, kinds)| {
+            kinds.iter().map(move |kind| ProjectMember {
+                project_id: *project_id,
+                user_id: user_id.unwrap_or_default(),
+                kind: *kind,
+            })
+        })
+        .collect();
+    Ok(MyAuthz {
+        capabilities: subject.capabilities.into_iter().collect(),
+        memberships,
+    })
+}
+
+/// `admin`-only: a user's capabilities.
+#[tauri::command]
+async fn authz_capabilities_get(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Vec<Capability>, BantoError> {
+    require_role(&state, Role::Admin, "capabilities").await?;
+    state.authz.capabilities(id).await
+}
+
+/// `admin`-only: replace a user's capabilities (audited `update`).
+#[tauri::command]
+async fn authz_capabilities_set(
+    state: State<'_, AppState>,
+    id: i64,
+    capabilities: Vec<Capability>,
+) -> Result<Vec<Capability>, BantoError> {
+    authz_capabilities_set_body(&state, id, &capabilities).await
+}
+
+async fn authz_capabilities_set_body(
+    state: &AppState,
+    id: i64,
+    capabilities: &[Capability],
+) -> Result<Vec<Capability>, BantoError> {
+    let actor = require_role(state, Role::Admin, "capabilities").await?;
+    let capabilities = state.authz.set_capabilities(id, capabilities).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        "capabilities",
+        Some(&id.to_string()),
+        Some(serde_json::json!({ "capabilities": capabilities })),
+    )
+    .await;
+    Ok(capabilities)
+}
+
+/// Session plus `admin` role or `Operation::ViewProject` on the project.
+#[tauri::command]
+async fn project_members_list(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<Vec<ProjectMember>, BantoError> {
+    project_members_list_body(&state, project_id).await
+}
+
+async fn project_members_list_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<Vec<ProjectMember>, BantoError> {
+    let identity = require_role(state, Role::Viewer, "project_members").await?;
+    if !identity.role.is_admin() {
+        let session = current_session(state)
+            .await?
+            .ok_or(BantoError::Unauthorized)?;
+        state
+            .authz
+            .authorize_audited(
+                &state.audit,
+                Actor {
+                    user_id: session_user_id(&session),
+                    username: &identity.username,
+                    role: identity.role.as_str(),
+                },
+                Operation::ViewProject { project_id },
+                Policy::default(),
+                "project_members",
+                "tauri",
+            )
+            .await?;
+    }
+    state.authz.project_members(project_id).await
+}
+
+/// `admin`-only: add a project member (idempotent, audited `create`).
+#[tauri::command]
+async fn project_members_add(
+    state: State<'_, AppState>,
+    project_id: i64,
+    user_id: i64,
+    kind: MemberKind,
+) -> Result<Vec<ProjectMember>, BantoError> {
+    project_members_add_body(&state, project_id, user_id, kind).await
+}
+
+async fn project_members_add_body(
+    state: &AppState,
+    project_id: i64,
+    user_id: i64,
+    kind: MemberKind,
+) -> Result<Vec<ProjectMember>, BantoError> {
+    let actor = require_role(state, Role::Admin, "project_members").await?;
+    let member = ProjectMember {
+        project_id,
+        user_id,
+        kind,
+    };
+    state.authz.add_project_member(&member).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        "project_members",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({ "userId": user_id, "kind": kind })),
+    )
+    .await;
+    state.authz.project_members(project_id).await
+}
+
+/// `admin`-only: remove a project member (audited `delete`).
+#[tauri::command]
+async fn project_members_remove(
+    state: State<'_, AppState>,
+    project_id: i64,
+    user_id: i64,
+    kind: MemberKind,
+) -> Result<(), BantoError> {
+    project_members_remove_body(&state, project_id, user_id, kind).await
+}
+
+async fn project_members_remove_body(
+    state: &AppState,
+    project_id: i64,
+    user_id: i64,
+    kind: MemberKind,
+) -> Result<(), BantoError> {
+    let actor = require_role(state, Role::Admin, "project_members").await?;
+    state
+        .authz
+        .remove_project_member(&ProjectMember {
+            project_id,
+            user_id,
+            kind,
+        })
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "delete",
+        "project_members",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({ "userId": user_id, "kind": kind })),
+    )
+    .await;
+    Ok(())
 }
 
 /// `admin`-only (spec M10): the user-management screen's account list.
@@ -3721,6 +3933,8 @@ pub fn run() {
             // System diagnostics probe (M-review 2026-08 §2.4). Built before
             // `audit` moves `db`, same as the other services above.
             let system_info = SystemInfoService::new(db.clone());
+            // banto-cost P2 (ADR-0028).
+            let authz = AuthzService::new(db.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
             // same "share one stateful sampler" reasoning as `banto-serve`'s
             // main() - see `SystemMetricsSampler::sample`'s doc comment for
@@ -3943,6 +4157,7 @@ pub fn run() {
                     audit.clone(),
                     backup.clone(),
                     system_info.clone(),
+                    authz.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
                     events.clone(),
@@ -4010,6 +4225,7 @@ pub fn run() {
                 backup,
                 exports_dir,
                 system_info,
+                authz,
                 metrics,
                 started_at,
             });
@@ -4054,6 +4270,12 @@ pub fn run() {
             vibrancy_status,
             users_list,
             users_create,
+            authz_me,
+            authz_capabilities_get,
+            authz_capabilities_set,
+            project_members_list,
+            project_members_add,
+            project_members_remove,
             users_update,
             users_reset_password,
             users_delete,
@@ -4123,6 +4345,7 @@ mod tests {
                 pool.clone(),
             ),
             system_info: SystemInfoService::new(pool.clone()),
+            authz: AuthzService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
             metrics: None,
@@ -4180,6 +4403,7 @@ mod tests {
             audit: AuditLogService::new(pool.clone()),
             backup: BackupService::new(db_path, pool.clone()),
             system_info: SystemInfoService::new(pool.clone()),
+            authz: AuthzService::new(pool.clone()),
             metrics: None,
             exports_dir: dir.path().join("exports"),
             started_at: std::time::Instant::now(),
@@ -8642,5 +8866,95 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(reason).unwrap(), code);
         }
+    }
+
+    // --- banto-cost P2: capability × project scope (ADR-0028) -----------
+    // Tauri twin of `rest::tests::t12_rest_project_members_follow_capability_and_project_scope`
+    // and `t19_t20_rest_role_without_company_grant_gets_no_business_data`
+    // (conventions §1): same decisions, same audit shape, `origin: "tauri"`.
+
+    #[tokio::test]
+    async fn t12_tauri_project_members_follow_capability_and_project_scope() {
+        let state = admin_app_state().await;
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(&state, editor.id, &[Capability::ProjectManage])
+            .await
+            .expect("admin grants");
+        project_members_add_body(&state, 101, editor.id, MemberKind::Manager)
+            .await
+            .expect("admin assigns");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let members = project_members_list_body(&state, 101)
+            .await
+            .expect("in scope");
+        assert_eq!(
+            members,
+            vec![ProjectMember {
+                project_id: 101,
+                user_id: editor.id,
+                kind: MemberKind::Manager
+            }]
+        );
+        assert!(matches!(
+            project_members_list_body(&state, 102).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            authz_capabilities_set_body(&state, editor.id, &[Capability::ReportAll]).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        let denied: Vec<_> = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows
+            .into_iter()
+            .filter(|r| r.action == "denied")
+            .collect();
+        let scope = denied
+            .iter()
+            .find(|r| r.resource == "project_members")
+            .expect("the out-of-scope read is recorded");
+        assert_eq!(scope.origin, "tauri");
+        assert_eq!(scope.entity_id.as_deref(), Some("102"));
+        let detail: serde_json::Value =
+            serde_json::from_str(scope.detail.as_deref().expect("detail")).expect("json");
+        assert_eq!(
+            detail,
+            serde_json::json!({
+                "operation": "view_project",
+                "reason": "out_of_project_scope",
+                "projectId": 102
+            })
+        );
+        assert!(denied.iter().any(|r| r.resource == "capabilities"));
+    }
+
+    #[tokio::test]
+    async fn t19_t20_tauri_role_without_company_grant_gets_no_business_data() {
+        let state = admin_app_state().await;
+        let viewer = state
+            .users
+            .create_user("viewer", "password123", "閲覧者", Role::Viewer)
+            .await
+            .expect("create viewer");
+        project_members_add_body(&state, 101, viewer.id, MemberKind::Worker)
+            .await
+            .expect("admin assigns");
+        state.set_session_for_test(Some(DesktopSession::Account(viewer.clone())));
+        assert!(matches!(
+            project_members_list_body(&state, 101).await,
+            Err(BantoError::Forbidden)
+        ));
+        let me = authz_me_body(&state).await.expect("own view");
+        assert!(me.capabilities.is_empty());
+        assert_eq!(me.memberships.len(), 1);
     }
 }

@@ -73,6 +73,7 @@ conventions.md の各不変条件の背後にある判断は、対応する ADR 
 | [0025](0025-transparent-control-backgrounds.md)     | 入力欄と選択入力の背景は既定で透明にする                                                                                                                                                        | Accepted                   |
 | [0026](0026-shared-boolean-controls.md)             | スイッチとネイティブ checkbox のスタイルを共有する                                                                                                                                              | Accepted                   |
 | [0027](0027-grid-error-reader.md)                   | セルエラーを局所オーバーレイで読み、参照と再試行を分ける                                                                                                                                        | Accepted                   |
+| [0028](0028-capability-project-scope-authz.md)      | 業務の権限をロールとは別に能力と案件範囲で判定し、判定と拒否の監査を一つの関数に集める（banto-cost）                                                                                            | Accepted                   |
 
 ## ADR 化候補（未着手・バックフィルはしない）
 

@@ -23,4 +23,6 @@ pub mod rest;
 // other services, and `admin_template_core::users::{UsersService, Role, ...}` -
 // resolve unchanged: the services' location changed, not the REST/Tauri
 // exposure (conventions §1 両経路対称は不変).
-pub use banto_admin_services::{audit, backup, settings, system_info, system_metrics, users};
+pub use banto_admin_services::{
+    audit, authz, backup, settings, system_info, system_metrics, users,
+};

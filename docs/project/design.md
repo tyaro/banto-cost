@@ -71,6 +71,16 @@ Bantoの3ロールは全順序で、「経理は単価を見られるが利用�
 - 自己承認は判定関数で禁止する。例外設定は監査ログに残す。
 - この拡張は Banto の RBAC 規約からの逸脱になるため、派生アプリ側の ADR に記録する。
 
+### 2.4 実装（P2、2026-11-06）
+
+[ADR-0028](../adr/0028-capability-project-scope-authz.md) に判断と代替案を記録した。
+
+- 判定関数：`crates/banto-admin-services/src/authz.rs` の `authorize`。一覧・検索・CSV の絞り込みは同じ規則から作る `visible_projects` / `amount_projects`。
+- 会社データへの所属は、この DB での能力の明示付与だけで決まる。admin ロールでも能力が無ければ業務データを見られない。grant セッションと認証無効モードの合成セッションは所属を持たない（T19/T20）。
+- 判定の既定：担当種別 `worker` は案件の基本情報と自分の工数入力だけで、金額は見ない。金額は `amount.view` に加えて、`manager`・`sales` の担当か、`report.all`・`finance.close` が要る。個人別単価は `finance.rate` だけ。
+- テーブル：`user_capabilities`・`project_members`（マイグレーション `0009_authz.sql`、SQLite / Postgres）。`project_members.project_id` の外部キーは P3 の案件テーブル作成時に整える。
+- 操作：`GET /api/authz/me`、`GET・PUT /api/users/{id}/capabilities`（admin）、`GET /api/projects/{id}/members`（admin か案件範囲）、`PUT・DELETE /api/projects/{id}/members/{userId}/{kind}`（admin）。Tauri は `authz_*`・`project_members_*`。画面は P3 で作る。
+
 ## 3 データモデル案
 
 金額は円の `INTEGER`（税抜）、工数は分の `INTEGER`。確度は `0〜99` の整数パーセント（受注済みは状態で表す）。不明は `NULL` で持ち、0円・0%に置き換えない。

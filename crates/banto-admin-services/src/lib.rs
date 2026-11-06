@@ -36,6 +36,7 @@
 //! `banto-attachments` uses to avoid a backwards dependency on the app crate.
 
 pub mod audit;
+pub mod authz;
 pub mod backup;
 pub mod rbac;
 pub mod settings;
