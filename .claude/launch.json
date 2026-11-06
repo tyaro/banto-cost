@@ -1,0 +1,32 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "banto-serve",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd /d D:\\develop\\banto\\apps\\admin-template\\core && set BANTO_BIND=127.0.0.1&& set PORT=8721&& set BANTO_ALLOW_SETUP=1&& cargo run -p admin-template-core --bin banto-serve --features embed-ui"
+      ],
+      "port": 8721
+    },
+    {
+      "name": "admin-template-dev",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd /d D:\\develop\\banto\\apps\\admin-template && pnpm dev --port 5173 --strictPort"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "admin-template-preview",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd /d D:\\develop\\banto\\apps\\admin-template && pnpm preview --port 4173 --strictPort --host 127.0.0.1"
+      ],
+      "port": 4173
+    }
+  ]
+}

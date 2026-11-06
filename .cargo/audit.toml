@@ -1,0 +1,39 @@
+# cargo-audit configuration (docs/history/improvements.md §2.5).
+#
+# Every ignore below is a KNOWN advisory that cannot currently be fixed by a
+# lockfile update - each entry documents why it is acceptable and when to
+# revisit. Do NOT add entries here to silence a fixable advisory; run
+# `cargo update -p <crate>` first.
+#
+# Removed 2026-10-02 (#282): RUSTSEC-2023-0071 (rsa). `rsa` is no longer in
+# Cargo.lock at all (sqlx-mysql is only a lockfile stub, never compiled), so
+# the ignore had nothing left to suppress.
+#
+# NOT ignored on purpose (informational warnings - they do not fail
+# `cargo audit`, and an ignore here would only hide them; checked 2026-10-02,
+# #282):
+#   - glib 0.18.5 RUSTSEC-2024-0429 (unsound VariantStrIter) and
+#     proc-macro-error 1.0.4 RUSTSEC-2024-0370 (unmaintained): Linux-only,
+#     via tauri 2.12 -> gtk 0.18 / wry / webkit2gtk / muda / tao (the gtk-rs
+#     0.18 line is pinned by tauri's gtk3 stack; glib >=0.20 needs the
+#     upstream move to gtk4-rs; proc-macro-error comes in through
+#     glib-macros 0.18 / gtk3-macros 0.18). Nothing in this repo calls glib
+#     (no glib::Variant use). Revisit when tauri moves off gtk-rs 0.18.
+
+[advisories]
+ignore = [
+	# quick-xml 0.39.x: quadratic attribute-duplicate check (High 7.5) and
+	# unbounded NsReader allocation (High 7.5), both fixed in >=0.41.0.
+	# Unreachable by an attacker here: quick-xml enters the graph solely via
+	# plist <- tauri-utils/tauri-codegen, where it parses the DEVELOPER'S OWN
+	# macOS Info.plist/bundle config at build/startup - never untrusted
+	# network or user input. plist currently pins quick-xml 0.39, so a plain
+	# `cargo update -p quick-xml` cannot take 0.41 (verified 2026-07-17;
+	# re-verified 2026-10-02, #282: plist 1.9.0 - the newest release -
+	# requires quick-xml ^0.39.2, and tauri 2.12.0 / tauri-utils 2.10.1 /
+	# tauri-codegen 2.7.1 all take plist ^1).
+	# Revisit whenever `cargo update` starts offering quick-xml >=0.41
+	# (upstream plist/tauri-utils bump) - then REMOVE both entries.
+	"RUSTSEC-2026-0194",
+	"RUSTSEC-2026-0195",
+]

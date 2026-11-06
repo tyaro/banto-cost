@@ -1,0 +1,61 @@
+# Dependabot（improvement-plan-2026-07.md P4-4）。
+#
+# 主目的は P3-6 で SHA ピン留めした GitHub Actions の追従自動化。npm/cargo も
+# テンプレート利用者が継承できるベースラインとして含めるが、依存を足さない
+# 文化（conventions §3）とノイズ抑制のため minor/patch は1本にグループ化し、
+# 週次に絞る。不要ならこのファイルごと削除してよい（「すべては削除可能」方針）。
+#
+# 注: `pnpm audit`/`cargo audit`（ci.yml の audit ジョブ）は既知脆弱性の
+# ゲート。Dependabot はバージョン追従の PR 起票で、役割が別（重複しない）。
+version: 2
+updates:
+  # 1. GitHub Actions — SHA ピン留めの追従（P3-6 の相棒）。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+        update-types: [minor, patch]
+    commit-message:
+      prefix: 'ci'
+    open-pull-requests-limit: 5
+
+  # 2. npm（pnpm workspace 全体。root の devDependencies と
+  #    apps/admin-template が主対象 — packages/* は依存ゼロ設計）。
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+    commit-message:
+      prefix: 'chore(deps)'
+    open-pull-requests-limit: 5
+
+  # 3. cargo（Rust workspace。root Cargo.toml）。
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+    commit-message:
+      prefix: 'chore(deps)'
+    open-pull-requests-limit: 5
+    # password-hash 0.6+ は rand_core 0.10 世代で、採用には argon2 0.6 が要る。
+    # だが argon2 の安定版は 0.5.3 が最新で、0.6 系は RC のみ（2026-08 時点）。
+    # テンプレートの認証中核（argon2id パスワードハッシュ、spec §8.2）を
+    # プレリリース依存に載せないため、argon2 0.6 が安定版を出すまで両クレートの
+    # 0.6+ 追従を止める。解除条件: argon2 0.6.0（stable）リリース時にこの
+    # ignore を削除し、password-hash と揃えて追従する（conventions §3 / ADR-0002）。
+    ignore:
+      - dependency-name: 'password-hash'
+        versions: ['>=0.6.0']
+      - dependency-name: 'argon2'
+        versions: ['>=0.6.0']

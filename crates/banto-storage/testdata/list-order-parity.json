@@ -1,0 +1,177 @@
+{
+  "description": "Shared fixture for the list-order contract (Issue #243 review): SQL (banto-storage), the InMemory DataProvider and the grid's client sort must return these ids for these sorts. Rows are listed in insertion order (deliberately not id order). Ties are broken by the unique key `id` in the direction of the last sort key; unsorted lists are ordered by `id` ascending; NULLs sort last in both directions. A sort field that is not a column (`removed`: not in the ColumnMap, not a column of the grid, not a field of any InMemory row) is skipped before the tie-break direction is chosen.",
+  "rows": [
+    {
+      "id": 7,
+      "grp": 1,
+      "score": 2
+    },
+    {
+      "id": 3,
+      "grp": 0,
+      "score": 5
+    },
+    {
+      "id": 11,
+      "grp": 2,
+      "score": 2
+    },
+    {
+      "id": 1,
+      "grp": 1,
+      "score": 5
+    },
+    {
+      "id": 9,
+      "grp": 0,
+      "score": 5
+    },
+    {
+      "id": 5,
+      "grp": 2,
+      "score": null
+    },
+    {
+      "id": 12,
+      "grp": 0,
+      "score": 9
+    },
+    {
+      "id": 2,
+      "grp": 2,
+      "score": null
+    },
+    {
+      "id": 8,
+      "grp": 2,
+      "score": 9
+    },
+    {
+      "id": 4,
+      "grp": 1,
+      "score": 2
+    },
+    {
+      "id": 10,
+      "grp": 1,
+      "score": null
+    },
+    {
+      "id": 6,
+      "grp": 0,
+      "score": 5
+    }
+  ],
+  "cases": [
+    {
+      "sort": [],
+      "expectedIds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    },
+    {
+      "sort": [
+        {
+          "field": "grp",
+          "direction": "asc"
+        }
+      ],
+      "expectedIds": [3, 6, 9, 12, 1, 4, 7, 10, 2, 5, 8, 11]
+    },
+    {
+      "sort": [
+        {
+          "field": "grp",
+          "direction": "desc"
+        }
+      ],
+      "expectedIds": [11, 8, 5, 2, 10, 7, 4, 1, 12, 9, 6, 3]
+    },
+    {
+      "sort": [
+        {
+          "field": "score",
+          "direction": "asc"
+        }
+      ],
+      "expectedIds": [4, 7, 11, 1, 3, 6, 9, 8, 12, 2, 5, 10]
+    },
+    {
+      "sort": [
+        {
+          "field": "score",
+          "direction": "desc"
+        }
+      ],
+      "expectedIds": [12, 8, 9, 6, 3, 1, 11, 7, 4, 10, 5, 2]
+    },
+    {
+      "sort": [
+        {
+          "field": "grp",
+          "direction": "asc"
+        },
+        {
+          "field": "score",
+          "direction": "desc"
+        }
+      ],
+      "expectedIds": [12, 9, 6, 3, 1, 7, 4, 10, 8, 11, 5, 2]
+    },
+    {
+      "sort": [
+        {
+          "field": "grp",
+          "direction": "desc"
+        },
+        {
+          "field": "score",
+          "direction": "asc"
+        }
+      ],
+      "expectedIds": [11, 8, 2, 5, 4, 7, 1, 10, 3, 6, 9, 12]
+    },
+    {
+      "sort": [
+        {
+          "field": "id",
+          "direction": "desc"
+        }
+      ],
+      "expectedIds": [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+    },
+    {
+      "sort": [
+        {
+          "field": "score",
+          "direction": "desc"
+        },
+        {
+          "field": "id",
+          "direction": "asc"
+        }
+      ],
+      "expectedIds": [8, 12, 1, 3, 6, 9, 4, 7, 11, 2, 5, 10]
+    },
+    {
+      "sort": [
+        {
+          "field": "grp",
+          "direction": "asc"
+        },
+        {
+          "field": "removed",
+          "direction": "desc"
+        }
+      ],
+      "expectedIds": [3, 6, 9, 12, 1, 4, 7, 10, 2, 5, 8, 11]
+    },
+    {
+      "sort": [
+        {
+          "field": "removed",
+          "direction": "desc"
+        }
+      ],
+      "expectedIds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    }
+  ]
+}

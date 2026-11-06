@@ -1,0 +1,2169 @@
+<title>案件原価・利益管理</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link
+	rel="stylesheet"
+	href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+/>
+<style>
+	/* Layout: 左に業務ナビ、右に作業面。帳票のような罫線表と、状態を示す小さな札で読ませる */
+	:root {
+		--bg: #f3f4f2;
+		--surface: #ffffff;
+		--ink: #1d2428;
+		--muted: #5f6a70;
+		--line: #d9ddda;
+		--line-soft: #e8ebe8;
+		--accent: #1f5f73;
+		--accent-soft: #d6e7ec;
+		--accent-faint: #eef5f7;
+		--plan: #6f9fae;
+		--weighted: #c9a24a;
+		--weighted-soft: #f4ead2;
+		--bad: #b23a2e;
+		--bad-soft: #f7e1de;
+		--warn: #8a6100;
+		--warn-soft: #f6ecd2;
+		--good: #2d6b3c;
+		--good-soft: #dfeee2;
+		--font-body: 'IBM Plex Sans JP', 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif;
+		--font-num: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root:not([data-theme='light']) {
+			--bg: #14191b;
+			--surface: #1c2326;
+			--ink: #e3e8e6;
+			--muted: #9aa6aa;
+			--line: #343e42;
+			--line-soft: #283034;
+			--accent: #7fc0d3;
+			--accent-soft: #23404a;
+			--accent-faint: #1d2d33;
+			--plan: #4f8796;
+			--weighted: #d1ad5c;
+			--weighted-soft: #3a3220;
+			--bad: #f08b7e;
+			--bad-soft: #42221f;
+			--warn: #e2bd63;
+			--warn-soft: #3b321c;
+			--good: #87c995;
+			--good-soft: #1f3524;
+			color-scheme: dark;
+		}
+	}
+	:root[data-theme='dark'] {
+		--bg: #14191b;
+		--surface: #1c2326;
+		--ink: #e3e8e6;
+		--muted: #9aa6aa;
+		--line: #343e42;
+		--line-soft: #283034;
+		--accent: #7fc0d3;
+		--accent-soft: #23404a;
+		--accent-faint: #1d2d33;
+		--plan: #4f8796;
+		--weighted: #d1ad5c;
+		--weighted-soft: #3a3220;
+		--bad: #f08b7e;
+		--bad-soft: #42221f;
+		--warn: #e2bd63;
+		--warn-soft: #3b321c;
+		--good: #87c995;
+		--good-soft: #1f3524;
+		color-scheme: dark;
+	}
+	* {
+		box-sizing: border-box;
+	}
+	html,
+	body {
+		height: 100%;
+	}
+	body {
+		background: var(--bg);
+		color: var(--ink);
+		font-family: var(--font-body);
+		font-size: 14px;
+		line-height: 1.6;
+	}
+	.app {
+		display: grid;
+		grid-template-columns: 220px minmax(0, 1fr);
+		min-height: 100%;
+	}
+	nav.side {
+		background: var(--surface);
+		border-right: 1px solid var(--line);
+		padding-block: 20px;
+		padding-left: max(16px, env(safe-area-inset-left, 0px));
+		padding-right: 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 18px;
+	}
+	.brand {
+		display: grid;
+		gap: 2px;
+	}
+	.brand b {
+		font-size: 15px;
+		letter-spacing: 0.02em;
+	}
+	.brand span {
+		font-size: 11px;
+		color: var(--muted);
+	}
+	.navgroup {
+		display: grid;
+		gap: 2px;
+	}
+	.navgroup h4 {
+		margin: 0 0 4px;
+		font-size: 11px;
+		color: var(--muted);
+		font-weight: 500;
+		letter-spacing: 0.08em;
+	}
+	.navgroup a {
+		color: var(--ink);
+		text-decoration: none;
+		padding: 6px 10px;
+		border-radius: 6px;
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+	}
+	.navgroup a:hover {
+		background: var(--accent-faint);
+	}
+	.navgroup a[aria-current='page'] {
+		background: var(--accent-soft);
+		color: var(--accent);
+		font-weight: 500;
+	}
+	.navgroup a .count {
+		font-family: var(--font-num);
+		font-size: 11px;
+		background: var(--bad-soft);
+		color: var(--bad);
+		border-radius: 9px;
+		padding: 0 6px;
+	}
+	.side-foot {
+		margin-top: auto;
+		font-size: 11px;
+		color: var(--muted);
+		display: grid;
+		gap: 6px;
+	}
+	.side-foot label {
+		display: grid;
+		gap: 4px;
+	}
+	select,
+	input,
+	button,
+	textarea {
+		font: inherit;
+		color: inherit;
+	}
+	select,
+	input[type='text'],
+	input[type='number'],
+	input[type='date'] {
+		background: var(--surface);
+		border: 1px solid var(--line);
+		border-radius: 5px;
+		padding: 4px 8px;
+	}
+	input[type='number'] {
+		font-family: var(--font-num);
+		text-align: right;
+	}
+	:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
+	}
+	main {
+		min-width: 0;
+		padding-block: 22px 48px;
+		padding-left: 28px;
+		padding-right: max(16px, env(safe-area-inset-right, 0px));
+		display: grid;
+		gap: 18px;
+		align-content: start;
+	}
+	.pagehead {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		align-items: end;
+		gap: 12px;
+	}
+	.pagehead h1 {
+		margin: 0;
+		font-size: 21px;
+		font-weight: 700;
+		text-wrap: balance;
+	}
+	.pagehead p {
+		margin: 2px 0 0;
+		color: var(--muted);
+		font-size: 12.5px;
+	}
+	.basis {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+	.basis span {
+		font-size: 11.5px;
+		border: 1px solid var(--line);
+		border-radius: 4px;
+		padding: 1px 7px;
+		color: var(--muted);
+		background: var(--surface);
+	}
+	.sample-note {
+		font-size: 12px;
+		color: var(--warn);
+		background: var(--warn-soft);
+		border-radius: 6px;
+		padding: 6px 10px;
+	}
+	.panel {
+		background: var(--surface);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		padding: 16px;
+		display: grid;
+		gap: 12px;
+		min-width: 0;
+	}
+	.panel h2 {
+		margin: 0;
+		font-size: 15px;
+	}
+	.panel h2 small {
+		font-weight: 400;
+		color: var(--muted);
+		font-size: 12px;
+		margin-left: 8px;
+	}
+	.panel-head {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		align-items: center;
+		gap: 8px;
+	}
+	.figures {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+		gap: 0;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: var(--surface);
+		overflow: hidden;
+	}
+	.fig {
+		padding: 12px 16px;
+		border-right: 1px solid var(--line-soft);
+		display: grid;
+		gap: 2px;
+		align-content: start;
+	}
+	.fig:last-child {
+		border-right: 0;
+	}
+	.fig .k {
+		font-size: 11.5px;
+		color: var(--muted);
+	}
+	.fig .v {
+		font-family: var(--font-num);
+		font-size: 20px;
+		font-weight: 500;
+		font-variant-numeric: tabular-nums;
+	}
+	.fig .v.neg {
+		color: var(--bad);
+	}
+	.fig .s {
+		font-size: 11.5px;
+		color: var(--muted);
+	}
+	.tablewrap {
+		overflow-x: auto;
+	}
+	table {
+		border-collapse: collapse;
+		width: 100%;
+		font-size: 13px;
+	}
+	th,
+	td {
+		padding: 7px 10px;
+		border-bottom: 1px solid var(--line-soft);
+		text-align: left;
+		vertical-align: middle;
+		white-space: nowrap;
+	}
+	th {
+		font-weight: 500;
+		color: var(--muted);
+		font-size: 11.5px;
+		border-bottom: 1px solid var(--line);
+		background: var(--surface);
+	}
+	td.n,
+	th.n {
+		text-align: right;
+		font-family: var(--font-num);
+		font-variant-numeric: tabular-nums;
+	}
+	td.neg {
+		color: var(--bad);
+	}
+	tr.total td {
+		font-weight: 500;
+		border-top: 1px solid var(--line);
+		border-bottom: 0;
+	}
+	tr.excluded td {
+		color: var(--muted);
+	}
+	tr.clickable {
+		cursor: pointer;
+	}
+	tr.clickable:hover td {
+		background: var(--accent-faint);
+	}
+	td.wrap {
+		white-space: normal;
+		min-width: 160px;
+	}
+	.tag {
+		display: inline-block;
+		font-size: 11px;
+		line-height: 1.5;
+		padding: 0 7px;
+		border-radius: 4px;
+		margin: 1px 3px 1px 0;
+		border: 1px solid transparent;
+		white-space: nowrap;
+	}
+	.tag.bad {
+		background: var(--bad-soft);
+		color: var(--bad);
+	}
+	.tag.warn {
+		background: var(--warn-soft);
+		color: var(--warn);
+	}
+	.tag.good {
+		background: var(--good-soft);
+		color: var(--good);
+	}
+	.tag.info {
+		background: var(--accent-soft);
+		color: var(--accent);
+	}
+	.tag.plain {
+		border-color: var(--line);
+		color: var(--muted);
+	}
+	.na {
+		color: var(--muted);
+		font-family: var(--font-body);
+		font-size: 12px;
+	}
+	.btn {
+		border: 1px solid var(--line);
+		background: var(--surface);
+		border-radius: 6px;
+		padding: 5px 12px;
+		cursor: pointer;
+	}
+	.btn:hover {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.btn.primary {
+		background: var(--accent);
+		border-color: var(--accent);
+		color: var(--surface);
+	}
+	.btn.primary:hover {
+		filter: brightness(1.08);
+		color: var(--surface);
+	}
+	.btn.small {
+		padding: 2px 8px;
+		font-size: 12px;
+	}
+	.btn:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+	.row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		align-items: center;
+	}
+	.grid2 {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+		gap: 18px;
+	}
+	.note {
+		font-size: 12px;
+		color: var(--muted);
+		margin: 0;
+	}
+	.callout {
+		border-left: 3px solid var(--warn);
+		background: var(--warn-soft);
+		padding: 8px 12px;
+		border-radius: 0 6px 6px 0;
+		font-size: 12.5px;
+	}
+	.callout.info {
+		border-color: var(--accent);
+		background: var(--accent-faint);
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 14px;
+		font-size: 12px;
+		color: var(--muted);
+	}
+	.legend i {
+		display: inline-block;
+		width: 10px;
+		height: 10px;
+		border-radius: 2px;
+		margin-right: 5px;
+		vertical-align: -1px;
+	}
+	svg text {
+		fill: var(--muted);
+		font-family: var(--font-num);
+		font-size: 11px;
+	}
+	.tabs {
+		display: flex;
+		gap: 2px;
+		border-bottom: 1px solid var(--line);
+		flex-wrap: wrap;
+	}
+	.tabs button {
+		border: 0;
+		background: none;
+		padding: 7px 14px;
+		border-bottom: 2px solid transparent;
+		cursor: pointer;
+		color: var(--muted);
+	}
+	.tabs button[aria-selected='true'] {
+		color: var(--accent);
+		border-bottom-color: var(--accent);
+		font-weight: 500;
+	}
+	.toast {
+		position: fixed;
+		right: max(16px, env(safe-area-inset-right, 0px));
+		bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+		background: var(--ink);
+		color: var(--surface);
+		padding: 8px 14px;
+		border-radius: 6px;
+		font-size: 13px;
+	}
+	input.cell {
+		width: 72px;
+	}
+	input.cell.err {
+		border-color: var(--bad);
+		background: var(--bad-soft);
+	}
+	input.amt {
+		width: 120px;
+	}
+	input.pct {
+		width: 64px;
+	}
+	@media (max-width: 760px) {
+		.app {
+			grid-template-columns: 1fr;
+		}
+		nav.side {
+			border-right: 0;
+			border-bottom: 1px solid var(--line);
+			padding-right: max(16px, env(safe-area-inset-right, 0px));
+			gap: 10px;
+		}
+		.navgroups {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 4px 12px;
+		}
+		.navgroup {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 2px;
+		}
+		.navgroup h4 {
+			display: none;
+		}
+		.side-foot {
+			margin-top: 0;
+		}
+		main {
+			padding-left: max(16px, env(safe-area-inset-left, 0px));
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		* {
+			transition: none !important;
+		}
+	}
+</style>
+
+<div class="app">
+	<nav class="side" aria-label="業務メニュー">
+		<div class="brand">
+			<b>案件原価・利益管理</b><span>画面プロトタイプ（サンプルデータ）</span>
+		</div>
+		<div class="navgroups" id="nav"></div>
+		<div class="side-foot">
+			<label for="role"
+				>表示する役割
+				<select id="role">
+					<option value="manager">経営者・管理者</option>
+					<option value="sales">営業担当者</option>
+					<option value="pm">案件責任者</option>
+					<option value="finance">経理担当者</option>
+					<option value="member">入力担当者</option>
+				</select>
+			</label>
+			<span>基準日 2026-12-10・第13期（サンプル）</span>
+			<button class="btn small" id="reset" type="button">サンプルを初期状態に戻す</button>
+		</div>
+	</nav>
+	<main id="main"></main>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+	'use strict';
+	// ---------- 計算（設計書 第4章と同じ規則。金額は円の整数、工数は分の整数） ----------
+	const COST_TYPES = [
+		['labor', '労務原価'],
+		['material', '材料費'],
+		['outsource', '外注費'],
+		['travel', '旅費交通費'],
+		['other', 'その他直接費']
+	];
+	const sumObj = (o) => COST_TYPES.reduce((s, [k]) => s + (o[k] || 0), 0);
+	const laborCost = (minutes, ratePerHour) =>
+		ratePerHour == null ? null : Math.round((minutes * ratePerHour) / 60);
+	const ratio = (num, den) =>
+		den == null || den === 0 ? null : Math.round((num / den) * 1000) / 10;
+	function remainingOf(fv) {
+		const r = {};
+		for (const [k] of COST_TYPES) {
+			const l = fv.lines[k];
+			r[k] =
+				(l.committed || 0) +
+				(l.other || 0) +
+				(k === 'labor' ? laborCost(l.remMinutes || 0, fv.rate) : 0);
+		}
+		return r;
+	}
+	function forecastOf(fv) {
+		const rem = remainingOf(fv);
+		const actual = {};
+		for (const [k] of COST_TYPES) actual[k] = fv.lines[k].actual;
+		const a = sumObj(actual),
+			r = sumObj(rem);
+		return {
+			actual,
+			rem,
+			actualSum: a,
+			remSum: r,
+			total: a + r,
+			committed: COST_TYPES.reduce((s, [k]) => s + (fv.lines[k].committed || 0), 0)
+		};
+	}
+	const confirmedOrder = (p) =>
+		p.order + p.changes.filter((c) => c.status === 'approved').reduce((s, c) => s + c.delta, 0);
+	const pendingAdditions = (p) => p.changes.filter((c) => c.status === 'pending');
+	const adoptedForecast = (p) => [...p.forecasts].reverse().find((f) => f.kind === 'adopted');
+	const recognizedSum = (p) => p.recognized.reduce((s, r) => s + r.amount, 0);
+
+	function pipelineTotals(rows) {
+		const active = rows.filter((r) => ACTIVE_STAGES.includes(r.stage));
+		let total = 0,
+			weighted = 0;
+		const missingAmount = [],
+			missingProb = [];
+		for (const r of active) {
+			if (r.amount == null) {
+				missingAmount.push(r);
+				continue;
+			}
+			total += r.amount;
+			if (r.prob == null) {
+				missingProb.push(r);
+				continue;
+			}
+			weighted += Math.round((r.amount * r.prob) / 100);
+		}
+		return {
+			count: active.length,
+			total,
+			weighted,
+			missingAmount,
+			missingProb,
+			excluded: rows.length - active.length
+		};
+	}
+
+	// 月次売上見通し: 計上実績 + 受注済み売上予定 + 未受注の売上予定×確度。三つは分けて返す
+	function monthlyOutlook(st) {
+		const out = {};
+		const ensure = (m) => (out[m] ||= { rec: 0, plan: 0, weighted: 0 });
+		MONTHS.forEach(ensure);
+		ensure(UNDATED);
+		const notes = [];
+		for (const p of st.projects) {
+			for (const r of p.recognized) ensure(r.month).rec += r.amount;
+			for (const r of p.plan) ensure(r.month ?? UNDATED).plan += r.amount;
+		}
+		for (const v of st.pipeline) {
+			if (!ACTIVE_STAGES.includes(v.stage)) continue;
+			if (v.amount == null || v.prob == null) {
+				notes.push(v);
+				continue;
+			}
+			for (const r of v.revPlan)
+				ensure(r.month ?? UNDATED).weighted += Math.round((r.amount * v.prob) / 100);
+		}
+		return { out, notes };
+	}
+
+	// ---------- サンプルデータ（仕様書 第12章の数値を使用） ----------
+	const MONTHS = ['2026-11', '2026-12', '2027-01', '2027-02', '2027-03'];
+	const UNDATED = '時期未定';
+	const ACTIVE_STAGES = ['引合', '見積中', '交渉中', '内示あり'];
+	const TODAY = '2026-12-10';
+	const L = (actual, committed = 0, other = 0, remMinutes) => ({
+		actual,
+		committed,
+		other,
+		remMinutes
+	});
+
+	// ---------- 年度（6月開始・期番号表示）。第13期 = 2026年6月〜2027年5月 ----------
+	const FY_START_MONTH = 6,
+		FY_BASE = { period: 13, startYear: 2026 };
+	function fiscalPeriod(ym) {
+		const y = +ym.slice(0, 4),
+			m = +ym.slice(5, 7);
+		return FY_BASE.period + ((m >= FY_START_MONTH ? y : y - 1) - FY_BASE.startYear);
+	}
+	function periodLabel(ym) {
+		const p = fiscalPeriod(ym),
+			sy = FY_BASE.startYear + (p - FY_BASE.period);
+		return `第${p}期（${sy}年${FY_START_MONTH}月〜${sy + 1}年${FY_START_MONTH - 1}月）`;
+	}
+	const CLOSED_UNTIL = '2026-11'; // 締め済みの最終月（サンプル）
+
+	// ---------- 計算基準：会社基準（版・適用開始日）→ 案件別の上書き（項目ごと） ----------
+	const CALC_ITEMS = [
+		{
+			key: 'empRate',
+			group: '労務',
+			label: '社員 時間原価単価（標準）',
+			unit: '円/時',
+			perm: '経理',
+			project: true,
+			note: '個人別・等級別の単価を登録した場合はそちらを優先。承認時に適用値を保存'
+		},
+		{
+			key: 'fcRate',
+			group: '労務',
+			label: '見込み用単価（残工数）',
+			unit: '円/時',
+			perm: '経理・案件責任者',
+			project: true,
+			note: '完了見込の残工数を金額にする単価'
+		},
+		{
+			key: 'budgetRate',
+			group: '労務',
+			label: '予算用単価',
+			unit: '円/時',
+			perm: '経理・案件責任者',
+			project: true,
+			note: '予算の予定工数を金額にする単価'
+		},
+		{
+			key: 'outIn',
+			group: '外注',
+			label: '外注単価（社内作業）',
+			unit: '円/時',
+			perm: '経理・案件責任者',
+			project: true,
+			note: '外注先・契約ごとの単価がある場合はそちらを優先'
+		},
+		{
+			key: 'outSite',
+			group: '外注',
+			label: '外注単価（現地作業）',
+			unit: '円/時',
+			perm: '経理・案件責任者',
+			project: true,
+			note: '現地・オンジョブ作業'
+		},
+		{
+			key: 'dayHours',
+			group: '換算',
+			label: '1日の基準時間（人日換算）',
+			unit: '時間',
+			perm: '経理',
+			project: true,
+			note: '人日 × 基準時間 = 工数'
+		},
+		{
+			key: 'lodging',
+			group: '旅費',
+			label: '宿泊費の見込単価',
+			unit: '円/泊',
+			perm: '経理・案件責任者',
+			project: true,
+			note: '残見込みの概算に使用。実績は証憑の金額'
+		},
+		{
+			key: 'carKm',
+			group: '旅費',
+			label: '車両費の見込単価',
+			unit: '円/km',
+			perm: '経理・案件責任者',
+			project: true,
+			note: '燃料・高速代を含む概算'
+		},
+		{
+			key: 'taxRate',
+			group: '税・入力',
+			label: '標準消費税率',
+			unit: '%',
+			perm: '経理',
+			project: false,
+			note: '税抜額の確定は証憑単位'
+		},
+		{
+			key: 'inputUnit',
+			group: '税・入力',
+			label: '工数の入力単位',
+			unit: '分',
+			perm: '経理',
+			project: false,
+			note: ''
+		},
+		{
+			key: 'staleDays',
+			group: '注意表示',
+			label: '営業見込の確認遅れ',
+			unit: '日',
+			perm: '経理',
+			project: false,
+			note: '最終確認日からの日数'
+		},
+		{
+			key: 'lowMargin',
+			group: '注意表示',
+			label: '低利益率の閾値',
+			unit: '%',
+			perm: '経理・案件責任者',
+			project: true,
+			note: '完了見込直接利益率がこれ未満で注意表示'
+		}
+	];
+	const itemOf = (key) => CALC_ITEMS.find((i) => i.key === key);
+	function initialCalc() {
+		const base = {
+			fcRate: 5000,
+			budgetRate: 5000,
+			outIn: 3500,
+			outSite: 4500,
+			dayHours: 8,
+			lodging: 12000,
+			carKm: 30,
+			taxRate: 10,
+			inputUnit: 15,
+			staleDays: 30,
+			lowMargin: 15
+		};
+		const company = [
+			{
+				key: 'empRate',
+				from: '2025-06-01',
+				value: 4800,
+				v: 1,
+				reason: '第12期の算定',
+				by: '経理 山本'
+			},
+			{
+				key: 'empRate',
+				from: '2026-06-01',
+				value: 5000,
+				v: 2,
+				reason: '第13期の改定（賞与・社会保険料の見直し）',
+				by: '経理 山本'
+			},
+			...Object.entries(base).map(([key, value]) => ({
+				key,
+				from: '2026-06-01',
+				value,
+				v: 1,
+				reason: '第13期の初期設定',
+				by: '経理 山本'
+			}))
+		];
+		const overrides = [
+			{
+				project: 'P-2026-031',
+				key: 'lodging',
+				from: '2026-07-01',
+				value: 14000,
+				reason: '客先周辺の宿泊相場が高い',
+				by: '案件責任者 高橋'
+			},
+			{
+				project: 'P-2026-027',
+				key: 'fcRate',
+				from: '2026-12-08',
+				value: 5500,
+				reason: '残作業を上位技術者で対応',
+				by: '案件責任者 高橋'
+			},
+			{
+				project: 'P-2026-034',
+				key: 'lowMargin',
+				from: '2026-10-02',
+				value: 25,
+				reason: '戦略案件のため管理基準を厳しく設定',
+				by: '部長 中村'
+			}
+		];
+		return { company, overrides };
+	}
+	// 適用値の解決：案件の上書き（適用開始日 ≤ 対象日の最新）→ なければ会社基準の最新版。value=null の上書きは「会社基準に戻す」
+	function pickLatest(list, date) {
+		let best = null;
+		for (const x of list) if (x.from <= date && (!best || x.from >= best.from)) best = x;
+		return best;
+	}
+	function resolve(key, projectId, date = TODAY) {
+		if (projectId) {
+			const ov = pickLatest(
+				st.calc.overrides.filter((o) => o.key === key && o.project === projectId),
+				date
+			);
+			if (ov && ov.value != null)
+				return { value: ov.value, source: '案件上書き', from: ov.from, reason: ov.reason };
+		}
+		const c = pickLatest(
+			st.calc.company.filter((x) => x.key === key),
+			date
+		);
+		return c
+			? { value: c.value, source: `会社基準 v${c.v}`, from: c.from }
+			: { value: null, source: '未設定' };
+	}
+	const overriddenProjects = (key) =>
+		new Set(st.projects.filter((p) => resolve(key, p.id).source === '案件上書き').map((p) => p.id));
+
+	function initialState() {
+		return {
+			projects: [
+				{
+					id: 'P-2026-031',
+					name: 'A工場 制御盤更新・現地調整',
+					customer: '東邦化学工業',
+					manager: '高橋',
+					status: '進行中',
+					order: 4000000,
+					changes: [
+						{
+							id: 'C1',
+							delta: 300000,
+							status: 'pending',
+							basis: '追加の現地調整2日（客先依頼、見積提出済み）'
+						}
+					],
+					recognized: [],
+					plan: [{ month: '2027-02', amount: 4000000 }],
+					budgets: [
+						{
+							v: 1,
+							status: '承認',
+							reason: '当初予算',
+							by: '経理 山本',
+							on: '2026-09-12',
+							lines: {
+								labor: 1000000,
+								material: 900000,
+								outsource: 500000,
+								travel: 150000,
+								other: 50000
+							},
+							laborHours: 200
+						}
+					],
+					latestActual: {
+						labor: 850000,
+						material: 900000,
+						outsource: 350000,
+						travel: 80000,
+						other: 20000
+					},
+					forecasts: [
+						{
+							v: 1,
+							kind: 'adopted',
+							base: '2026-11-30',
+							rate: 5000,
+							by: '高橋',
+							confirmedBy: '部長 中村',
+							reason: '11月末の定例見直し',
+							lines: {
+								labor: L(700000, 0, 0, 6000),
+								material: L(800000, 200000),
+								outsource: L(300000, 200000),
+								travel: L(80000, 0, 70000),
+								other: L(20000, 0, 30000)
+							}
+						},
+						{
+							v: 2,
+							kind: 'draft',
+							base: '2026-12-09',
+							rate: 5000,
+							by: '高橋',
+							confirmedBy: null,
+							reason: '現地調整の手直し対応を追加',
+							lines: {
+								labor: L(850000, 0, 0, 5400),
+								material: L(900000, 100000),
+								outsource: L(350000, 150000),
+								travel: L(80000, 0, 70000),
+								other: L(20000, 0, 30000)
+							}
+						}
+					],
+					unapproved: { count: 0, minutes: 0 },
+					missingRate: 0
+				},
+				{
+					id: 'P-2026-034',
+					name: '第2変電所 監視ソフト',
+					customer: '北陸電設',
+					manager: '伊藤',
+					status: '進行中',
+					order: 1500000,
+					changes: [],
+					recognized: [{ month: '2026-12', amount: 500000 }],
+					plan: [{ month: '2026-12', amount: 1000000 }],
+					budgets: [
+						{
+							v: 1,
+							status: '承認',
+							reason: '当初予算',
+							by: '経理 山本',
+							on: '2026-10-02',
+							lines: {
+								labor: 700000,
+								material: 50000,
+								outsource: 200000,
+								travel: 40000,
+								other: 10000
+							}
+						}
+					],
+					latestActual: {
+						labor: 300000,
+						material: 20000,
+						outsource: 60000,
+						travel: 15000,
+						other: 5000
+					},
+					forecasts: [
+						{
+							v: 1,
+							kind: 'adopted',
+							base: '2026-11-30',
+							rate: 5000,
+							by: '伊藤',
+							confirmedBy: '部長 中村',
+							reason: '11月末の定例見直し',
+							lines: {
+								labor: L(300000, 0, 0, 4800),
+								material: L(20000, 0, 30000),
+								outsource: L(60000, 140000),
+								travel: L(15000, 0, 25000),
+								other: L(5000, 0, 5000)
+							}
+						}
+					],
+					unapproved: { count: 2, minutes: 600 },
+					missingRate: 0
+				},
+				{
+					id: 'P-2026-027',
+					name: '搬送ライン PLCソフト改修',
+					customer: '丸栄食品',
+					manager: '高橋',
+					status: '進行中',
+					order: 1800000,
+					changes: [],
+					recognized: [{ month: '2026-11', amount: 600000 }],
+					plan: [{ month: '2027-01', amount: 1200000 }],
+					budgets: [
+						{
+							v: 1,
+							status: '承認',
+							reason: '当初予算',
+							by: '経理 山本',
+							on: '2026-08-20',
+							lines: {
+								labor: 900000,
+								material: 200000,
+								outsource: 300000,
+								travel: 60000,
+								other: 40000
+							}
+						}
+					],
+					latestActual: {
+						labor: 1050000,
+						material: 180000,
+						outsource: 250000,
+						travel: 40000,
+						other: 30000
+					},
+					forecasts: [
+						{
+							v: 3,
+							kind: 'adopted',
+							base: '2026-12-08',
+							rate: 5000,
+							by: '高橋',
+							confirmedBy: '部長 中村',
+							reason: '試験で仕様差異。手直し工数を追加',
+							lines: {
+								labor: L(1050000, 0, 0, 3600),
+								material: L(180000, 0, 20000),
+								outsource: L(250000, 60000),
+								travel: L(40000, 0, 15000),
+								other: L(30000, 0, 5000)
+							}
+						}
+					],
+					unapproved: { count: 3, minutes: 750 },
+					missingRate: 1
+				},
+				{
+					id: 'P-2026-019',
+					name: '試験装置 制御盤製作',
+					customer: '東邦化学工業',
+					manager: '伊藤',
+					status: '作業完了',
+					order: 2200000,
+					changes: [],
+					recognized: [{ month: '2026-10', amount: 2200000 }],
+					plan: [],
+					budgets: [
+						{
+							v: 1,
+							status: '承認',
+							reason: '当初予算',
+							by: '経理 山本',
+							on: '2026-06-11',
+							lines: {
+								labor: 600000,
+								material: 650000,
+								outsource: 300000,
+								travel: 30000,
+								other: 20000
+							}
+						}
+					],
+					latestActual: {
+						labor: 590000,
+						material: 640000,
+						outsource: 220000,
+						travel: 50000,
+						other: 20000
+					},
+					forecasts: [
+						{
+							v: 4,
+							kind: 'adopted',
+							base: '2026-12-01',
+							rate: 5000,
+							by: '伊藤',
+							confirmedBy: '部長 中村',
+							reason: '作業完了。外注の最終請求待ち',
+							lines: {
+								labor: L(590000),
+								material: L(640000),
+								outsource: L(220000, 80000),
+								travel: L(50000),
+								other: L(20000)
+							}
+						}
+					],
+					unapproved: { count: 0, minutes: 0 },
+					missingRate: 0
+				}
+			],
+			pipeline: [
+				{
+					id: 'P-2026-040',
+					name: '排水処理設備 監視盤',
+					customer: '北陸化成',
+					sales: '小林',
+					stage: '交渉中',
+					amount: 3000000,
+					prob: 60,
+					orderMonth: '2026-11',
+					revPlan: [{ month: '2026-12', amount: 3000000 }],
+					confirmed: '2026-11-20',
+					basis: '見積v2（3,000,000円）。値引き要望なし',
+					estCost: 2100000
+				},
+				{
+					id: 'P-2026-042',
+					name: '包装機 制御ソフト更新',
+					customer: '丸栄食品',
+					sales: '小林',
+					stage: '見積中',
+					amount: 1200000,
+					prob: 30,
+					orderMonth: '2027-01',
+					revPlan: [{ month: '2027-03', amount: 1200000 }],
+					confirmed: '2026-12-02',
+					basis: '概算見積。仕様確定待ち',
+					estCost: null
+				},
+				{
+					id: 'P-2026-045',
+					name: '受入設備 増設',
+					customer: '東邦化学工業',
+					sales: '小林',
+					stage: '見積中',
+					amount: 2500000,
+					prob: null,
+					orderMonth: '2027-02',
+					revPlan: [{ month: null, amount: 2500000 }],
+					confirmed: '2026-12-05',
+					basis: '予算取り段階。確度は次回打合せで判断',
+					estCost: null
+				},
+				{
+					id: 'P-2026-047',
+					name: 'ボイラ制御 リプレース',
+					customer: '中央製紙',
+					sales: '田中',
+					stage: '引合',
+					amount: null,
+					prob: 10,
+					orderMonth: null,
+					revPlan: [],
+					confirmed: '2026-10-15',
+					basis: '引合のみ。規模未定',
+					estCost: null
+				},
+				{
+					id: 'P-2026-031+',
+					name: 'A工場 追加現地調整（P-2026-031）',
+					customer: '東邦化学工業',
+					sales: '高橋',
+					stage: '内示あり',
+					amount: 300000,
+					prob: 80,
+					orderMonth: '2026-12',
+					revPlan: [{ month: '2027-02', amount: 300000 }],
+					confirmed: '2026-12-08',
+					basis: '受注済み案件の追加見込。成立時は受注変更へ',
+					estCost: 180000,
+					addition: 'P-2026-031'
+				},
+				{
+					id: 'P-2026-038',
+					name: '倉庫自動化 第2期',
+					customer: '中央製紙',
+					sales: '田中',
+					stage: '保留',
+					amount: 5000000,
+					prob: 50,
+					orderMonth: '2027-04',
+					revPlan: [{ month: null, amount: 5000000 }],
+					confirmed: '2026-11-01',
+					basis: '客先の設備投資判断待ち',
+					estCost: null
+				},
+				{
+					id: 'P-2026-033',
+					name: '計量システム更新',
+					customer: '北陸化成',
+					sales: '田中',
+					stage: '失注',
+					amount: 900000,
+					prob: 0,
+					orderMonth: '2026-11',
+					revPlan: [],
+					confirmed: '2026-11-25',
+					basis: '価格で他社に決定',
+					estCost: null
+				}
+			],
+			pipelineHistory: [],
+			snapshot: null,
+			calc: initialCalc(),
+			time: [
+				{
+					id: 1,
+					user: '佐藤',
+					project: 'P-2026-031',
+					phase: '現地調整',
+					day: [480, 480, 0, 240, 0],
+					status: '下書き'
+				},
+				{
+					id: 2,
+					user: '佐藤',
+					project: 'P-2026-034',
+					phase: 'ソフト開発',
+					day: [0, 0, 450, 240, 0],
+					status: '下書き'
+				},
+				{
+					id: 3,
+					user: '佐藤',
+					project: '共通：社内会議',
+					phase: '—',
+					day: [60, 0, 60, 0, 0],
+					status: '下書き'
+				}
+			],
+			approvals: [
+				{
+					id: 'W-881',
+					user: '鈴木',
+					date: '2026-12-07',
+					project: 'P-2026-027',
+					phase: '試験',
+					minutes: 450,
+					rework: '仕様差異',
+					rate: 5200,
+					status: '申請'
+				},
+				{
+					id: 'W-882',
+					user: '鈴木',
+					date: '2026-12-08',
+					project: 'P-2026-027',
+					phase: '試験',
+					minutes: 300,
+					rework: '仕様差異',
+					rate: 5200,
+					status: '申請'
+				},
+				{
+					id: 'W-883',
+					user: '中川（新任）',
+					date: '2026-12-08',
+					project: 'P-2026-034',
+					phase: 'ソフト開発',
+					minutes: 480,
+					rework: null,
+					rate: null,
+					status: '申請'
+				},
+				{
+					id: 'W-884',
+					user: '佐藤',
+					date: '2026-12-09',
+					project: 'P-2026-034',
+					phase: 'ソフト開発',
+					minutes: 120,
+					rework: null,
+					rate: 4800,
+					status: '申請'
+				},
+				{
+					id: 'W-885',
+					user: '高橋',
+					date: '2026-12-09',
+					project: 'P-2026-031',
+					phase: '管理・打合せ',
+					minutes: 90,
+					rework: null,
+					rate: 6000,
+					status: '申請',
+					self: true
+				}
+			]
+		};
+	}
+	let st = initialState();
+	st.snapshot = takeSnapshot('2026-11-30 月末スナップショット');
+
+	function takeSnapshot(label) {
+		const { out } = monthlyOutlook(st);
+		return { label, data: JSON.parse(JSON.stringify(out)) };
+	}
+
+	// ---------- 表示ヘルパー ----------
+	const yen = (n) => (n == null ? '<span class="na">未設定</span>' : n.toLocaleString('ja-JP'));
+	const pct = (n) => (n == null ? '<span class="na">算出不可</span>' : n.toFixed(1) + '%');
+	const hours = (m) => (m / 60).toLocaleString('ja-JP', { maximumFractionDigits: 2 });
+	const esc = (s) =>
+		String(s).replace(
+			/[&<>"]/g,
+			(c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]
+		);
+	const signed = (n) => (n > 0 ? '+' : '') + n.toLocaleString('ja-JP');
+	const tag = (cls, t) => `<span class="tag ${cls}">${esc(t)}</span>`;
+	function toast(msg) {
+		const t = document.getElementById('toast');
+		t.textContent = msg;
+		t.hidden = false;
+		clearTimeout(toast.h);
+		toast.h = setTimeout(() => (t.hidden = true), 2600);
+	}
+	const basis = (...items) =>
+		`<div class="basis">${items.map((i) => `<span>${esc(i)}</span>`).join('')}</div>`;
+	const mlabel = (m) => (m === UNDATED ? UNDATED : `${m.slice(0, 4)}年${Number(m.slice(5))}月`);
+
+	function projectAlerts(p) {
+		const a = [];
+		const f = adoptedForecast(p);
+		const fc = forecastOf(f);
+		const order = confirmedOrder(p);
+		const budget = sumObj(p.budgets.at(-1).lines);
+		if (order - fc.total < 0) a.push(tag('bad', '完了見込赤字'));
+		else if (ratio(order - fc.total, order) < resolve('lowMargin', p.id).value)
+			a.push(tag('warn', '低利益率'));
+		if (fc.total - budget > 0) a.push(tag('warn', '予算超過見込み'));
+		if (sumObj(p.latestActual) !== fc.actualSum) a.push(tag('warn', '見込更新要'));
+		if (pendingAdditions(p).length) a.push(tag('info', '未確定追加売上'));
+		if (p.unapproved.count) a.push(tag('warn', `未承認 ${p.unapproved.count}件`));
+		if (p.missingRate) a.push(tag('bad', '原価未確定'));
+		if (p.status === '作業完了' && fc.committed > 0) a.push(tag('warn', '未精算発注残'));
+		return a;
+	}
+	function pipelineAlerts(v) {
+		const a = [];
+		if (!ACTIVE_STAGES.includes(v.stage)) return a;
+		if (v.orderMonth && v.orderMonth < TODAY.slice(0, 7)) a.push(tag('bad', '受注予定月超過'));
+		if ((Date.parse(TODAY) - Date.parse(v.confirmed)) / 864e5 > resolve('staleDays', null).value)
+			a.push(tag('warn', '確認遅れ'));
+		if (v.amount == null) a.push(tag('warn', '金額未設定'));
+		if (v.prob == null) a.push(tag('warn', '確度未設定'));
+		if (!v.orderMonth) a.push(tag('warn', '受注月未定'));
+		if (v.revPlan.some((r) => r.month == null)) a.push(tag('plain', '売上時期未定'));
+		return a;
+	}
+
+	// ---------- 画面 ----------
+	const ROLE_NAV = {
+		manager: ['outlook', 'pipeline', 'projects', 'approvals', 'settings'],
+		sales: ['pipeline', 'outlook'],
+		pm: ['projects', 'approvals', 'time'],
+		finance: ['projects', 'outlook', 'approvals', 'pipeline', 'settings'],
+		member: ['time']
+	};
+	const ROLE_LABEL = {
+		manager: '経営者',
+		sales: '営業 小林',
+		pm: '案件責任者 高橋',
+		finance: '経理 山本',
+		member: '佐藤'
+	};
+	let editingKey = null;
+	let settingsDraft = { value: '', from: '', reason: '' };
+	const VIEWS = {
+		outlook: ['営業・売上', '月次売上見通し'],
+		pipeline: ['営業・売上', '案件見込一覧'],
+		projects: ['原価・利益', '受注案件一覧'],
+		project: ['原価・利益', '案件詳細'],
+		time: ['日々の入力', '工数入力'],
+		approvals: ['日々の入力', '承認一覧'],
+		settings: ['管理設定', '計算基準']
+	};
+	let detailId = 'P-2026-031';
+	let detailTab = 'forecast';
+	function currentRole() {
+		return document.getElementById('role').value;
+	}
+	function currentView() {
+		const h = location.hash.slice(1);
+		const allowed = ROLE_NAV[currentRole()];
+		if (h.startsWith('project-')) {
+			detailId = h.slice(8);
+			return allowed.includes('projects') ? 'project' : allowed[0];
+		}
+		return allowed.includes(h) ? h : allowed[0];
+	}
+	function renderNav(view) {
+		const allowed = ROLE_NAV[currentRole()];
+		const pend = st.approvals.filter((a) => a.status === '申請').length;
+		const groups = {};
+		for (const k of ['outlook', 'pipeline', 'projects', 'time', 'approvals', 'settings']) {
+			if (!allowed.includes(k)) continue;
+			(groups[VIEWS[k][0]] ||= []).push(k);
+		}
+		document.getElementById('nav').innerHTML = Object.entries(groups)
+			.map(
+				([g, ks]) => `
+    <div class="navgroup"><h4>${g}</h4>${ks.map((k) => `<a href="#${k}" ${view === k || (view === 'project' && k === 'projects') ? 'aria-current="page"' : ''}>${VIEWS[k][1]}${k === 'approvals' && pend ? `<span class="count">${pend}</span>` : ''}</a>`).join('')}</div>`
+			)
+			.join('');
+	}
+
+	function viewPipeline() {
+		const t = pipelineTotals(st.pipeline);
+		const rows = st.pipeline
+			.map((v) => {
+				const active = ACTIVE_STAGES.includes(v.stage);
+				const editable = active && !v.converted;
+				return `<tr class="${active ? '' : 'excluded'}">
+      <td>${esc(v.id)}</td><td class="wrap">${esc(v.name)}${v.addition ? `<br><span class="note">追加見込 → ${esc(v.addition)}</span>` : ''}</td><td>${esc(v.customer)}</td><td>${esc(v.sales)}</td>
+      <td>${active ? esc(v.stage) : tag('plain', v.stage + '（集計外）')}</td>
+      <td class="n">${editable ? `<input class="amt" type="number" step="10000" min="0" data-pl="amount" data-id="${v.id}" id="pl-amt-${v.id}" value="${v.amount ?? ''}" placeholder="未設定" aria-label="${esc(v.name)} 見込受注額">` : yen(v.amount)}</td>
+      <td class="n">${editable ? `<input class="pct" type="number" step="5" min="0" max="99" data-pl="prob" data-id="${v.id}" id="pl-prob-${v.id}" value="${v.prob ?? ''}" placeholder="—" aria-label="${esc(v.name)} 受注確度">` : v.prob == null ? '<span class="na">未設定</span>' : v.prob + '%'}</td>
+      <td class="n">${v.amount != null && v.prob != null && active ? yen(Math.round((v.amount * v.prob) / 100)) : '<span class="na">—</span>'}</td>
+      <td>${v.orderMonth ? mlabel(v.orderMonth) : '<span class="na">未定</span>'}</td>
+      <td>${v.revPlan.length ? v.revPlan.map((r) => (r.month ? mlabel(r.month) : UNDATED)).join('・') : '<span class="na">未定</span>'}</td>
+      <td>${esc(v.confirmed)}</td>
+      <td>${pipelineAlerts(v).join('')}</td>
+      <td>${editable && v.amount != null && !v.addition ? `<button class="btn small" type="button" data-convert="${v.id}">受注転換</button>` : ''}</td>
+    </tr>`;
+			})
+			.join('');
+		return `
+  <div class="pagehead"><div><h1>案件見込一覧</h1><p>受注前の案件について、見込受注額・確度・受注予定月・売上予定月を確認します。確度は受注が成立する可能性で、進捗率ではありません。</p></div>
+    ${basis('税抜・円', '各案件の最新採用版', '失注・保留は集計外')}</div>
+  <div class="figures">
+    <div class="fig"><span class="k">未受注見込総額（確度を掛けない）</span><span class="v">${yen(t.total)}</span><span class="s">${t.count}件のうち金額あり ${t.count - t.missingAmount.length}件</span></div>
+    <div class="fig"><span class="k">確度加重見込額</span><span class="v">${yen(t.weighted)}</span><span class="s">参考値。入金の保証ではありません</span></div>
+    <div class="fig"><span class="k">加重計算から除外</span><span class="v">${t.missingAmount.length + t.missingProb.length}件</span><span class="s">金額未設定 ${t.missingAmount.length}件・確度未設定 ${t.missingProb.length}件</span></div>
+    <div class="fig"><span class="k">集計外（失注・保留）</span><span class="v">${t.excluded}件</span><span class="s">履歴と発生済み実績は残します</span></div>
+  </div>
+  <section class="panel">
+    <div class="panel-head"><h2>案件見込<small>金額・確度を変えると集計を再計算します。空欄は「未設定」で、0円・0%にはしません</small></h2></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>案件ID</th><th>案件名</th><th>顧客</th><th>営業</th><th>営業段階</th><th class="n">見込受注額</th><th class="n">確度</th><th class="n">確度加重</th><th>受注予定月</th><th>売上予定月</th><th>最終確認日</th><th>注意</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    ${st.pipelineHistory.length ? `<div class="callout info">${st.pipelineHistory.map(esc).join('<br>')}</div>` : ''}
+  </section>`;
+	}
+
+	function outlookChart(out) {
+		const ms = [...MONTHS, UNDATED];
+		const max = Math.max(1, ...ms.map((m) => out[m].rec + out[m].plan + out[m].weighted));
+		const step = max > 4e6 ? 1e6 : 5e5;
+		const top = Math.ceil(max / step) * step;
+		const W = 640,
+			H = 240,
+			padL = 48,
+			padB = 26,
+			padT = 10,
+			bw = 46;
+		const x = (i) => padL + 20 + i * ((W - padL - 30) / ms.length);
+		const y = (v) => padT + (H - padT - padB) * (1 - v / top);
+		let g = '';
+		for (let v = 0; v <= top; v += step)
+			g += `<line x1="${padL}" x2="${W - 6}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line-soft)"/><text x="${padL - 6}" y="${y(v) + 4}" text-anchor="end">${v / 1e6}M</text>`;
+		ms.forEach((m, i) => {
+			let base = 0;
+			for (const [k, col] of [
+				['rec', 'var(--ink)'],
+				['plan', 'var(--plan)'],
+				['weighted', 'var(--weighted)']
+			]) {
+				const v = out[m][k];
+				if (!v) continue;
+				g += `<rect x="${x(i)}" width="${bw}" y="${y(base + v)}" height="${y(base) - y(base + v)}" fill="${col}"><title>${mlabel(m)} ${k}: ${v.toLocaleString('ja-JP')}円</title></rect>`;
+				base += v;
+			}
+			g += `<text x="${x(i) + bw / 2}" y="${H - 8}" text-anchor="middle">${m === UNDATED ? '未定' : Number(m.slice(5)) + '月'}</text>`;
+		});
+		return `<div class="tablewrap"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:480px;max-width:760px" role="img" aria-label="月別の売上見通し（積み上げ）">${g}</svg></div>`;
+	}
+
+	function viewOutlook() {
+		const { out, notes } = monthlyOutlook(st);
+		const snap = st.snapshot.data;
+		const rows = [...MONTHS, UNDATED]
+			.map((m) => {
+				const o = out[m];
+				const tot = o.rec + o.plan + o.weighted;
+				const s = snap[m] || { rec: 0, plan: 0, weighted: 0 };
+				const stot = s.rec + s.plan + s.weighted;
+				const d = tot - stot;
+				return `<tr><td>${mlabel(m)}</td><td class="n">${yen(o.rec)}</td><td class="n">${yen(o.plan)}</td><td class="n">${yen(o.weighted)}</td><td class="n"><b>${yen(tot)}</b></td><td class="n">${yen(stot)}</td><td class="n ${d < 0 ? 'neg' : ''}">${d ? signed(d) : '0'}</td></tr>`;
+			})
+			.join('');
+		const dec = out['2026-12'];
+		return `
+  <div class="pagehead"><div><h1>月次売上見通し</h1><p>計上済み売上・受注済み売上予定・未受注の確度加重見込の三つを分けて表示します。確定売上や会社の会計損益ではありません。</p></div>
+    ${basis(periodLabel(TODAY.slice(0, 7)), '税抜・円', '基準日 2026-12-10', '受注予定月とは別に、売上予定月で集計')}</div>
+  <div class="figures">
+    <div class="fig"><span class="k">12月 計上済み売上</span><span class="v">${yen(dec.rec)}</span></div>
+    <div class="fig"><span class="k">12月 受注済み売上予定</span><span class="v">${yen(dec.plan)}</span></div>
+    <div class="fig"><span class="k">12月 未受注の売上見込（確度加重）</span><span class="v">${yen(dec.weighted)}</span></div>
+    <div class="fig"><span class="k">12月 売上見通し</span><span class="v">${yen(dec.rec + dec.plan + dec.weighted)}</span><span class="s">${esc(st.snapshot.label)}：${yen(snap['2026-12'].rec + snap['2026-12'].plan + snap['2026-12'].weighted)}</span></div>
+  </div>
+  <section class="panel">
+    <div class="panel-head"><h2>月別の内訳</h2>
+      <div class="legend"><span><i style="background:var(--ink)"></i>計上済み売上</span><span><i style="background:var(--plan)"></i>受注済み売上予定</span><span><i style="background:var(--weighted)"></i>未受注の確度加重見込</span></div></div>
+    ${outlookChart(out)}
+    <div class="tablewrap"><table>
+      <thead><tr><th>売上予定月</th><th class="n">計上済み売上</th><th class="n">受注済み売上予定</th><th class="n">未受注の売上見込</th><th class="n">月次売上見通し</th><th class="n">スナップショット</th><th class="n">差異</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="note">時期未定の金額は任意の月へ配分せず、独立した行に表示します。スナップショット：${esc(st.snapshot.label)}。案件の受注・失注・延期で過去の報告値は書き換えません。</p>
+    ${notes.length ? `<div class="callout">確度加重の計算から除外：${notes.map((n) => `${esc(n.name)}（${n.amount == null ? '金額未設定' : '確度未設定'}${n.amount != null ? '・' + n.amount.toLocaleString('ja-JP') + '円' : ''}）`).join('、')}</div>` : ''}
+    <div class="row"><button class="btn" type="button" id="snap">現在の見通しをスナップショット保存</button></div>
+  </section>`;
+	}
+
+	function viewProjects() {
+		let tOrder = 0,
+			tFc = 0,
+			tProfit = 0;
+		const rows = st.projects
+			.map((p) => {
+				const f = adoptedForecast(p);
+				const fc = forecastOf(f);
+				const order = confirmedOrder(p);
+				const budget = sumObj(p.budgets.at(-1).lines);
+				const profit = order - fc.total;
+				tOrder += order;
+				tFc += fc.total;
+				tProfit += profit;
+				return `<tr class="clickable" data-open="${p.id}" tabindex="0">
+      <td class="wrap"><b>${esc(p.name)}</b><br><span class="note">${esc(p.id)}・${esc(p.customer)}・責任者 ${esc(p.manager)}</span></td><td>${tag(p.status === '作業完了' ? 'plain' : 'info', p.status)}</td>
+      <td class="n">${yen(order)}</td><td class="n">${yen(budget)}</td><td class="n">${yen(sumObj(p.latestActual))}</td>
+      <td class="n">${yen(fc.total)}<br><span class="note">v${f.v}・${f.base}</span></td>
+      <td class="n ${profit < 0 ? 'neg' : ''}">${yen(profit)}</td><td class="n">${pct(ratio(profit, order))}</td>
+      <td class="wrap">${projectAlerts(p).join('')}</td></tr>`;
+			})
+			.join('');
+		return `
+  <div class="pagehead"><div><h1>受注案件一覧</h1><p>受注済み案件の予算・実績・完了見込を比べます。完了見込は各案件の最新採用版と、その基準日の実績で計算します。</p></div>
+    ${basis(periodLabel(TODAY.slice(0, 7)), '税抜・円', '共通費配賦前', '実績は承認済みのみ')}</div>
+  <section class="panel">
+    <div class="tablewrap"><table>
+      <thead><tr><th>案件</th><th>状態</th><th class="n">確定受注額</th><th class="n">承認原価予算</th><th class="n">最新実績原価</th><th class="n">完了見込原価</th><th class="n">完了見込<br>直接利益</th><th class="n">利益率</th><th>注意</th></tr></thead>
+      <tbody>${rows}
+        <tr class="total"><td colspan="2">合計（利益率は利益合計÷受注額合計）</td><td class="n">${yen(tOrder)}</td><td></td><td></td><td class="n">${yen(tFc)}</td><td class="n">${yen(tProfit)}</td><td class="n">${pct(ratio(tProfit, tOrder))}</td><td></td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">行を選ぶと案件詳細を開きます。「見込更新要」は、採用版の基準日より後に実績が増えた案件です。古い残見込みに最新実績を足して自動で増額はしません。</p>
+  </section>`;
+	}
+
+	function viewProject() {
+		const p = st.projects.find((x) => x.id === detailId) || st.projects[0];
+		const order = confirmedOrder(p);
+		const pend = pendingAdditions(p).reduce((s, c) => s + c.delta, 0);
+		const rec = recognizedSum(p);
+		const f = adoptedForecast(p);
+		const fc = forecastOf(f);
+		const latest = sumObj(p.latestActual);
+		const budget = p.budgets.at(-1);
+		const budgetSum = sumObj(budget.lines);
+		const actualProfit = rec - latest;
+		const tabBtn = (k, t) =>
+			`<button type="button" role="tab" aria-selected="${detailTab === k}" data-tab="${k}">${t}</button>`;
+		const head = `
+  <div class="pagehead"><div><p><a href="#projects">受注案件一覧</a> ／ ${esc(p.id)}</p><h1>${esc(p.name)}</h1><p>${esc(p.customer)}・責任者 ${esc(p.manager)}・${esc(p.status)}</p></div>
+    ${basis('税抜・円', '共通費配賦前', `予算 v${budget.v}`, `採用見込 v${f.v}（基準日 ${f.base}）`)}</div>
+  ${p.status !== '作業完了' ? `<div class="sample-note">途中実績：原価が先に発生し、売上は検収後に計上されます。途中の実績直接利益がマイナスでも、最終赤字を意味しません。</div>` : ''}
+  <div class="figures">
+    <div class="fig"><span class="k">確定受注額</span><span class="v">${yen(order)}</span><span class="s">${pend ? `未確定追加売上 ${pend.toLocaleString('ja-JP')}円（含めない）` : '受注変更なし'}</span></div>
+    <div class="fig"><span class="k">売上計上額</span><span class="v">${yen(rec)}</span><span class="s">未計上残 ${(order - rec).toLocaleString('ja-JP')}円</span></div>
+    <div class="fig"><span class="k">管理用実績直接利益（途中実績）</span><span class="v ${actualProfit < 0 ? 'neg' : ''}">${yen(actualProfit)}</span><span class="s">利益率 ${pct(ratio(actualProfit, rec))}</span></div>
+    <div class="fig"><span class="k">完了見込直接利益（v${f.v}）</span><span class="v ${order - fc.total < 0 ? 'neg' : ''}">${yen(order - fc.total)}</span><span class="s">利益率 ${pct(ratio(order - fc.total, order))}・予算差 ${signed(fc.total - budgetSum)}</span></div>
+  </div>
+  <div class="tabs" role="tablist">${tabBtn('forecast', '予算・実績・完了見込')}${tabBtn('revision', '完了見込の更新')}${tabBtn('sales', '売上の段階')}${tabBtn('basis', '計算基準')}${tabBtn('history', '版の履歴')}</div>`;
+		let body = '';
+		if (detailTab === 'forecast') {
+			const rows = COST_TYPES.map(([k, label]) => {
+				const orig = p.budgets[0].lines[k],
+					cur = budget.lines[k],
+					act = p.latestActual[k];
+				const tot = fc.actual[k] + fc.rem[k];
+				return `<tr><td>${label}</td><td class="n">${yen(orig)}</td><td class="n">${yen(cur)}</td><td class="n">${yen(act)}</td><td class="n">${yen(fc.actual[k])}</td><td class="n">${yen(fc.rem[k])}</td><td class="n">${yen(tot)}</td><td class="n ${tot - cur > 0 ? 'neg' : ''}">${signed(tot - cur)}</td></tr>`;
+			}).join('');
+			const stale = latest !== fc.actualSum;
+			body = `<section class="panel">
+      <div class="panel-head"><h2>費目別の比較<small>完了見込は採用版 v${f.v} の基準日 ${f.base} の実績と残見込みの組で計算</small></h2>${stale ? tag('warn', '見込更新要') : tag('good', '実績と見込の基準日が一致')}</div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>費目</th><th class="n">当初予算</th><th class="n">現在の承認予算</th><th class="n">最新実績</th><th class="n">基準日実績</th><th class="n">残原価見込み</th><th class="n">完了見込原価</th><th class="n">完了見込超過額</th></tr></thead>
+        <tbody>${rows}<tr class="total"><td>合計</td><td class="n">${yen(sumObj(p.budgets[0].lines))}</td><td class="n">${yen(budgetSum)}</td><td class="n">${yen(latest)}</td><td class="n">${yen(fc.actualSum)}</td><td class="n">${yen(fc.remSum)}</td><td class="n">${yen(fc.total)}</td><td class="n ${fc.total - budgetSum > 0 ? 'neg' : ''}">${signed(fc.total - budgetSum)}</td></tr></tbody>
+      </table></div>
+      <p class="note">残原価見込み ${fc.remSum.toLocaleString('ja-JP')}円のうち、発注済み未実績は ${fc.committed.toLocaleString('ja-JP')}円です。内数のため別途加算しません。超過額はプラスが予算超過です。</p>
+      ${stale ? `<div class="callout">基準日 ${f.base} より後に実績が ${(latest - fc.actualSum).toLocaleString('ja-JP')}円増えています。古い残見込みに足した ${(latest + fc.remSum).toLocaleString('ja-JP')}円を完了見込にはしません。「完了見込の更新」で残見込みを再見積りしてください。</div>` : ''}
+    </section>`;
+		} else if (detailTab === 'revision') {
+			const draft = p.forecasts.find((x) => x.kind === 'draft');
+			if (!draft) {
+				body = `<section class="panel"><p class="note">下書きの見込版はありません。</p><div class="row"><button class="btn primary" type="button" id="newdraft">最新実績から下書きを作成</button></div></section>`;
+			} else {
+				const rs = resolve('fcRate', p.id);
+				draft.rate = rs.value; // 下書きは現在の計算基準で再計算。採用済みの版は保存した単価のまま
+				const dc = forecastOf(draft);
+				const rows = COST_TYPES.map(([k, label]) => {
+					const l = draft.lines[k];
+					const remInput =
+						k === 'labor'
+							? `<input class="amt" type="number" step="0.25" min="0" id="fv-h" data-fv="remMinutes" data-k="${k}" value="${(l.remMinutes || 0) / 60}" aria-label="残工数（時間）"> 時間 × ${draft.rate.toLocaleString('ja-JP')}円<br><span class="note">見込み用単価：${rs.source}</span>`
+							: `<input class="amt" type="number" step="10000" min="0" id="fv-o-${k}" data-fv="other" data-k="${k}" value="${l.other || 0}" aria-label="${label} その他の見込み">`;
+					return `<tr><td>${label}</td><td class="n">${yen(l.actual)}</td>
+          <td class="n">${k === 'labor' ? '<span class="na">—</span>' : `<input class="amt" type="number" step="10000" min="0" id="fv-c-${k}" data-fv="committed" data-k="${k}" value="${l.committed || 0}" aria-label="${label} 発注済み未実績">`}</td>
+          <td class="n">${remInput}</td><td class="n">${yen(dc.rem[k])}</td><td class="n">${yen(l.actual + dc.rem[k])}</td></tr>`;
+				}).join('');
+				const prev = fc.total;
+				body = `<section class="panel">
+        <div class="panel-head"><h2>見込版 v${draft.v}（下書き）<small>基準日 ${draft.base}・更新者 ${esc(draft.by)}</small></h2>${tag('plain', '下書き')}</div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>費目</th><th class="n">基準日実績</th><th class="n">発注済み未実績</th><th class="n">それ以外に必要な見込み</th><th class="n">残原価</th><th class="n">完了見込原価</th></tr></thead>
+          <tbody>${rows}<tr class="total"><td>合計</td><td class="n">${yen(dc.actualSum)}</td><td class="n">${yen(dc.committed)}</td><td></td><td class="n">${yen(dc.remSum)}</td><td class="n">${yen(dc.total)}</td></tr></tbody>
+        </table></div>
+        <div class="figures">
+          <div class="fig"><span class="k">今回の完了見込原価</span><span class="v">${yen(dc.total)}</span><span class="s">前回 v${f.v}：${prev.toLocaleString('ja-JP')}円（${signed(dc.total - prev)}）</span></div>
+          <div class="fig"><span class="k">完了見込直接利益</span><span class="v ${order - dc.total < 0 ? 'neg' : ''}">${yen(order - dc.total)}</span><span class="s">利益率 ${pct(ratio(order - dc.total, order))}</span></div>
+          <div class="fig"><span class="k">当初予算に対する超過</span><span class="v">${signed(dc.total - sumObj(p.budgets[0].lines))}</span><span class="s">当初予算 ${sumObj(p.budgets[0].lines).toLocaleString('ja-JP')}円は変わりません</span></div>
+        </div>
+        <label for="fv-reason" class="note">更新理由</label>
+        <input type="text" id="fv-reason" data-fv-reason value="${esc(draft.reason)}">
+        <p class="note">同じ費用を「発注済み未実績」と「それ以外」の両方に入れないでください。採用しても承認予算・実績・受注額は変わりません。</p>
+        <div class="row"><button class="btn primary" type="button" id="adopt">この版を採用する</button></div>
+      </section>`;
+			}
+		} else if (detailTab === 'sales') {
+			const planSum = p.plan.reduce((s, r) => s + r.amount, 0);
+			body = `<div class="grid2"><section class="panel"><h2>売上の各段階</h2><div class="tablewrap"><table><tbody>
+      <tr><td>当初受注額</td><td class="n">${yen(p.order)}</td></tr>
+      ${p.changes.map((c) => `<tr><td>受注変更 ${c.status === 'approved' ? tag('good', '承認済み') : tag('info', '未確定追加売上')}<br><span class="note">${esc(c.basis)}</span></td><td class="n">${signed(c.delta)}</td></tr>`).join('')}
+      <tr class="total"><td>現在の確定受注額</td><td class="n">${yen(order)}</td></tr>
+      <tr><td>売上計上額（経理承認済み）</td><td class="n">${yen(rec)}</td></tr>
+      <tr><td>未計上残</td><td class="n">${yen(order - rec)}</td></tr>
+    </tbody></table></div>
+    ${pend ? `<div class="row"><button class="btn" type="button" id="approveChange">追加 ${pend.toLocaleString('ja-JP')}円の受注変更を承認（デモ）</button></div>` : ''}</section>
+    <section class="panel"><h2>売上計上予定</h2><div class="tablewrap"><table><thead><tr><th>予定月</th><th class="n">予定額</th></tr></thead><tbody>
+      ${p.plan.map((r) => `<tr><td>${r.month ? mlabel(r.month) : UNDATED}</td><td class="n">${yen(r.amount)}</td></tr>`).join('')}
+      <tr class="total"><td>合計</td><td class="n">${yen(planSum)}</td></tr></tbody></table></div>
+      ${planSum !== order - rec ? `<div class="callout">予定の合計 ${planSum.toLocaleString('ja-JP')}円が未計上残 ${(order - rec).toLocaleString('ja-JP')}円と一致しません。予定月の配分を見直してください。</div>` : tag('good', '未計上残と一致')}
+      <p class="note">見積額・請求額・入金額は売上へ合算しません。</p></section></div>`;
+		} else if (detailTab === 'basis') {
+			body = viewProjectBasis(p);
+		} else {
+			body = `<div class="grid2"><section class="panel"><h2>予算版</h2><div class="tablewrap"><table><thead><tr><th>版</th><th>状態</th><th>理由</th><th>承認</th><th class="n">原価予算</th></tr></thead><tbody>
+      ${p.budgets.map((b) => `<tr><td>v${b.v}</td><td>${tag('good', b.status)}</td><td>${esc(b.reason)}</td><td>${esc(b.by)} ${esc(b.on)}</td><td class="n">${yen(sumObj(b.lines))}</td></tr>`).join('')}
+      </tbody></table></div></section>
+      <section class="panel"><h2>完了見込版</h2><div class="tablewrap"><table><thead><tr><th>版</th><th>区分</th><th>基準日</th><th class="n">基準日実績</th><th class="n">残原価</th><th class="n">完了見込原価</th><th>理由</th></tr></thead><tbody>
+      ${p.forecasts
+				.map((x) => {
+					const c = forecastOf(x);
+					return `<tr><td>v${x.v}</td><td>${x.kind === 'adopted' ? tag('good', x === f ? '採用（最新）' : '採用（過去）') : tag('plain', '下書き')}</td><td>${x.base}</td><td class="n">${yen(c.actualSum)}</td><td class="n">${yen(c.remSum)}</td><td class="n">${yen(c.total)}</td><td class="wrap">${esc(x.reason)}${x.confirmedBy ? `<br><span class="note">確認 ${esc(x.confirmedBy)}</span>` : ''}</td></tr>`;
+				})
+				.join('')}
+      </tbody></table></div><p class="note">古い版は採用後も保持し、上書きしません。</p></section></div>`;
+		}
+		return head + body;
+	}
+
+	const fmtVal = (v, i) =>
+		v == null
+			? '<span class="na">未設定</span>'
+			: `${Number(v).toLocaleString('ja-JP')} <span class="note">${esc(i.unit)}</span>`;
+
+	function impactOf(key, from) {
+		if (!from) return ['適用開始日を入力すると影響を表示します。'];
+		const ov = overriddenProjects(key);
+		const lines = [
+			`会社基準に従う案件 ${st.projects.length - ov.size}件に適用します。この項目を上書きしている案件 ${ov.size}件は変わりません。`
+		];
+		if (['empRate', 'outIn', 'outSite', 'dayHours'].includes(key)) {
+			const un = st.approvals.filter((a) => a.status === '申請' && a.date >= from).length;
+			const ap = st.approvals.filter((a) => a.status === '承認' && a.date >= from).length;
+			lines.push(`適用開始日以降の未承認工数 ${un}件は、承認時に新しい値で計算します。`);
+			lines.push(
+				ap
+					? `承認済み工数 ${ap}件は自動では変えません。再計算訂正の候補として一覧に出し、再承認で反映します。`
+					: '適用開始日以降に承認済みの工数はありません。'
+			);
+		}
+		if (['fcRate', 'lodging', 'carKm', 'dayHours'].includes(key))
+			lines.push(
+				'下書きの見込版は新しい値で再計算します。採用済みの見込版は変えず、「見込更新要」で再見積りを促します。'
+			);
+		if (key === 'budgetRate')
+			lines.push('承認済みの予算版は変わりません。これから作る予算案に使います。');
+		if (from.slice(0, 7) <= CLOSED_UNTIL)
+			lines.push(
+				`締め済みの月（${CLOSED_UNTIL}まで）を含みます。反映するには経理による再開か翌月調整が必要です。`
+			);
+		return lines;
+	}
+
+	function viewSettings() {
+		const canEdit = currentRole() === 'finance';
+		const rows = CALC_ITEMS.map((i) => {
+			const c = resolve(i.key, null);
+			const future = st.calc.company.filter((x) => x.key === i.key && x.from > TODAY);
+			return `<tr><td>${esc(i.group)}</td><td class="wrap"><b>${esc(i.label)}</b>${i.note ? `<br><span class="note">${esc(i.note)}</span>` : ''}</td>
+      <td class="n">${fmtVal(c.value, i)}</td>
+      <td>${esc(c.source)}<br><span class="note">${c.from ?? ''} から</span>${future.map((f) => `<br>${tag('info', `予定 v${f.v}：${f.from}から ${f.value.toLocaleString('ja-JP')}`)}`).join('')}</td>
+      <td class="n">${i.project ? `${overriddenProjects(i.key).size}件` : '<span class="na">上書き不可</span>'}</td><td>${esc(i.perm)}</td>
+      <td>${canEdit ? `<button class="btn small" type="button" data-edit-item="${i.key}">変更</button>` : ''}</td></tr>`;
+		}).join('');
+		let edit = '';
+		if (editingKey && canEdit) {
+			const i = itemOf(editingKey),
+				sd = settingsDraft;
+			edit = `<section class="panel">
+      <div class="panel-head"><h2>${esc(i.label)} を変更<small>現在 ${fmtVal(resolve(i.key, null).value, i)}</small></h2></div>
+      <div class="row">
+        <label for="sd-value">新しい値</label><input class="amt" id="sd-value" type="number" min="0" data-sd="value" value="${esc(sd.value)}"><span class="note">${esc(i.unit)}</span>
+        <label for="sd-from">適用開始日</label><input id="sd-from" type="date" data-sd="from" value="${esc(sd.from)}">
+      </div>
+      <label for="sd-reason" class="note">変更理由（必須。履歴に残ります）</label>
+      <input type="text" id="sd-reason" data-sd="reason" value="${esc(sd.reason)}">
+      <div class="callout info"><b>${sd.from && sd.from < TODAY ? 'さかのぼって適用する場合' : '適用した場合'}の影響</b><br>${impactOf(i.key, sd.from).map(esc).join('<br>')}</div>
+      <div class="row"><button class="btn primary" type="button" id="set-save">新しい版として保存</button><button class="btn" type="button" id="set-cancel">取消</button></div>
+    </section>`;
+		}
+		const hist = st.calc.company
+			.slice()
+			.reverse()
+			.map((h) => {
+				const i = itemOf(h.key);
+				return `<tr><td>${esc(i.label)}</td><td>v${h.v}</td><td class="n">${fmtVal(h.value, i)}</td><td>${h.from}</td><td class="wrap">${esc(h.reason)}</td><td>${esc(h.by)}</td></tr>`;
+			})
+			.join('');
+		return `
+  <div class="pagehead"><div><h1>計算基準</h1><p>時間原価単価・外注単価・換算・注意表示の閾値などの会社基準です。変更は適用開始日つきの新しい版として保存し、過去の版は残します。案件ごとの上書きは、案件詳細の「計算基準」タブで項目ごとに設定します。</p></div>
+    ${basis(periodLabel(TODAY.slice(0, 7)), '年度は6月開始', canEdit ? '経理：変更可' : '閲覧のみ（変更は経理）')}</div>
+  <section class="panel">
+    <div class="tablewrap"><table>
+      <thead><tr><th>区分</th><th>項目</th><th class="n">現在の会社基準</th><th>版・適用開始日</th><th class="n">案件別の上書き</th><th>変更権限</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p class="note">個人別の時間原価単価は経理だけが見られる別の一覧で管理します（このプロトタイプでは省略）。</p>
+  </section>
+  ${edit}
+  <section class="panel"><h2>会社基準の変更履歴</h2><div class="tablewrap"><table>
+    <thead><tr><th>項目</th><th>版</th><th class="n">値</th><th>適用開始日</th><th>理由</th><th>登録者</th></tr></thead><tbody>${hist}</tbody></table></div></section>`;
+	}
+
+	function viewProjectBasis(p) {
+		const role = currentRole();
+		const rows = CALC_ITEMS.filter((i) => i.project)
+			.map((i) => {
+				const c = resolve(i.key, null),
+					r = resolve(i.key, p.id),
+					isOv = r.source === '案件上書き';
+				const can = role === 'finance' || (role === 'pm' && i.perm !== '経理');
+				const dis = can ? '' : 'disabled';
+				return `<tr><td class="wrap"><b>${esc(i.label)}</b><br><span class="note">変更権限：${esc(i.perm)}</span></td>
+      <td class="n">${fmtVal(c.value, i)}</td><td class="n"><b>${fmtVal(r.value, i)}</b></td>
+      <td class="wrap">${isOv ? tag('info', `案件上書き ${r.from}から`) + `<br><span class="note">${esc(r.reason)}</span>` : tag('plain', r.source)}</td>
+      <td><input class="amt" type="number" min="0" id="ov-val-${i.key}" placeholder="${c.value ?? ''}" aria-label="${esc(i.label)} の上書き値" ${dis}></td>
+      <td><input type="date" id="ov-from-${i.key}" value="${TODAY}" aria-label="${esc(i.label)} の適用開始日" ${dis}></td>
+      <td><input type="text" id="ov-reason-${i.key}" placeholder="理由（必須）" aria-label="${esc(i.label)} の変更理由" ${dis}></td>
+      <td><div class="row">${can ? `<button class="btn small" type="button" data-ov-save="${i.key}">保存</button>${isOv ? `<button class="btn small" type="button" data-ov-clear="${i.key}">会社基準に戻す</button>` : ''}` : ''}</div></td></tr>`;
+			})
+			.join('');
+		const hist = st.calc.overrides
+			.filter((o) => o.project === p.id)
+			.slice()
+			.reverse();
+		return `<section class="panel">
+    <div class="panel-head"><h2>この案件の計算基準<small>上書きしていない項目は会社基準に従います</small></h2></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>項目</th><th class="n">会社基準</th><th class="n">この案件の適用値</th><th>出典</th><th>上書き値</th><th>適用開始日</th><th>理由</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p class="note">変更は適用開始日以降の未承認工数と下書きの見込版に反映します。承認済み実績・承認済み予算・採用済みの見込版は自動では変えず、訂正や見込更新を促します。${role === 'pm' ? '「経理」権限の項目は経理だけが変更できます。' : ''}</p>
+  </section>
+  <section class="panel"><h2>上書きの履歴</h2>${
+		hist.length
+			? `<div class="tablewrap"><table>
+    <thead><tr><th>項目</th><th class="n">値</th><th>適用開始日</th><th>理由</th><th>登録者</th></tr></thead>
+    <tbody>${hist
+			.map((o) => {
+				const i = itemOf(o.key);
+				return `<tr><td>${esc(i.label)}</td><td class="n">${o.value == null ? tag('plain', '会社基準に戻す') : fmtVal(o.value, i)}</td><td>${o.from}</td><td class="wrap">${esc(o.reason)}</td><td>${esc(o.by)}</td></tr>`;
+			})
+			.join('')}</tbody></table></div>`
+			: '<p class="note">この案件の上書きはありません。</p>'
+	}</section>`;
+	}
+
+	const DAYS = ['12/7 月', '12/8 火', '12/9 水', '12/10 木', '12/11 金'];
+	function viewTime() {
+		const totals = DAYS.map((_, i) => st.time.reduce((s, r) => s + r.day[i], 0));
+		const unit = resolve('inputUnit', null).value;
+		const rows = st.time
+			.map(
+				(r) => `<tr><td>${esc(r.project)}</td><td>${esc(r.phase)}</td>
+    ${r.day.map((m, i) => `<td class="n"><input class="cell ${m % unit ? 'err' : ''}" type="number" step="0.25" min="0" max="24" id="t-${r.id}-${i}" data-t="${r.id}" data-i="${i}" value="${m ? m / 60 : ''}" ${r.status !== '下書き' && r.status !== '差戻し' ? 'disabled' : ''} aria-label="${esc(r.project)} ${DAYS[i]}"></td>`).join('')}
+    <td class="n">${hours(r.day.reduce((a, b) => a + b, 0))}</td><td>${tag(r.status === '申請' ? 'info' : r.status === '承認' ? 'good' : 'plain', r.status)}</td></tr>`
+			)
+			.join('');
+		const bad = totals.some((t) => t > 1440);
+		return `
+  <div class="pagehead"><div><h1>工数入力</h1><p>入力担当者 佐藤さんの週表示。15分単位（0.25時間）で入力し、週ごとに申請します。社内会議などは共通活動へ記録します。</p></div>
+    ${basis('2026-12-07〜12-11', '時間は分単位で保持')}</div>
+  <section class="panel">
+    <div class="tablewrap"><table>
+      <thead><tr><th>案件・共通活動</th><th>工程</th>${DAYS.map((d) => `<th class="n">${d}</th>`).join('')}<th class="n">計</th><th>状態</th></tr></thead>
+      <tbody>${rows}
+      <tr class="total"><td colspan="2">日計</td>${totals.map((t) => `<td class="n ${t > 1440 ? 'neg' : ''}">${hours(t)}${t && t !== 480 && t <= 1440 ? `<br><span class="tag warn">所定8h差</span>` : ''}</td>`).join('')}<td class="n">${hours(totals.reduce((a, b) => a + b, 0))}</td><td></td></tr>
+      </tbody></table></div>
+    ${bad ? `<div class="callout">1日の合計が24時間を超えています。申請できません。</div>` : ''}
+    <p class="note">所定時間との差は警告だけで、残業・短時間勤務の入力は拒否しません。単価・原価は入力担当者には表示しません。</p>
+    <div class="row"><button class="btn primary" type="button" id="submitWeek" ${bad || !st.time.some((r) => r.status === '下書き') ? 'disabled' : ''}>この週を申請</button></div>
+  </section>`;
+	}
+
+	function viewApprovals() {
+		const role = currentRole();
+		const showRate = role === 'finance';
+		const rows = st.approvals
+			.map((a) => {
+				const cost = laborCost(a.minutes, a.rate);
+				const canAct = a.status === '申請' && !(a.self && role === 'pm');
+				return `<tr><td>${esc(a.id)}</td><td>${esc(a.user)}</td><td>${a.date}</td><td>${esc(a.project)}</td><td>${esc(a.phase)}${a.rework ? `<br>${tag('warn', '手直し：' + a.rework)}` : ''}</td>
+      <td class="n">${hours(a.minutes)}</td>
+      ${showRate ? `<td class="n">${a.rate == null ? tag('bad', '単価未登録') : a.rate.toLocaleString('ja-JP')}</td>` : ''}
+      <td class="n">${cost == null ? tag('bad', '原価未確定') : showRate ? yen(cost) : '<span class="na">集計値で表示</span>'}</td>
+      <td>${tag(a.status === '承認' ? 'good' : a.status === '差戻し' ? 'bad' : 'info', a.status)}${a.self && role === 'pm' && a.status === '申請' ? tag('plain', '自己承認不可') : ''}</td>
+      <td class="row">${canAct ? `<button class="btn small" type="button" data-approve="${a.id}">承認</button><button class="btn small" type="button" data-return="${a.id}">差戻し</button>` : ''}</td></tr>`;
+			})
+			.join('');
+		return `
+  <div class="pagehead"><div><h1>承認一覧</h1><p>申請された工数を確認し、承認または理由をつけて差し戻します。承認時の単価と原価を保存し、後日の単価変更で過去の承認値は変わりません。</p></div>
+    ${basis(showRate ? '経理表示：個人別単価あり' : '単価は非表示（経理のみ）')}</div>
+  <section class="panel">
+    <div class="tablewrap"><table>
+      <thead><tr><th>記録</th><th>担当者</th><th>作業日</th><th>案件</th><th>工程</th><th class="n">時間</th>${showRate ? '<th class="n">適用単価</th>' : ''}<th class="n">労務原価</th><th>状態</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p class="note">単価が未登録の工数は0円で確定せず「原価未確定」とします。役割を「経理担当者」に切り替えると個人別単価が表示されます。</p>
+  </section>`;
+	}
+
+	// ---------- 描画とイベント ----------
+	function render() {
+		const view = currentView();
+		renderNav(view);
+		const fn = {
+			pipeline: viewPipeline,
+			outlook: viewOutlook,
+			projects: viewProjects,
+			project: viewProject,
+			time: viewTime,
+			approvals: viewApprovals,
+			settings: viewSettings
+		}[view];
+		document.getElementById('main').innerHTML =
+			`<p class="sample-note">サンプルデータによる画面プロトタイプです。保存・認証・権限制御はありません。数値は仕様書0.3 第12章の計算例に合わせています。</p>` +
+			fn();
+	}
+	window.addEventListener('hashchange', render);
+	document.getElementById('role').addEventListener('change', () => {
+		location.hash = '';
+		render();
+	});
+	document.getElementById('reset').addEventListener('click', () => {
+		st = initialState();
+		st.snapshot = takeSnapshot('2026-11-30 月末スナップショット');
+		render();
+		toast('サンプルを初期状態に戻しました');
+	});
+
+	const main = document.getElementById('main');
+	main.addEventListener('change', (e) => {
+		const t = e.target;
+		if (t.dataset.pl) {
+			const v = st.pipeline.find((x) => x.id === t.dataset.id);
+			const val = t.value === '' ? null : Math.max(0, Number(t.value));
+			if (t.dataset.pl === 'prob') v.prob = val == null ? null : Math.min(99, val);
+			else {
+				v.amount = val;
+				v.revPlan =
+					v.revPlan.length === 1 ? [{ month: v.revPlan[0].month, amount: val ?? 0 }] : v.revPlan;
+			}
+			v.confirmed = TODAY;
+			st.pipelineHistory.push(
+				`${TODAY} ${v.name}：${t.dataset.pl === 'prob' ? '確度' : '見込受注額'}を ${val == null ? '未設定' : val.toLocaleString('ja-JP')} に変更（理由入力は実装時に必須）`
+			);
+			render();
+		} else if (t.dataset.t) {
+			const r = st.time.find((x) => x.id === Number(t.dataset.t));
+			r.day[Number(t.dataset.i)] = Math.round(Math.max(0, Number(t.value || 0)) * 60);
+			render();
+		} else if (t.dataset.fv) {
+			const p = st.projects.find((x) => x.id === detailId);
+			const d = p.forecasts.find((x) => x.kind === 'draft');
+			const n = Math.max(0, Number(t.value || 0));
+			d.lines[t.dataset.k][t.dataset.fv] =
+				t.dataset.fv === 'remMinutes' ? Math.round(n * 60) : Math.round(n);
+			render();
+		} else if (t.dataset.sd === 'from') {
+			settingsDraft = {
+				value: document.getElementById('sd-value').value,
+				from: t.value,
+				reason: document.getElementById('sd-reason').value
+			};
+			render();
+		} else if (t.dataset.fvReason !== undefined) {
+			st.projects.find((x) => x.id === detailId).forecasts.find((x) => x.kind === 'draft').reason =
+				t.value;
+		}
+	});
+	main.addEventListener('click', (e) => {
+		const b = e.target.closest('button, tr[data-open]');
+		if (!b) return;
+		if (b.dataset.open) {
+			location.hash = 'project-' + b.dataset.open;
+			detailTab = 'forecast';
+			return;
+		}
+		if (b.dataset.tab) {
+			detailTab = b.dataset.tab;
+			render();
+			return;
+		}
+		if (b.dataset.convert) {
+			const v = st.pipeline.find((x) => x.id === b.dataset.convert);
+			const amount = v.id === 'P-2026-040' ? 2800000 : v.amount;
+			v.stage = '受注済み';
+			v.converted = true;
+			st.projects.push({
+				id: v.id,
+				name: v.name,
+				customer: v.customer,
+				manager: v.sales,
+				status: '受注',
+				order: amount,
+				changes: [],
+				recognized: [],
+				plan: v.revPlan.map((r) => ({
+					month: r.month,
+					amount: Math.round((r.amount * amount) / v.amount)
+				})),
+				budgets: [
+					{
+						v: 1,
+						status: '承認',
+						reason: '受注時の原価概算を当初予算に採用（デモ）',
+						by: '経理 山本',
+						on: TODAY,
+						lines: {
+							labor: Math.round((v.estCost || 0) * 0.5),
+							material: Math.round((v.estCost || 0) * 0.3),
+							outsource: Math.round((v.estCost || 0) * 0.2),
+							travel: 0,
+							other: 0
+						}
+					}
+				],
+				latestActual: { labor: 0, material: 0, outsource: 0, travel: 0, other: 0 },
+				forecasts: [
+					{
+						v: 1,
+						kind: 'adopted',
+						base: TODAY,
+						rate: 5000,
+						by: v.sales,
+						confirmedBy: '部長 中村',
+						reason: '受注時の初回見込',
+						lines: {
+							labor: L(0, 0, Math.round((v.estCost || 0) * 0.5)),
+							material: L(0, 0, Math.round((v.estCost || 0) * 0.3)),
+							outsource: L(0, 0, Math.round((v.estCost || 0) * 0.2)),
+							travel: L(0),
+							other: L(0)
+						}
+					}
+				],
+				unapproved: { count: 0, minutes: 0 },
+				missingRate: 0
+			});
+			st.pipelineHistory.push(
+				`${TODAY} ${v.name}：${amount.toLocaleString('ja-JP')}円で受注転換。未受注見込から除外し、確定受注側に一度だけ計上（売上は自動計上しません）`
+			);
+			render();
+			toast('受注転換しました。月次売上見通しで12月の変化を確認できます');
+			return;
+		}
+		if (b.dataset.editItem) {
+			editingKey = b.dataset.editItem;
+			settingsDraft = {
+				value: String(resolve(editingKey, null).value ?? ''),
+				from: TODAY,
+				reason: ''
+			};
+			render();
+			document.getElementById('sd-value')?.focus();
+			return;
+		}
+		if (b.id === 'set-cancel') {
+			editingKey = null;
+			render();
+			return;
+		}
+		if (b.id === 'set-save') {
+			const raw = document.getElementById('sd-value').value,
+				from = document.getElementById('sd-from').value,
+				reason = document.getElementById('sd-reason').value.trim();
+			const val = raw === '' ? NaN : Number(raw);
+			if (!Number.isFinite(val) || val < 0) return toast('新しい値を0以上の数値で入力してください');
+			if (!from) return toast('適用開始日を入力してください');
+			if (!reason) return toast('変更理由を入力してください');
+			const v =
+				Math.max(0, ...st.calc.company.filter((c) => c.key === editingKey).map((c) => c.v)) + 1;
+			st.calc.company.push({
+				key: editingKey,
+				from,
+				value: val,
+				v,
+				reason,
+				by: ROLE_LABEL[currentRole()]
+			});
+			const label = itemOf(editingKey).label;
+			editingKey = null;
+			render();
+			toast(`${label} を v${v}（${from}から）として保存しました`);
+			return;
+		}
+		if (b.dataset.ovSave || b.dataset.ovClear) {
+			const key = b.dataset.ovSave || b.dataset.ovClear,
+				item = itemOf(key);
+			const from = document.getElementById('ov-from-' + key).value,
+				reason = document.getElementById('ov-reason-' + key).value.trim();
+			let value = null;
+			if (b.dataset.ovSave) {
+				const raw = document.getElementById('ov-val-' + key).value;
+				if (raw === '') return toast('上書きする値を入力してください');
+				value = Number(raw);
+				if (!(value >= 0)) return toast('0以上の数値を入力してください');
+			}
+			if (!from) return toast('適用開始日を入力してください');
+			if (!reason) return toast('理由を入力してください');
+			st.calc.overrides.push({
+				project: detailId,
+				key,
+				from,
+				value,
+				reason,
+				by: ROLE_LABEL[currentRole()]
+			});
+			render();
+			toast(
+				value == null
+					? `${item.label} を会社基準に戻しました`
+					: `${item.label} をこの案件だけ ${value.toLocaleString('ja-JP')} ${item.unit} に変更しました`
+			);
+			return;
+		}
+		if (b.id === 'snap') {
+			st.snapshot = takeSnapshot(`${TODAY} 保存のスナップショット`);
+			render();
+			toast('スナップショットを保存しました');
+			return;
+		}
+		if (b.id === 'adopt') {
+			const p = st.projects.find((x) => x.id === detailId);
+			const d = p.forecasts.find((x) => x.kind === 'draft');
+			d.kind = 'adopted';
+			d.confirmedBy = '部長 中村';
+			detailTab = 'forecast';
+			render();
+			toast(`見込版 v${d.v} を採用しました`);
+			return;
+		}
+		if (b.id === 'newdraft') {
+			const p = st.projects.find((x) => x.id === detailId);
+			const f = adoptedForecast(p);
+			const lines = {};
+			for (const [k] of COST_TYPES) lines[k] = { ...f.lines[k], actual: p.latestActual[k] };
+			p.forecasts.push({
+				v: Math.max(...p.forecasts.map((x) => x.v)) + 1,
+				kind: 'draft',
+				base: TODAY,
+				rate: f.rate,
+				by: p.manager,
+				confirmedBy: null,
+				reason: '',
+				lines
+			});
+			render();
+			toast('最新実績を基準日実績にした下書きを作成しました。残見込みを再見積りしてください');
+			return;
+		}
+		if (b.id === 'approveChange') {
+			const p = st.projects.find((x) => x.id === detailId);
+			for (const c of p.changes)
+				if (c.status === 'pending') {
+					c.status = 'approved';
+					p.plan.push({ month: '2027-02', amount: c.delta });
+				}
+			const add = st.pipeline.find((x) => x.addition === p.id);
+			if (add) {
+				add.stage = '受注済み';
+				add.converted = true;
+			}
+			render();
+			toast('受注変更を承認しました。追加見込は未受注側から外れます');
+			return;
+		}
+		if (b.id === 'submitWeek') {
+			st.time.forEach((r) => {
+				if (r.status === '下書き') r.status = '申請';
+			});
+			render();
+			toast('申請しました');
+			return;
+		}
+		if (b.dataset.approve || b.dataset.return) {
+			const a = st.approvals.find((x) => x.id === (b.dataset.approve || b.dataset.return));
+			a.status = b.dataset.approve ? '承認' : '差戻し';
+			render();
+			toast(
+				b.dataset.approve
+					? a.rate == null
+						? '承認しました。単価が未登録のため原価未確定のままです'
+						: '承認しました。適用単価と原価を保存しました'
+					: '差し戻しました（理由入力は実装時に必須）'
+			);
+		}
+	});
+	main.addEventListener('keydown', (e) => {
+		if (e.key === 'Enter' && e.target.dataset?.open) e.target.click();
+	});
+	render();
+</script>

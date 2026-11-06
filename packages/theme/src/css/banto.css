@@ -1,0 +1,648 @@
+/*
+ * Banto theme — CSS variable layer (spec §9).
+ * Components read only these variables; apps override them freely.
+ * The resolved theme is set as data-theme="light" | "dark" on <html>
+ * by applyTheme() from @banto/theme.
+ *
+ * M12 preset axis: banto-glass.css (imported below - @import must precede
+ * all other rules) overrides the surface/backdrop/bg-image variables under
+ * [data-banto-preset="glass"]; with the default preset (standard) it is
+ * completely inert, so importing it unconditionally costs nothing.
+ */
+@import './banto-glass.css';
+
+:root {
+	/* Surfaces */
+	--banto-bg: #f6f7f9;
+	--banto-surface: #ffffff;
+	--banto-surface-raised: #ffffff;
+	--banto-border: #d9dde3;
+
+	/* Preset axis (spec M12). Standard preset: no blur, no page bg image;
+     shell components wire `backdrop-filter: var(--banto-backdrop, none)` /
+     `background-image: var(--banto-bg-image)` so glass is a pure variable
+     swap and standard stays a no-op. */
+	--banto-backdrop: none;
+	--banto-accent-gradient: linear-gradient(135deg, var(--banto-primary), #7c3aed);
+	--banto-bg-image: none;
+
+	/* Text */
+	--banto-text: #1a1d21;
+	--banto-text-muted: #5c6470;
+	--banto-text-inverse: #ffffff;
+
+	/* Brand / state */
+	--banto-primary: #2563eb;
+	--banto-primary-hover: #1d4ed8;
+	--banto-danger: #dc2626;
+	--banto-warning: #d97706;
+	--banto-success: #16a34a;
+
+	/* Focus */
+	--banto-focus-ring: 0 0 0 2px color-mix(in srgb, var(--banto-primary) 45%, transparent);
+
+	/* Layout */
+	--banto-radius: var(
+		--banto-radius-md
+	); /* visual-refresh-design.md §2.2: alias, value unchanged (6px) */
+	--banto-shell-sidebar-width: 240px;
+	--banto-shell-sidebar-width-collapsed: 56px;
+	--banto-shell-header-height: 48px;
+	/* Kiosk shell (display-preset-plan.md D1-b): a shorter header for
+     permanently-mounted dashboards. Opt-in via Header.svelte's
+     `class:compact` - the plain height above is unaffected. */
+	--banto-shell-header-height-compact: 40px;
+	/* Launcher (nav-launcher-plan.md §5.2; @banto/ui LauncherBar). The shell
+     namespace, not --banto-dock-* (that is @banto/dock-svelte, §2.4).
+     magnify-max is unitless - LauncherBar reads it from JS (unreadable = no
+     magnification). reserve is the room the shell keeps below the content. */
+	--banto-shell-launcher-item-size: 44px;
+	--banto-shell-launcher-magnify-max: 1.5;
+	--banto-shell-launcher-gap: 6px;
+	--banto-shell-launcher-padding: 6px;
+	--banto-shell-launcher-offset: 10px;
+	--banto-shell-launcher-reserve: calc(
+		var(--banto-shell-launcher-item-size) + var(--banto-shell-launcher-padding) * 2 +
+			var(--banto-shell-launcher-offset)
+	);
+	/* <=900px the bar is a full-width tab bar (§4.6): a 44px item, its
+     caption and padding (0.5rem covers the caption overhang) plus the home
+     indicator inset. */
+	--banto-shell-launcher-tabbar-reserve: calc(
+		var(--banto-shell-launcher-item-size) + 0.5rem + env(safe-area-inset-bottom, 0px)
+	);
+	/* Translucent bar and tooltip with a blur behind them (owner request and
+     owner-tuned values on #423, nav-launcher-plan.md D7).
+     Opaque again under prefers-reduced-transparency / no backdrop-filter
+     (fallbacks below, same rule as the glass preset). */
+	/* The bar's opacity alone is its own token so an app's setting (a slider,
+     nav-launcher-plan.md D7) can change just this one value. */
+	--banto-shell-launcher-opacity: 50%;
+	/* The <=900px tab bar's floor for the opacity above (see the media rule below). */
+	--banto-shell-launcher-tabbar-opacity-min: 85%;
+	/* The tab bar's base colour must be OPAQUE for that floor to hold: the glass
+     preset's surfaces are already translucent, so banto-glass.css pins this
+     to opaque values (#428 review). */
+	--banto-shell-launcher-tabbar-base: var(--banto-surface-overlay);
+	--banto-shell-launcher-bg: color-mix(
+		in srgb,
+		var(--banto-surface-overlay) var(--banto-shell-launcher-opacity),
+		transparent
+	);
+	--banto-shell-launcher-tooltip-bg: color-mix(
+		in srgb,
+		var(--banto-surface-raised) 80%,
+		transparent
+	);
+	--banto-shell-launcher-backdrop: blur(1px) saturate(1.5);
+	--banto-shell-launcher-tooltip-backdrop: blur(5px);
+	/* Left / right bars (D4, PR-4): the tooltip sits beside the item and may
+     wrap past this width; the bar's scrolling track keeps this much (+ the
+     gap) free on the page side so it is not clipped. */
+	--banto-shell-launcher-tooltip-max-width: 10rem;
+	/* Top bar (D4): the room above it. 0 = the screen edge; a shell with a
+     header on top sets it to the header's height (admin-template's
+     routes/(app)/+layout.svelte) so the bar sits below the header. */
+	--banto-shell-launcher-inset-top: 0px;
+
+	/* Grid (consumed by @banto/grid-svelte from M1) */
+	--banto-grid-row-height: 36px;
+	--banto-grid-header-height: 40px;
+
+	/* Charts (consumed by @banto/charts from M4, spec §6). Categorical series
+     take slots 1..8 in fixed order by series index - never cycle/reassign. */
+	--banto-chart-1: #2a78d6;
+	--banto-chart-2: #1baf7a;
+	--banto-chart-3: #eda100;
+	--banto-chart-4: #008300;
+	--banto-chart-5: #4a3aa7;
+	--banto-chart-6: #e34948;
+	--banto-chart-7: #e87ba4;
+	--banto-chart-8: #eb6834;
+	--banto-chart-grid: #e1e0d9;
+	--banto-chart-axis: #c3c2b7;
+
+	/* Dock (consumed by @banto/dock-svelte). M7 shipped floating pseudo-windows
+     only; M8 Phase B adds the docked-tree chrome (splits/tabs/snap-guide/drag
+     ghost) below, reusing --banto-dock-titlebar-height for both the floating
+     titlebar and the docked pane titlebar/tab-strip height. */
+	--banto-dock-titlebar-height: 32px;
+	--banto-dock-shadow: var(
+		--banto-shadow-lg
+	); /* visual-refresh-design.md §2.2: alias, value unchanged */
+	--banto-dock-divider: var(--banto-border);
+	--banto-dock-divider-hover: var(--banto-primary);
+	--banto-dock-snap-fill: color-mix(in srgb, var(--banto-primary) 18%, transparent);
+	--banto-dock-snap-border: var(--banto-primary);
+	--banto-dock-tab-active-bg: var(--banto-surface);
+	--banto-dock-ghost-bg: var(--banto-surface-raised);
+	--banto-dock-ghost-border: var(--banto-primary);
+
+	/* Typography */
+	--banto-font-family:
+		system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+	--banto-font-size: 14px;
+
+	/* Dimension scales (theme-dimension-tokens.md §5.2; visual-refresh-plan.md
+     付録A.4・A.5). All rem, so they follow the root size above (1rem =
+     --banto-font-size, 14px by default). Not switched by the density axis
+     yet (D3). Component shapes (widths, heights, column widths, icon sizes)
+     are not part of these scales (D7). */
+	/* Spacing scale (theme-dimension-tokens.md §5.2). Ordinal names: the value is not part of the name. */
+	--banto-space-1: 0.25rem; /* 3.5px */
+	--banto-space-2: 0.5rem; /* 7px    — 最多（73） */
+	--banto-space-3: 0.75rem; /* 10.5px */
+	--banto-space-4: 1rem; /* 14px */
+	--banto-space-5: 1.25rem; /* 17.5px */
+	--banto-space-6: 1.5rem; /* 21px */
+	--banto-space-7: 2rem; /* 28px */
+	--banto-space-8: 3rem; /* 42px — 空状態など */
+
+	/* Type scale (付録 A.5 の役割). Body = 1rem (root), inherited: there is no
+     body token. Note md is one step SMALLER than body (a secondary size), not
+     the body size (D4). */
+	--banto-font-size-xs: 0.7rem; /* 9.8px  バッジ・極小ラベル */
+	--banto-font-size-sm: 0.8rem; /* 11.2px caption（最多 51） */
+	--banto-font-size-md: 0.875rem; /* 12.25px 補足・表の副情報（A.5 caption 12px） */
+	--banto-font-size-lg: 1.125rem; /* 15.75px heading（A.5 16px） */
+	--banto-font-size-xl: 1.75rem; /* 24.5px display（A.5 24–28px） */
+
+	/* Border widths */
+	--banto-border-width: 1px;
+	--banto-border-width-strong: 2px; /* 選択・強調の縁 */
+
+	/* Surface hierarchy (visual-refresh-plan.md 付録A.1) */
+	--banto-surface-subtle: #f1f3f6;
+	--banto-surface-hover: #eef1f5;
+	--banto-surface-overlay: var(--banto-surface);
+	--banto-border-strong: #848b96;
+
+	/* State colors: text/solid/tint 3-系統 (visual-refresh-plan.md 付録A.3).
+     Existing --banto-primary etc. stay the "text" default; these add the
+     solid (button fill) and tint (soft panel) pairs. */
+	--banto-primary-solid: #2563eb;
+	--banto-primary-solid-hover: #1d4ed8;
+	--banto-on-solid: #ffffff;
+	--banto-danger-solid: #dc2626;
+	--banto-danger-solid-hover: #b91c1c;
+	--banto-success-solid: #15803d;
+	--banto-danger-tint: #fee2e2;
+	--banto-danger-tint-text: #991b1b;
+	--banto-success-tint: #dcfce7;
+	--banto-success-tint-text: #166534;
+	--banto-warning-tint: #fef3c7;
+	--banto-warning-tint-text: #92400e;
+
+	/* Shape and shadow (visual-refresh-plan.md 付録A.4) */
+	--banto-radius-sm: 4px;
+	--banto-radius-md: 6px;
+	--banto-radius-lg: 10px;
+	--banto-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+	--banto-shadow-md: 0 2px 8px rgb(0 0 0 / 0.1);
+	--banto-shadow-lg: 0 8px 24px rgb(0 0 0 / 0.18);
+
+	/* Overlay scrim and stacking layers (ADR-0018 §8, phase 2a). The scrim is
+     the dimming layer behind modal-like overlays (CommandPalette, later
+     Modal/Drawer); one value for light, dark and glass (no override below).
+     The z-index tokens name the layers apps used to hard-code - values are
+     unchanged, so stacking order is too. */
+	--banto-scrim: rgb(0 0 0 / 0.35);
+	--banto-z-header: 100;
+	/* Launcher bar (nav-launcher-plan.md §4.1): above the header, below the
+     sidebar scrim, modals, the palette and toasts. */
+	--banto-z-launcher: 200;
+	--banto-z-sidebar-scrim: 850;
+	--banto-z-sidebar: 900;
+	--banto-z-modal: 900;
+	--banto-z-overlay: 1000;
+	--banto-z-toast: 1000;
+
+	/* Control dimensions (visual-refresh-plan.md 付録A.4; overridden by the
+     density axis, see [data-banto-density='compact'] below). */
+	--banto-control-height: 36px;
+	--banto-control-height-sm: 28px;
+	--banto-control-height-lg: 40px;
+	--banto-checkbox-size: 1.1rem;
+	--banto-switch-width: 36px;
+	--banto-switch-height: 20px;
+	--banto-switch-inset: 2px;
+
+	/* Motion (visual-refresh-plan.md 付録A.6) */
+	--banto-duration-fast: 120ms;
+	--banto-duration-base: 160ms;
+	--banto-duration-slow: 240ms;
+	--banto-ease-out: cubic-bezier(0.2, 0, 0, 1);
+	--banto-ease-spring: linear(0, 0.35 12%, 0.8 24%, 1.04 40%, 0.99 65%, 1);
+}
+
+[data-theme='dark'] {
+	--banto-bg: #15171b;
+	--banto-surface: #1e2127;
+	--banto-surface-raised: #262a31;
+	--banto-border: #363b44;
+
+	--banto-text: #e8eaed;
+	--banto-text-muted: #9aa3af;
+	--banto-text-inverse: #1a1d21;
+
+	--banto-primary: #3b82f6;
+	--banto-primary-hover: #60a5fa;
+	--banto-danger: #ef4444;
+	--banto-warning: #f59e0b;
+	--banto-success: #22c55e;
+
+	--banto-chart-1: #3987e5;
+	--banto-chart-2: #199e70;
+	--banto-chart-3: #c98500;
+	--banto-chart-4: #008300;
+	--banto-chart-5: #9085e9;
+	--banto-chart-6: #e66767;
+	--banto-chart-7: #d55181;
+	--banto-chart-8: #d95926;
+	--banto-chart-grid: #2c2c2a;
+	--banto-chart-axis: #383835;
+
+	--banto-dock-snap-fill: color-mix(in srgb, var(--banto-primary) 28%, transparent);
+
+	/* Surface hierarchy (visual-refresh-plan.md 付録A.1, dark column) */
+	--banto-surface-subtle: #23262d;
+	--banto-surface-hover: #2a2f37;
+	--banto-surface-overlay: var(--banto-surface-raised);
+	--banto-border-strong: #6b7480;
+
+	/* State colors (visual-refresh-plan.md 付録A.3, dark column). Danger/success
+     solid keep the light values (--banto-danger-solid #dc2626, --banto-success-solid
+     #15803d stay unset here on purpose) - only primary solid and the tint pairs differ. */
+	--banto-primary-solid: #3b82f6;
+	/* Hover must LIGHTEN here: --banto-on-solid resolves to the dark
+     --banto-text-inverse, so inheriting the light theme's darker hover
+     (#1d4ed8) would drop the label below readable contrast mid-hover. */
+	--banto-primary-solid-hover: #60a5fa;
+	--banto-on-solid: var(--banto-text-inverse);
+	--banto-danger-tint: color-mix(in srgb, #f87171 18%, transparent);
+	--banto-danger-tint-text: #f87171;
+	--banto-success-tint: color-mix(in srgb, #4ade80 18%, transparent);
+	--banto-success-tint-text: #4ade80;
+	--banto-warning-tint: color-mix(in srgb, #fbbf24 18%, transparent);
+	--banto-warning-tint-text: #fbbf24;
+
+	/* Shape and shadow (visual-refresh-plan.md 付録A.4, dark column) */
+	--banto-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.12);
+	--banto-shadow-md: 0 2px 8px rgb(0 0 0 / 0.2);
+	--banto-shadow-lg: 0 8px 24px rgb(0 0 0 / 0.6); /* unifies with the former --banto-dock-shadow literal (§2.2) */
+}
+
+/* Density axis (visual-refresh-design.md §4.1), orthogonal to theme/preset.
+   data-banto-density is applied to <html> by applyDensity() from @banto/theme. */
+[data-banto-density='compact'] {
+	--banto-control-height: 32px;
+	--banto-control-height-lg: 36px;
+	--banto-grid-row-height: 32px;
+	--banto-grid-header-height: 36px;
+}
+
+/* <=900px the launcher is a full-width tab bar (nav-launcher-plan.md §4.6)
+   whose small captions sit over the page: never fainter than this floor, so
+   they stay legible whatever the opacity setting (owner decision on v6.8.0).
+   Before the fallbacks below, so reduced transparency still turns it opaque. */
+@media (max-width: 900px) {
+	:root {
+		--banto-shell-launcher-bg: color-mix(
+			in srgb,
+			var(--banto-shell-launcher-tabbar-base)
+				max(var(--banto-shell-launcher-opacity), var(--banto-shell-launcher-tabbar-opacity-min)),
+			transparent
+		);
+	}
+}
+
+/* Launcher translucency fallbacks (see --banto-shell-launcher-bg above). */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+	:root {
+		--banto-shell-launcher-bg: var(--banto-surface-overlay);
+		--banto-shell-launcher-tooltip-bg: var(--banto-surface-raised);
+		--banto-shell-launcher-backdrop: none;
+		--banto-shell-launcher-tooltip-backdrop: none;
+	}
+}
+
+@media (prefers-reduced-transparency: reduce) {
+	:root {
+		--banto-shell-launcher-bg: var(--banto-surface-overlay);
+		--banto-shell-launcher-tooltip-bg: var(--banto-surface-raised);
+		--banto-shell-launcher-backdrop: none;
+		--banto-shell-launcher-tooltip-backdrop: none;
+	}
+}
+
+/* Toasts clear of the launcher (nav-launcher-plan.md §4.1). ToastHost is a
+   sibling of the app shell, so the shell marks the root while the dock is
+   shown (routes/(app)/+layout.svelte) instead of setting a variable on
+   itself: `data-banto-shell-nav="launcher"` plus the bar's side in
+   `data-banto-shell-launcher-position` (bottom / top / left / right, D4).
+   1rem is ToastHost's own gap. The stack sits bottom-right: above a bottom
+   bar, left of a right bar, where it always was for a top or left bar. */
+:root[data-banto-shell-nav='launcher'] {
+	--banto-toast-bottom: calc(var(--banto-shell-launcher-reserve) + 1rem);
+}
+
+:root[data-banto-shell-nav='launcher'][data-banto-shell-launcher-position='top'],
+:root[data-banto-shell-nav='launcher'][data-banto-shell-launcher-position='left'],
+:root[data-banto-shell-nav='launcher'][data-banto-shell-launcher-position='right'] {
+	--banto-toast-bottom: 1rem;
+}
+
+:root[data-banto-shell-nav='launcher'][data-banto-shell-launcher-position='right'] {
+	--banto-toast-right: calc(var(--banto-shell-launcher-reserve) + 1rem);
+}
+
+/* <=900px every position is the bottom tab bar (§4.6, D5). */
+@media (max-width: 900px) {
+	:root[data-banto-shell-nav='launcher'],
+	:root[data-banto-shell-nav='launcher'][data-banto-shell-launcher-position] {
+		--banto-toast-bottom: calc(var(--banto-shell-launcher-tabbar-reserve) + 1rem);
+	}
+
+	:root[data-banto-shell-nav='launcher'][data-banto-shell-launcher-position='right'] {
+		--banto-toast-right: 1rem;
+	}
+}
+
+/* visual-refresh-design.md §2.3: components must read duration only via these
+   tokens so reduced-motion is disabled in one place. */
+@media (prefers-reduced-motion: reduce) {
+	:root {
+		--banto-duration-fast: 0ms;
+		--banto-duration-base: 0ms;
+		--banto-duration-slow: 0ms;
+	}
+}
+
+html {
+	background: var(--banto-bg);
+	color: var(--banto-text);
+	font-family: var(--banto-font-family);
+	font-size: var(--banto-font-size);
+	color-scheme: light;
+}
+
+html[data-theme='dark'] {
+	color-scheme: dark;
+}
+
+/* Opt-in native controls (ADR-0023). These classes include their foundations:
+   neither app.css nor a framework reset is required. */
+.banto-field {
+	position: relative;
+	display: block;
+	min-width: 0;
+	font-size: var(--banto-font-size-sm);
+	color: var(--banto-text-muted);
+}
+
+.banto-field > .banto-field-control {
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	min-height: calc(var(--banto-control-height-lg) + var(--banto-space-2));
+	height: auto;
+	padding: var(--banto-space-7) var(--banto-space-3) var(--banto-space-1);
+	border: none;
+	border-bottom: var(--banto-border-width-strong) solid var(--banto-border-strong);
+	border-radius: var(--banto-radius-sm) var(--banto-radius-sm) 0 0;
+	background: transparent;
+	color: var(--banto-text);
+	font: inherit;
+	transition: border-color var(--banto-duration-fast) var(--banto-ease-out);
+}
+
+.banto-field > .banto-field-control:hover:not(:disabled) {
+	border-bottom-color: var(--banto-primary-hover);
+}
+
+.banto-field > .banto-field-control:focus-visible {
+	border-bottom-color: var(--banto-primary-hover);
+	outline: var(--banto-border-width-strong) solid currentColor;
+	outline-offset: var(--banto-border-width);
+	box-shadow: none;
+}
+
+.banto-field > .banto-field-control:disabled {
+	border-bottom-style: dashed;
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.banto-field > .banto-field-control[aria-invalid='true'] {
+	border-bottom-color: var(--banto-danger);
+}
+
+.banto-field > .banto-field-label {
+	position: absolute;
+	inset-block-start: 50%;
+	inset-inline-start: var(--banto-space-3);
+	max-width: calc(100% - 2 * var(--banto-space-3));
+	transform: translateY(-50%);
+	color: var(--banto-text-muted);
+	font-size: var(--banto-font-size);
+	pointer-events: none;
+	overflow-wrap: anywhere;
+	transition:
+		inset-block-start var(--banto-duration-fast) var(--banto-ease-out),
+		transform var(--banto-duration-fast) var(--banto-ease-out),
+		font-size var(--banto-duration-fast) var(--banto-ease-out);
+}
+
+.banto-field > input.banto-field-control:focus + .banto-field-label,
+.banto-field > input.banto-field-control:not(:placeholder-shown) + .banto-field-label,
+.banto-field > select.banto-field-control + .banto-field-label {
+	inset-block-start: var(--banto-space-1);
+	transform: none;
+	font-size: var(--banto-font-size-md);
+}
+
+/* Reserve the full label height for long translations, narrow fields, or zoom.
+   The same native-control → label DOM contract is retained. */
+.banto-field.banto-field--stacked {
+	display: flex;
+	flex-direction: column;
+	gap: var(--banto-space-1);
+}
+
+.banto-field--stacked > .banto-field-control {
+	min-height: var(--banto-control-height-lg);
+	padding: var(--banto-space-2) var(--banto-space-3);
+}
+
+/* Multiline and native date controls use the stacked label contract. */
+.banto-field--stacked > input.banto-field-control[type='date'] {
+	/* Native date segments also need space for their own internal padding. */
+	padding-inline: var(--banto-space-1);
+}
+
+.banto-field--stacked > textarea.banto-field-control {
+	resize: vertical;
+}
+
+.banto-field.banto-field--stacked > .banto-field-label {
+	position: static;
+	order: -1;
+	max-width: 100%;
+	transform: none;
+	font-size: var(--banto-font-size-md);
+}
+
+/* Opt-in boolean switches (ADR-0026). State and labels stay native. */
+.banto-switch-field {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	gap: var(--banto-space-2);
+	min-height: var(--banto-control-height-lg);
+	font-size: var(--banto-font-size-md);
+	overflow-wrap: anywhere;
+	cursor: pointer;
+}
+
+.banto-switch-field:has(> input:disabled) {
+	cursor: not-allowed;
+	color: var(--banto-text-muted);
+}
+
+input.banto-switch[type='checkbox'][role='switch'] {
+	box-sizing: border-box;
+	position: relative;
+	display: inline-flex;
+	flex-shrink: 0;
+	width: var(--banto-switch-width);
+	height: var(--banto-switch-height);
+	margin: 0;
+	appearance: none;
+	border: none;
+	border-radius: 999px;
+	background: var(--banto-border-strong);
+	cursor: pointer;
+	transition: background var(--banto-duration-fast) var(--banto-ease-out);
+}
+
+input.banto-switch[type='checkbox'][role='switch']::before {
+	content: '';
+	position: absolute;
+	inset-block-start: var(--banto-switch-inset);
+	inset-inline-start: var(--banto-switch-inset);
+	width: calc(var(--banto-switch-height) - 2 * var(--banto-switch-inset));
+	height: calc(var(--banto-switch-height) - 2 * var(--banto-switch-inset));
+	border-radius: 50%;
+	background: var(--banto-surface);
+	transition: transform var(--banto-duration-fast) var(--banto-ease-out);
+}
+
+input.banto-switch[type='checkbox'][role='switch']:checked {
+	background: var(--banto-primary-solid);
+}
+
+input.banto-switch[type='checkbox'][role='switch']:checked::before {
+	transform: translateX(calc(var(--banto-switch-width) - var(--banto-switch-height)));
+}
+
+input.banto-switch[type='checkbox'][role='switch']:dir(rtl):checked::before {
+	transform: translateX(calc(var(--banto-switch-height) - var(--banto-switch-width)));
+}
+
+input.banto-switch[type='checkbox'][role='switch']:focus-visible {
+	outline: var(--banto-border-width-strong) solid var(--banto-primary);
+	outline-offset: var(--banto-border-width);
+	box-shadow: var(--banto-focus-ring);
+}
+
+input.banto-switch[type='checkbox'][role='switch']:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+@media (forced-colors: active) {
+	input.banto-switch[type='checkbox'][role='switch'] {
+		/* Preserve the track and thumb when the UA removes author fills.
+		   The checked state also moves the thumb; focus keeps its own outline. */
+		forced-color-adjust: none;
+		background: ButtonText;
+	}
+
+	input.banto-switch[type='checkbox'][role='switch']::before {
+		background: ButtonFace;
+	}
+
+	input.banto-switch[type='checkbox'][role='switch']:checked {
+		background: Highlight;
+	}
+
+	input.banto-switch[type='checkbox'][role='switch']:checked::before {
+		background: HighlightText;
+	}
+
+	input.banto-switch[type='checkbox'][role='switch']:disabled {
+		background: GrayText;
+		opacity: 1;
+	}
+
+	input.banto-switch[type='checkbox'][role='switch']:disabled::before {
+		background: ButtonFace;
+	}
+
+	input.banto-switch[type='checkbox'][role='switch']:focus-visible {
+		outline-color: Highlight;
+		box-shadow: none;
+	}
+}
+
+/* Page links, not ARIA tabs. Routing and visibility belong to the consumer. */
+.banto-section-nav {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--banto-space-1) var(--banto-space-2);
+	border-bottom: var(--banto-border-width) solid var(--banto-border);
+}
+
+.banto-section-nav > a[href] {
+	box-sizing: border-box;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--banto-control-height-lg);
+	max-width: 100%;
+	padding: var(--banto-space-2) var(--banto-space-3);
+	border-bottom: var(--banto-border-width-strong) solid transparent;
+	color: var(--banto-text-muted);
+	font-size: var(--banto-font-size-md);
+	font-weight: 600;
+	text-decoration: none;
+	overflow-wrap: anywhere;
+	transition:
+		background var(--banto-duration-fast) var(--banto-ease-out),
+		color var(--banto-duration-fast) var(--banto-ease-out);
+}
+
+.banto-section-nav > a[href]:hover {
+	background: var(--banto-surface-hover);
+	color: var(--banto-text);
+}
+
+.banto-section-nav > a[href]:focus-visible {
+	outline: var(--banto-border-width-strong) solid currentColor;
+	outline-offset: calc(-1 * var(--banto-border-width-strong));
+}
+
+.banto-section-nav > a[href][aria-current='page'] {
+	color: var(--banto-primary-hover);
+	border-bottom-color: currentColor;
+}
+
+@media (forced-colors: active) {
+	/* Transparent borders become visible in forced colors. Keep only the
+	   current link's underline, compensating for the removed border's space. */
+	.banto-section-nav > a[href]:not([aria-current='page']) {
+		border-bottom-style: none;
+		padding-bottom: calc(var(--banto-space-2) + var(--banto-border-width-strong));
+	}
+}

@@ -1,0 +1,178 @@
+# Tauri compile check (improvement-plan-2026-07.md P3-2).
+#
+# Scope: `cargo check` + `cargo clippy` + `cargo test` (`-p admin-template`)
+# (apps/admin-template/src-tauri) on ubuntu + windows. The main CI (ci.yml)
+# deliberately excludes this crate to keep every-PR pipelines fast and
+# system-dependency-free, which left Tauri command signatures / feature wiring
+# / capability config verified only by code review, and the crate's authz/audit
+# tests unrun anywhere. This workflow closes that gap WITHOUT re-burdening
+# every PR:
+#
+# - `pull_request` + `push`(main) run it only when Tauri-side code or the
+#   dependency graph actually changes (paths filter below).
+# - `schedule` (weekly) catches environment drift (new Rust stable, runner
+#   image updates, upstream tauri point releases) even when the repo itself
+#   is idle - and files/refreshes a tracking issue on failure so a red
+#   scheduled run is noticed without anyone watching the Actions tab.
+# - `workflow_dispatch` allows manual runs.
+#
+# `cargo check` + `cargo test` (no `tauri build`): compiling the crate catches
+# signature/wiring drift and running its tests verifies the authz/audit
+# behavior; bundling/installers belong to a future release workflow.
+#
+# Third-party actions are pinned to commit SHAs (see ci.yml's top-of-file
+# policy comment for the rationale and the dtolnay/rust-toolchain@stable
+# exception); Dependabot (.github/dependabot.yml) keeps them current.
+name: Tauri check
+
+on:
+  schedule:
+    # Weekly, Sunday 18:00 UTC = Monday 03:00 JST.
+    - cron: '0 18 * * 0'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/admin-template/src-tauri/**'
+      - 'apps/admin-template/core/**'
+      - 'apps/admin-template/elev/**'
+      - 'scripts/build-fw-elev.mjs'
+      - 'scripts/build-fw-elev.test.mjs'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/tauri-check.yml'
+  pull_request:
+    paths:
+      - 'apps/admin-template/src-tauri/**'
+      - 'apps/admin-template/core/**'
+      - 'apps/admin-template/elev/**'
+      - 'scripts/build-fw-elev.mjs'
+      - 'scripts/build-fw-elev.test.mjs'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/tauri-check.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: tauri-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Debug info = line tables only (CI only; the root Cargo.toml is untouched, so
+# local debugging is unaffected). dev/test profiles emit full debug info by
+# default (a PDB on Windows), which makes linking and the rust-cache save/restore
+# slow (measured on Windows: Cargo test 121s, cache save 36s). Panic backtrace
+# line numbers are kept. test inherits dev. Note: Swatinem/rust-cache keys on
+# env vars starting with `CARGO_`, so the cache misses once after this change.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  check:
+    name: cargo check + test -p admin-template
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Tauri v2 Linux prerequisites (https://tauri.app/start/prerequisites/).
+      # Windows needs nothing extra for `cargo check`: the WebView2 SDK comes
+      # in through the webview2-com crate, not a system package.
+      - name: Install Tauri system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Cargo check
+        run: cargo check -p admin-template --all-targets
+
+      # ci.yml's clippy step excludes this crate (native deps), so lint it
+      # here where the system deps are already installed (#346).
+      - name: Clippy
+        run: cargo clippy -p admin-template --all-targets -- -D warnings
+
+      # `--all-targets` above already compiles the test binaries; running them
+      # is what actually exercises every Tauri command handler's authz/audit
+      # tests (conventions §1 "両経路対称" — rule 8 checks presence only, so the
+      # levels/records being identical is guaranteed by these tests, not the
+      # architecture verifier). Extra cost here is just the run time.
+      - name: Cargo test
+        run: cargo test -p admin-template
+
+      # #219 段階 2（ADR-0021、E4）: Windows のインストーラは helper を Tauri の externalBin
+      # として本体 exe の隣に同梱する（`pnpm --filter admin-template tauri:build:windows` =
+      # `tauri build --features embed-ui --config src-tauri/tauri.fw-elev.conf.json`）。tauri build はしないが、
+      # その beforeBuildCommand が呼ぶ build-fw-elev.mjs が helper を externalBin の場所へ
+      # 置けることと、その設定を重ねた tauri-build（externalBin の解決）が通ることを確かめる。
+      # TAURI_ENV_DEBUG=true は上の check と同じ dev プロファイルで helper を作るため。
+      - name: Bundle the fw-elev helper as externalBin (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        env:
+          TAURI_ENV_DEBUG: 'true'
+        run: |
+          node --test scripts/build-fw-elev.test.mjs
+          node scripts/build-fw-elev.mjs
+          TAURI_CONFIG="$(cat apps/admin-template/src-tauri/tauri.fw-elev.conf.json)"             cargo check -p admin-template
+
+  # A failed scheduled run has no PR to turn red and nobody staring at the
+  # Actions tab, so surface it as a tracking issue (deduplicated by label:
+  # comment on the existing open issue instead of filing a duplicate).
+  report-scheduled-failure:
+    name: File tracking issue on scheduled failure
+    needs: check
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Create or refresh tracking issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const label = 'tauri-check-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              ...context.repo,
+              state: 'open',
+              labels: label
+            });
+            const body =
+              `週次の Tauri compile check（\`cargo check -p admin-template\`）が失敗しました。\n\n` +
+              `- 失敗した run: ${runUrl}\n` +
+              `- ワークフロー: \`.github/workflows/tauri-check.yml\`（improvement-plan-2026-07.md P3-2）\n\n` +
+              `リポジトリ側の変更なしで赤になった場合は環境ドリフト` +
+              `（Rust stable 更新・ランナーイメージ更新・tauri のポイントリリース等）が疑わしい。`;
+            if (open.length > 0) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: open[0].number,
+                body: `再発: ${runUrl}`
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo,
+                title: '週次 Tauri check が失敗しています',
+                labels: [label],
+                body
+              });
+            }

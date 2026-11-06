@@ -1,0 +1,8 @@
+// ADR-0021 decision 7: the resource script that embeds the
+// `requireAdministrator` manifest into `admin-template-fw-elev.exe` only
+// (build.rs links it to that `[[bin]]` with `embed_resource::compile_for`).
+//
+// `1 24 "..."` is CREATEPROCESS_MANIFEST_RESOURCE_ID = 1, RT_MANIFEST = 24
+// (the minimal form that needs no windows.h).
+
+1 24 "admin-template-fw-elev.manifest"

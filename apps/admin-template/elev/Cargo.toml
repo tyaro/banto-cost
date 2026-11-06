@@ -1,0 +1,57 @@
+[package]
+name = "admin-template-fw-elev"
+description = "admin-template's UAC-elevated firewall helper (admin-template-fw-elev.exe): adds/removes the one program rule of Issue #219 stage 2 (ADR-0021)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# ADR-0021 decision 7: the pure functions (argument parsing, rule ownership,
+# placement judgement, PowerShell scripts and their output) and the procedure
+# (`run`, over traits) live in the lib and are tested on every OS. The lib is
+# also what the main app uses for the pre-elevation placement check (E2,
+# decision 8). The bin only hands its arguments to the lib.
+[lib]
+name = "admin_template_fw_elev"
+path = "src/lib.rs"
+
+# `test = false`: the bin carries the `requireAdministrator` manifest
+# (build.rs), so a test binary built from it could not start without
+# elevation (os error 740). Every test lives in the lib.
+[[bin]]
+name = "admin-template-fw-elev"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+# Reads the fixed JSON the query script prints (`powershell::parse_query_output`).
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# ADR-0021 decision 14 (conventions §3 "足す側の例外"): the version already in
+# Cargo.lock (0.61.2), so no new crate enters the build. Features, by use:
+# - Win32_Foundation: HANDLE / CloseHandle / LocalFree
+# - Win32_Security(+_Authorization): GetSecurityInfo / GetAce / ConvertSidToStringSidW
+# - Win32_Storage_FileSystem: CreateFileW / GetFinalPathNameByHandleW /
+#   GetFileInformationByHandle (check through the handle, decision 8)
+# - Win32_System_Com + Win32_UI_Shell: SHGetKnownFolderPath / CoTaskMemFree
+#   (Program Files from KNOWNFOLDERID, not the environment)
+# - Win32_System_LibraryLoader: SetDefaultDllDirectories (main)
+# - Win32_System_SystemInformation: GetSystemDirectoryW / GetSystemWindowsDirectoryW
+#   (powershell.exe by absolute path, decision 9)
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Shell",
+] }
+
+[build-dependencies]
+# Embeds the `requireAdministrator` manifest into the bin only (build.rs,
+# ADR-0021 decisions 7 and 14; the 3.0.11 already in Cargo.lock).
+embed-resource = { workspace = true }

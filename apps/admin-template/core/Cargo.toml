@@ -1,0 +1,73 @@
+[package]
+name = "admin-template-core"
+description = "admin-template domain/service layer (spec §10): shared by Tauri commands now, REST in M6"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["system-metrics"]
+# CPU/memory metrics (ADR-0013, Issue #185): forwards to
+# `banto-admin-services`'s own opt-in feature of the same name. ON by
+# default HERE (unlike that crate's own default-off) because the template
+# app layer is the "wiring sample" the ADR designates - a feature nothing in
+# the template ever enables would be dead code in the one place adopters
+# read to see how it is wired. To remove `sysinfo` from a derived app,
+# drop this feature from `default` here AND in
+# `apps/admin-template/src-tauri/Cargo.toml` (docs/recipes/remove-optional-assets.md
+# 「システムメトリクス（`sysinfo`）を外す」) - the System Info card's CPU/
+# memory rows disappear automatically since `metrics` becomes `null`.
+system-metrics = ["banto-admin-services/system-metrics"]
+# Embeds the SvelteKit static build (`apps/admin-template/build`, gitignored)
+# into the binary via rust-embed. Off by default so the workspace builds on
+# a fresh clone without requiring `pnpm --filter admin-template build` to
+# have been run first (spec §11.1).
+embed-ui = ["dep:rust-embed"]
+# PostgreSQL backend (V2 "PostgreSQL アプリ全体対応", PR2). Off by default so
+# ordinary (and CI-default) builds stay SQLite-only and byte-for-byte
+# unchanged. Enabling it turns on `banto-storage`/`sqlx`/`banto-attachments`'s
+# Postgres backends so the service layer's enum-dispatch Postgres arms
+# compile. PR2 never *runs* those arms (`db::init_db` builds a SQLite handle
+# only); an actual Postgres pool + migrations arrive in PR3.
+postgres = [
+  "banto-storage/postgres",
+  "sqlx/postgres",
+  "banto-admin-services/postgres",
+]
+
+[dependencies]
+banto-core = { workspace = true }
+banto-storage = { workspace = true, features = ["sqlite"] }
+banto-server = { workspace = true }
+
+# Theme C (docs/template-scope.md §7): the domain-agnostic services live here
+# now - PR-C1 moved settings/audit (+ the shared `Role` vocabulary), PR-C2
+# moved `users` (`UsersService`, M10 RBAC). This crate re-exports them
+# (`lib.rs`) so existing `admin_template_core::{settings,audit,users}` paths
+# (incl. `users::{UsersService, Role, ...}`) keep resolving unchanged. Same
+# downward `workspace.dependencies` shape as `banto-storage`. Moving `users`
+# out took `argon2`/`password-hash` (the only argon2id password-hash users)
+# with it, so this crate no longer depends on them directly.
+banto-admin-services = { workspace = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+# `fs` (spec M17): `crate::backup::BackupService` reads/writes `backups/`
+# and the pending-restore file directly via `tokio::fs`. Cargo's feature
+# unification already pulls this in transitively via `sqlx`'s
+# `runtime-tokio` feature, but naming it explicitly here means this crate
+# does not silently depend on another dependency's feature choices.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "signal", "fs"] }
+rust-embed = { workspace = true, optional = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+tower = { workspace = true, features = ["util"] }
+tempfile = { workspace = true }
+
+[[bin]]
+name = "banto-serve"
+path = "src/bin/banto-serve.rs"

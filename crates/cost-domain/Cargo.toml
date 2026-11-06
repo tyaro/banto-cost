@@ -1,0 +1,10 @@
+[package]
+name = "cost-domain"
+description = "案件原価・利益管理の計算規則（DB・Tauri・HTTPに依存しない純粋なドメイン）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
