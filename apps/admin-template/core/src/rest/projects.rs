@@ -19,15 +19,28 @@
 //! | pipeline versions list | `ViewProjectAmounts` |
 //! | pipeline version create/adopt | `EditPipeline` |
 //! | pipeline overview | scope `amount_projects` |
+//! | order get | `ViewProjectAmounts` |
+//! | order convert / change request / revenue plan | `EditOrder` |
+//! | order change decide | `ViewProjectAmounts` + `Approve` (self-approval allowed, audited) |
+//! | revenue recognition create/cancel | `FinanceClose` + `ViewProjectAmounts` |
+//! | outlook / snapshot view | scope `amount_projects` |
+//! | snapshots list | `ViewMasters` |
+//! | snapshot create | `ViewAllReports` |
+//!
+//! Self-approval: banto-cost is run by one person in a small company
+//! (user decision 2026-11-06), so the order-change decision allows it
+//! (spec §4's small-team exception) and records `selfApproval` in the audit
+//! detail.
 //!
 //! The `admin` role passes the master/basic-information checks because the
 //! system administrator maintains masters and assignments (spec §4); it
 //! never passes a check that shows amounts.
 
 use super::*;
+use axum::extract::Query;
 use axum::Extension;
 use banto_admin_services::authz::{
-    amount_projects, visible_projects, Actor, AuthzService, Capability, Operation, Policy,
+    amount_projects, visible_projects, Actor, Allowed, AuthzService, Capability, Operation, Policy,
     ProjectScope, Subject,
 };
 use banto_core::BantoError;
@@ -35,6 +48,11 @@ use banto_server::AuthenticatedSession;
 use std::str::FromStr;
 
 use crate::customers::{Customer, CustomerInput, CustomersService};
+use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
+use crate::orders::{
+    CancelInput, ChangeDecision, ChangeRequest, ConversionRequest, OrderSummary, OrdersService,
+    RecognitionInput, ReplanInput, ORDER_CHANGE_POLICY,
+};
 use crate::pipeline::{PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput};
 use crate::projects::{Project, ProjectInput, ProjectsService};
 
@@ -45,6 +63,7 @@ struct BusinessState {
     customers: CustomersService,
     projects: ProjectsService,
     pipeline: PipelineService,
+    orders: OrdersService,
     authz: AuthzService,
     users: UsersService,
     audit: AuditLogService,
@@ -64,8 +83,22 @@ impl BusinessState {
         op: Operation,
         resource: &str,
     ) -> Result<(Subject, Option<i64>), BantoError> {
+        let (subject, user_id, _) = self
+            .guard_with(session, op, Policy::default(), resource)
+            .await?;
+        Ok((subject, user_id))
+    }
+
+    /// As [`Self::guard`] with an explicit policy, also returning the decision.
+    async fn guard_with(
+        &self,
+        session: &AuthenticatedSession,
+        op: Operation,
+        policy: Policy,
+        resource: &str,
+    ) -> Result<(Subject, Option<i64>, Allowed), BantoError> {
         let user_id = caller_user_id(session, &self.users).await?;
-        let (subject, _) = self
+        let (subject, allowed) = self
             .authz
             .authorize_audited(
                 &self.audit,
@@ -75,12 +108,12 @@ impl BusinessState {
                     role: &session.identity.role,
                 },
                 op,
-                Policy::default(),
+                policy,
                 resource,
                 "rest",
             )
             .await?;
-        Ok((subject, user_id))
+        Ok((subject, user_id, allowed))
     }
 
     /// As [`Self::guard`], but the `admin` role passes without a capability.
@@ -336,12 +369,286 @@ async fn pipeline_overview(
     Ok(Json(state.pipeline.overview(&scope).await?))
 }
 
+// --- orders (P3b) -------------------------------------------------------------
+
+async fn order_get(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(id): Path<i64>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    state
+        .guard(
+            &session,
+            Operation::ViewProjectAmounts { project_id: id },
+            "orders",
+        )
+        .await?;
+    Ok(Json(state.orders.summary(id).await?))
+}
+
+async fn order_convert(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<ConversionRequest>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    let (_, user_id) = state
+        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
+        .await?;
+    let summary = state.orders.convert(id, input, user_id).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "convert",
+        "orders",
+        Some(&id.to_string()),
+        Some(json!({
+            "confirmedAmount": summary.confirmed_amount,
+            "scope": summary.conversion.as_ref().map(|c| c.scope.clone()),
+            "remainderProjectId": summary.conversion.as_ref().and_then(|c| c.remainder_project_id),
+        })),
+    )
+    .await;
+    Ok(Json(summary))
+}
+
+async fn order_change_create(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<ChangeRequest>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    let (_, user_id) = state
+        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
+        .await?;
+    let delta = input.delta_amount;
+    let summary = state.orders.request_change(id, input, user_id).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "request_change",
+        "orders",
+        Some(&id.to_string()),
+        Some(json!({ "deltaAmount": delta })),
+    )
+    .await;
+    Ok(Json(summary))
+}
+
+async fn order_change_decide(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path((id, change_id)): Path<(i64, i64)>,
+    Json(input): Json<ChangeDecision>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    state
+        .guard(
+            &session,
+            Operation::ViewProjectAmounts { project_id: id },
+            "orders",
+        )
+        .await?;
+    let requester = state.orders.change_requester(id, change_id).await?;
+    let (_, user_id, allowed) = state
+        .guard_with(
+            &session,
+            Operation::Approve {
+                project_id: id,
+                // A request without a requester (deleted user) is nobody's own.
+                submitted_by: requester.unwrap_or(0),
+            },
+            ORDER_CHANGE_POLICY,
+            "orders",
+        )
+        .await?;
+    let approve = input.approve;
+    let summary = state
+        .orders
+        .decide_change(id, change_id, input, user_id)
+        .await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        if approve {
+            "approve_change"
+        } else {
+            "reject_change"
+        },
+        "orders",
+        Some(&id.to_string()),
+        Some(json!({
+            "changeId": change_id,
+            "selfApproval": allowed.self_approval_exception,
+        })),
+    )
+    .await;
+    Ok(Json(summary))
+}
+
+async fn revenue_plan_replace(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<ReplanInput>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    state
+        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
+        .await?;
+    let summary = state.orders.replan(id, input).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "replan",
+        "orders",
+        Some(&id.to_string()),
+        Some(json!({ "lines": summary.plan.len() })),
+    )
+    .await;
+    Ok(Json(summary))
+}
+
+/// Revenue recognition is accounting's (`FinanceClose`) and shows amounts.
+async fn finance_guard(
+    state: &BusinessState,
+    session: &AuthenticatedSession,
+    project_id: i64,
+) -> Result<Option<i64>, BantoError> {
+    let (_, user_id) = state
+        .guard(session, Operation::FinanceClose, "revenue_recognitions")
+        .await?;
+    state
+        .guard(
+            session,
+            Operation::ViewProjectAmounts { project_id },
+            "revenue_recognitions",
+        )
+        .await?;
+    Ok(user_id)
+}
+
+async fn recognition_create(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<RecognitionInput>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    let user_id = finance_guard(&state, &session, id).await?;
+    let amount = input.amount;
+    let summary = state.orders.recognize(id, input, user_id).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "create",
+        "revenue_recognitions",
+        Some(&id.to_string()),
+        Some(json!({ "amount": amount })),
+    )
+    .await;
+    Ok(Json(summary))
+}
+
+async fn recognition_cancel(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path((id, recognition_id)): Path<(i64, i64)>,
+    Json(input): Json<CancelInput>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    let user_id = finance_guard(&state, &session, id).await?;
+    let summary = state
+        .orders
+        .cancel_recognition(id, recognition_id, input, user_id)
+        .await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "cancel",
+        "revenue_recognitions",
+        Some(&id.to_string()),
+        Some(json!({ "recognitionId": recognition_id })),
+    )
+    .await;
+    Ok(Json(summary))
+}
+
+// --- outlook (P3b) ------------------------------------------------------------
+
+async fn outlook_get(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Query(query): Query<OutlookQuery>,
+) -> Result<Json<OutlookView>, ApiError> {
+    let scope = amount_projects(&state.subject(&session).await?);
+    Ok(Json(state.orders.outlook(&scope, query).await?))
+}
+
+async fn outlook_snapshots_list(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+) -> Result<Json<Vec<SnapshotInfo>>, ApiError> {
+    state
+        .guard(&session, Operation::ViewMasters, "outlook_snapshots")
+        .await?;
+    Ok(Json(state.orders.snapshots().await?))
+}
+
+async fn outlook_snapshot_get(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(id): Path<i64>,
+    Query(query): Query<OutlookQuery>,
+) -> Result<Json<OutlookView>, ApiError> {
+    let scope = amount_projects(&state.subject(&session).await?);
+    Ok(Json(state.orders.snapshot_view(id, &scope, query).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct SnapshotCreate {
+    #[serde(default)]
+    label: Option<String>,
+}
+
+async fn outlook_snapshot_create(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Json(input): Json<SnapshotCreate>,
+) -> Result<Json<SnapshotInfo>, ApiError> {
+    let (_, user_id) = state
+        .guard(&session, Operation::ViewAllReports, "outlook_snapshots")
+        .await?;
+    let snapshot = state.orders.save_snapshot(input.label, user_id).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "create",
+        "outlook_snapshots",
+        Some(&snapshot.id.to_string()),
+        Some(json!({ "label": snapshot.label })),
+    )
+    .await;
+    Ok(Json(snapshot))
+}
+
 /// The services the business routers need, bundled so `api_router` passes one value.
 #[derive(Clone)]
 pub(super) struct BusinessServices {
     pub customers: CustomersService,
     pub projects: ProjectsService,
     pub pipeline: PipelineService,
+    pub orders: OrdersService,
     pub authz: AuthzService,
     pub users: UsersService,
 }
@@ -351,6 +658,7 @@ fn state(services: BusinessServices, audit: AuditLogService, auth: AuthState) ->
         customers: services.customers,
         projects: services.projects,
         pipeline: services.pipeline,
+        orders: services.orders,
         authz: services.authz,
         users: services.users,
         audit,
@@ -374,6 +682,10 @@ pub(super) fn business_read_router(
             get(pipeline_versions_list),
         )
         .route("/api/pipeline/overview", get(pipeline_overview))
+        .route("/api/projects/{id}/order", get(order_get))
+        .route("/api/outlook", get(outlook_get))
+        .route("/api/outlook/snapshots", get(outlook_snapshots_list))
+        .route("/api/outlook/snapshots/{id}", get(outlook_snapshot_get))
         .with_state(state(services, audit, auth.clone()))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
@@ -397,6 +709,28 @@ pub(super) fn business_write_router(
             "/api/projects/{id}/pipeline-versions/{versionId}/adopt",
             post(pipeline_versions_adopt),
         )
+        .route("/api/projects/{id}/order/convert", post(order_convert))
+        .route(
+            "/api/projects/{id}/order/changes",
+            post(order_change_create),
+        )
+        .route(
+            "/api/projects/{id}/order/changes/{changeId}/decide",
+            post(order_change_decide),
+        )
+        .route(
+            "/api/projects/{id}/order/revenue-plan",
+            axum::routing::put(revenue_plan_replace),
+        )
+        .route(
+            "/api/projects/{id}/order/recognitions",
+            post(recognition_create),
+        )
+        .route(
+            "/api/projects/{id}/order/recognitions/{recognitionId}/cancel",
+            post(recognition_cancel),
+        )
+        .route("/api/outlook/snapshots", post(outlook_snapshot_create))
         .with_state(state(services, audit.clone(), auth.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {

@@ -24,8 +24,8 @@ export type NavLabelKey =
 
 /** banto-cost business screens (P3a). A separate union rather than more members in
  *  the two above: scaffold's removers edit those by exact text (scripts/scaffold.mjs). */
-export type CostNavIconKey = 'pipeline' | 'projects' | 'customers';
-export type CostNavLabelKey = 'nav.pipeline' | 'nav.projects' | 'nav.customers';
+export type CostNavIconKey = 'pipeline' | 'outlook' | 'projects' | 'customers';
+export type CostNavLabelKey = 'nav.pipeline' | 'nav.outlook' | 'nav.projects' | 'nav.customers';
 
 /** Keys of the demo-only catalog entry (`NavItem.demoOnly`). Kept out of the unions above on purpose:
  *  scaffold's removers edit those unions by exact text (scripts/scaffold.mjs). */
@@ -77,6 +77,8 @@ const allNavItems: NavItem[] = [
 	{ path: '/dashboard', labelKey: 'nav.dashboard', icon: 'dashboard', publicViewer: true },
 	// banto-cost P3a. Not `publicViewer`: amounts and project scope are capability-gated.
 	{ path: '/pipeline', labelKey: 'nav.pipeline', icon: 'pipeline' },
+	// banto-cost P3b: 月次売上見通し (amounts, scope `amount_projects`).
+	{ path: '/outlook', labelKey: 'nav.outlook', icon: 'outlook' },
 	{
 		path: '/projects',
 		labelKey: 'nav.projects',

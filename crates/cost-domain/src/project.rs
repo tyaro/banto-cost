@@ -67,6 +67,28 @@ impl ProjectStatus {
         !self.is_ordered()
     }
 
+    /// 受注転換できる状態か（受注前で有効な状態と保留）。失注・中止は状態を戻してから転換する。
+    pub fn convertible(self) -> bool {
+        matches!(
+            self,
+            Self::Lead | Self::Quoting | Self::Negotiating | Self::OnHold
+        )
+    }
+
+    /// 案件の編集画面から `self` を `to` へ変えてよいか。受注前の側は受注前の状態どうし、
+    /// 受注済みの側は受注・進行中・作業完了の間だけ動かせる。受注済みへは受注転換で、
+    /// 精算完了へは精算完了の検査（T17）で移すため、ここでは選ばせない。
+    pub fn can_edit_to(self, to: ProjectStatus) -> bool {
+        if self == to {
+            return true;
+        }
+        if self.is_ordered() {
+            matches!(to, Self::Ordered | Self::InProgress | Self::WorkDone) && self != Self::Settled
+        } else {
+            to.settable_directly()
+        }
+    }
+
     /// 案件見込の集計に使う段階。未受注で有効な案件は採用版の営業段階をそのまま使い、
     /// 失注・中止・保留・受注済みは案件の状態が優先する（T24）。
     pub fn pipeline_stage(self, version_stage: Stage) -> Stage {
@@ -185,6 +207,18 @@ mod tests {
         assert!(ProjectStatus::OnHold.settable_directly());
         assert!(!ProjectStatus::Ordered.settable_directly());
         assert!(!ProjectStatus::Settled.settable_directly());
+    }
+
+    #[test]
+    fn 受注済みの案件は受注前の状態へ戻さない() {
+        assert!(ProjectStatus::Lead.can_edit_to(ProjectStatus::Lost));
+        assert!(!ProjectStatus::Lead.can_edit_to(ProjectStatus::Ordered));
+        assert!(ProjectStatus::Ordered.can_edit_to(ProjectStatus::InProgress));
+        assert!(ProjectStatus::InProgress.can_edit_to(ProjectStatus::WorkDone));
+        assert!(!ProjectStatus::Ordered.can_edit_to(ProjectStatus::Lost));
+        assert!(!ProjectStatus::WorkDone.can_edit_to(ProjectStatus::Settled));
+        assert!(!ProjectStatus::Settled.can_edit_to(ProjectStatus::WorkDone));
+        assert!(ProjectStatus::Settled.can_edit_to(ProjectStatus::Settled));
     }
 
     #[test]

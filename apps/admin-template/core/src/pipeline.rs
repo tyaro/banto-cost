@@ -168,20 +168,24 @@ pub struct PipelineOverview {
     pub by_revenue_month: Vec<RevenueMonthRow>,
     /// Projects left out of the revenue-month view (amount or probability unset).
     pub revenue_excluded: Vec<i64>,
+    /// Each pre-order project's current entry (the monthly outlook's input;
+    /// `id` is the project id). Not sent over the wire.
+    #[serde(skip)]
+    pub(crate) entries: Vec<PipelineEntry>,
 }
 
-struct CleanVersion {
-    stage: Stage,
-    expected_amount: Option<i64>,
-    probability_pct: Option<u8>,
-    expected_order_month: Option<String>,
-    expected_start_month: Option<String>,
-    expected_end_month: Option<String>,
-    est_cost_at_order: Option<i64>,
-    basis: Option<String>,
-    next_action: Option<String>,
-    confirmed_on: Option<String>,
-    plan: Vec<(Option<String>, i64)>,
+pub(crate) struct CleanVersion {
+    pub(crate) stage: Stage,
+    pub(crate) expected_amount: Option<i64>,
+    pub(crate) probability_pct: Option<u8>,
+    pub(crate) expected_order_month: Option<String>,
+    pub(crate) expected_start_month: Option<String>,
+    pub(crate) expected_end_month: Option<String>,
+    pub(crate) est_cost_at_order: Option<i64>,
+    pub(crate) basis: Option<String>,
+    pub(crate) next_action: Option<String>,
+    pub(crate) confirmed_on: Option<String>,
+    pub(crate) plan: Vec<(Option<String>, i64)>,
 }
 
 fn month_field(
@@ -228,7 +232,7 @@ fn basis_required(errors: &mut Vec<banto_core::FieldError>) {
     ));
 }
 
-fn validate(input: &PipelineVersionInput) -> Result<CleanVersion, BantoError> {
+pub(crate) fn validate(input: &PipelineVersionInput) -> Result<CleanVersion, BantoError> {
     let mut errors = Vec::new();
     let stage = Stage::parse_version_stage(&input.stage);
     if stage.is_none() {
@@ -923,6 +927,7 @@ fn build_overview(
         by_order_month: by_order,
         by_revenue_month: by_revenue,
         revenue_excluded: ids(outlook.excluded),
+        entries,
     }
 }
 

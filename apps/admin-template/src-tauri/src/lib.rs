@@ -26,14 +26,19 @@ mod keyring_store;
 use admin_template_core::assets::FrontendAssets;
 use admin_template_core::audit::{AuditEntry, AuditLogList, AuditLogService};
 use admin_template_core::authz::{
-    amount_projects, visible_projects, Actor, AuthzService, Capability, MemberKind, Operation,
-    Policy, ProjectMember, ProjectScope, Subject,
+    amount_projects, visible_projects, Actor, Allowed, AuthzService, Capability, MemberKind,
+    Operation, Policy, ProjectMember, ProjectScope, Subject,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
 use admin_template_core::customers::{Customer, CustomerInput, CustomersService};
 use admin_template_core::db::init_db;
 use admin_template_core::events::event_channel;
 use admin_template_core::first_boot::seed_first_boot_settings;
+use admin_template_core::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
+use admin_template_core::orders::{
+    CancelInput, ChangeDecision, ChangeRequest, ConversionRequest, OrderSummary, OrdersService,
+    RecognitionInput, ReplanInput, ORDER_CHANGE_POLICY,
+};
 use admin_template_core::pipeline::{
     PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
 };
@@ -197,6 +202,7 @@ struct AppState {
     customers: CustomersService,
     projects: ProjectsService,
     pipeline: PipelineService,
+    orders: OrdersService,
     /// CPU/memory probe (ADR-0013, Issue #185): `Some` when the
     /// `system-metrics` feature is on and the host platform is supported;
     /// `None` otherwise, in which case the `system_info` command reports
@@ -2060,6 +2066,7 @@ async fn start_embedded_server(
     customers: CustomersService,
     projects: ProjectsService,
     pipeline: PipelineService,
+    orders: OrdersService,
     metrics: Option<MetricsProbe>,
     auth: AuthState,
     events: broadcast::Sender<ServerEvent>,
@@ -2087,6 +2094,7 @@ async fn start_embedded_server(
         customers,
         projects,
         pipeline,
+        orders,
         metrics,
     };
     // Issue #219 (`docs/design/lan-reach-check-design.md` §5.2): the one
@@ -2687,6 +2695,7 @@ async fn server_apply_body(
                 state.customers.clone(),
                 state.projects.clone(),
                 state.pipeline.clone(),
+                state.orders.clone(),
                 state.metrics.clone(),
                 state.rest_auth.clone(),
                 state.events.clone(),
@@ -3434,11 +3443,24 @@ async fn business_guard(
     op: Operation,
     resource: &str,
 ) -> Result<(Subject, Option<i64>), BantoError> {
+    let (subject, user_id, _) =
+        business_guard_with(state, identity, op, Policy::default(), resource).await?;
+    Ok((subject, user_id))
+}
+
+/// As [`business_guard`] with an explicit policy, also returning the decision.
+async fn business_guard_with(
+    state: &AppState,
+    identity: &UserIdentity,
+    op: Operation,
+    policy: Policy,
+    resource: &str,
+) -> Result<(Subject, Option<i64>, Allowed), BantoError> {
     let session = current_session(state)
         .await?
         .ok_or(BantoError::Unauthorized)?;
     let user_id = session_user_id(&session);
-    let (subject, _) = state
+    let (subject, allowed) = state
         .authz
         .authorize_audited(
             &state.audit,
@@ -3448,12 +3470,12 @@ async fn business_guard(
                 role: identity.role.as_str(),
             },
             op,
-            Policy::default(),
+            policy,
             resource,
             "tauri",
         )
         .await?;
-    Ok((subject, user_id))
+    Ok((subject, user_id, allowed))
 }
 
 /// As [`business_guard`], but the `admin` role passes without a capability.
@@ -3736,6 +3758,335 @@ async fn pipeline_overview_body(state: &AppState) -> Result<PipelineOverview, Ba
     require_role(state, Role::Viewer, "pipeline").await?;
     let scope = amount_projects(&caller_subject(state).await?);
     state.pipeline.overview(&scope).await
+}
+
+// --- banto-cost P3b: orders, revenue, outlook (ADR-0028) ------------------
+//
+// Tauri twins of the order / outlook routes in
+// `admin_template_core::rest::projects`: same role floors, same
+// `Operation`s, same scopes, same audit actions.
+
+#[tauri::command]
+async fn order_get(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<OrderSummary, BantoError> {
+    order_get_body(&state, project_id).await
+}
+
+async fn order_get_body(state: &AppState, project_id: i64) -> Result<OrderSummary, BantoError> {
+    let identity = require_role(state, Role::Viewer, "orders").await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        "orders",
+    )
+    .await?;
+    state.orders.summary(project_id).await
+}
+
+#[tauri::command]
+async fn order_convert(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: ConversionRequest,
+) -> Result<OrderSummary, BantoError> {
+    order_convert_body(&state, project_id, values).await
+}
+
+async fn order_convert_body(
+    state: &AppState,
+    project_id: i64,
+    values: ConversionRequest,
+) -> Result<OrderSummary, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) =
+        business_guard(state, &actor, Operation::EditOrder { project_id }, "orders").await?;
+    let summary = state.orders.convert(project_id, values, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "convert",
+        "orders",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({
+            "confirmedAmount": summary.confirmed_amount,
+            "scope": summary.conversion.as_ref().map(|c| c.scope.clone()),
+            "remainderProjectId": summary.conversion.as_ref().and_then(|c| c.remainder_project_id),
+        })),
+    )
+    .await;
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn order_change_create(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: ChangeRequest,
+) -> Result<OrderSummary, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        &state,
+        &actor,
+        Operation::EditOrder { project_id },
+        "orders",
+    )
+    .await?;
+    let delta = values.delta_amount;
+    let summary = state
+        .orders
+        .request_change(project_id, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "request_change",
+        "orders",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({ "deltaAmount": delta })),
+    )
+    .await;
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn order_change_decide(
+    state: State<'_, AppState>,
+    project_id: i64,
+    change_id: i64,
+    values: ChangeDecision,
+) -> Result<OrderSummary, BantoError> {
+    order_change_decide_body(&state, project_id, change_id, values).await
+}
+
+async fn order_change_decide_body(
+    state: &AppState,
+    project_id: i64,
+    change_id: i64,
+    values: ChangeDecision,
+) -> Result<OrderSummary, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    business_guard(
+        state,
+        &actor,
+        Operation::ViewProjectAmounts { project_id },
+        "orders",
+    )
+    .await?;
+    let requester = state.orders.change_requester(project_id, change_id).await?;
+    let (_, user_id, allowed) = business_guard_with(
+        state,
+        &actor,
+        Operation::Approve {
+            project_id,
+            // A request without a requester (deleted user) is nobody's own.
+            submitted_by: requester.unwrap_or(0),
+        },
+        ORDER_CHANGE_POLICY,
+        "orders",
+    )
+    .await?;
+    let approve = values.approve;
+    let summary = state
+        .orders
+        .decide_change(project_id, change_id, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        if approve {
+            "approve_change"
+        } else {
+            "reject_change"
+        },
+        "orders",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({
+            "changeId": change_id,
+            "selfApproval": allowed.self_approval_exception,
+        })),
+    )
+    .await;
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn revenue_plan_replace(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: ReplanInput,
+) -> Result<OrderSummary, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    business_guard(
+        &state,
+        &actor,
+        Operation::EditOrder { project_id },
+        "orders",
+    )
+    .await?;
+    let summary = state.orders.replan(project_id, values).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "replan",
+        "orders",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({ "lines": summary.plan.len() })),
+    )
+    .await;
+    Ok(summary)
+}
+
+/// Revenue recognition is accounting's (`FinanceClose`) and shows amounts.
+async fn finance_guard(
+    state: &AppState,
+    actor: &UserIdentity,
+    project_id: i64,
+) -> Result<Option<i64>, BantoError> {
+    let (_, user_id) = business_guard(
+        state,
+        actor,
+        Operation::FinanceClose,
+        "revenue_recognitions",
+    )
+    .await?;
+    business_guard(
+        state,
+        actor,
+        Operation::ViewProjectAmounts { project_id },
+        "revenue_recognitions",
+    )
+    .await?;
+    Ok(user_id)
+}
+
+#[tauri::command]
+async fn revenue_recognition_create(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: RecognitionInput,
+) -> Result<OrderSummary, BantoError> {
+    revenue_recognition_create_body(&state, project_id, values).await
+}
+
+async fn revenue_recognition_create_body(
+    state: &AppState,
+    project_id: i64,
+    values: RecognitionInput,
+) -> Result<OrderSummary, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let user_id = finance_guard(state, &actor, project_id).await?;
+    let amount = values.amount;
+    let summary = state.orders.recognize(project_id, values, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        "revenue_recognitions",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({ "amount": amount })),
+    )
+    .await;
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn revenue_recognition_cancel(
+    state: State<'_, AppState>,
+    project_id: i64,
+    recognition_id: i64,
+    values: CancelInput,
+) -> Result<OrderSummary, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    let user_id = finance_guard(&state, &actor, project_id).await?;
+    let summary = state
+        .orders
+        .cancel_recognition(project_id, recognition_id, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "cancel",
+        "revenue_recognitions",
+        Some(&project_id.to_string()),
+        Some(serde_json::json!({ "recognitionId": recognition_id })),
+    )
+    .await;
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn outlook_get(
+    state: State<'_, AppState>,
+    query: Option<OutlookQuery>,
+) -> Result<OutlookView, BantoError> {
+    outlook_get_body(&state, query.unwrap_or_default()).await
+}
+
+async fn outlook_get_body(
+    state: &AppState,
+    query: OutlookQuery,
+) -> Result<OutlookView, BantoError> {
+    require_role(state, Role::Viewer, "outlook").await?;
+    let scope = amount_projects(&caller_subject(state).await?);
+    state.orders.outlook(&scope, query).await
+}
+
+#[tauri::command]
+async fn outlook_snapshots_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<SnapshotInfo>, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "outlook_snapshots").await?;
+    business_guard(
+        &state,
+        &identity,
+        Operation::ViewMasters,
+        "outlook_snapshots",
+    )
+    .await?;
+    state.orders.snapshots().await
+}
+
+#[tauri::command]
+async fn outlook_snapshot_get(
+    state: State<'_, AppState>,
+    id: i64,
+    query: Option<OutlookQuery>,
+) -> Result<OutlookView, BantoError> {
+    require_role(&state, Role::Viewer, "outlook_snapshots").await?;
+    let scope = amount_projects(&caller_subject(&state).await?);
+    state
+        .orders
+        .snapshot_view(id, &scope, query.unwrap_or_default())
+        .await
+}
+
+#[tauri::command]
+async fn outlook_snapshot_create(
+    state: State<'_, AppState>,
+    label: Option<String>,
+) -> Result<SnapshotInfo, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        &state,
+        &actor,
+        Operation::ViewAllReports,
+        "outlook_snapshots",
+    )
+    .await?;
+    let snapshot = state.orders.save_snapshot(label, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        "outlook_snapshots",
+        Some(&snapshot.id.to_string()),
+        Some(serde_json::json!({ "label": snapshot.label })),
+    )
+    .await;
+    Ok(snapshot)
 }
 
 /// `admin`-only (spec M10): the user-management screen's account list.
@@ -4278,6 +4629,8 @@ pub fn run() {
             let customers = CustomersService::new(db.clone());
             let projects = ProjectsService::new(db.clone());
             let pipeline = PipelineService::new(db.clone());
+            // banto-cost P3b.
+            let orders = OrdersService::new(db.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
             // same "share one stateful sampler" reasoning as `banto-serve`'s
             // main() - see `SystemMetricsSampler::sample`'s doc comment for
@@ -4504,6 +4857,7 @@ pub fn run() {
                     customers.clone(),
                     projects.clone(),
                     pipeline.clone(),
+                    orders.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
                     events.clone(),
@@ -4575,6 +4929,7 @@ pub fn run() {
                 customers,
                 projects,
                 pipeline,
+                orders,
                 metrics,
                 started_at,
             });
@@ -4637,6 +4992,17 @@ pub fn run() {
             pipeline_versions_create,
             pipeline_versions_adopt,
             pipeline_overview,
+            order_get,
+            order_convert,
+            order_change_create,
+            order_change_decide,
+            revenue_plan_replace,
+            revenue_recognition_create,
+            revenue_recognition_cancel,
+            outlook_get,
+            outlook_snapshots_list,
+            outlook_snapshot_get,
+            outlook_snapshot_create,
             users_update,
             users_reset_password,
             users_delete,
@@ -4710,6 +5076,7 @@ mod tests {
             customers: CustomersService::new(pool.clone()),
             projects: ProjectsService::new(pool.clone()),
             pipeline: PipelineService::new(pool.clone()),
+            orders: OrdersService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
             metrics: None,
@@ -4771,6 +5138,7 @@ mod tests {
             customers: CustomersService::new(pool.clone()),
             projects: ProjectsService::new(pool.clone()),
             pipeline: PipelineService::new(pool.clone()),
+            orders: OrdersService::new(pool.clone()),
             metrics: None,
             exports_dir: dir.path().join("exports"),
             started_at: std::time::Instant::now(),
@@ -9462,5 +9830,114 @@ mod tests {
         assert!(denied.iter().all(|r| r.origin == "tauri"));
         assert!(denied.iter().any(|r| r.resource == "projects"));
         assert!(denied.iter().any(|r| r.resource == "pipeline_versions"));
+    }
+
+    // --- banto-cost P3b ----------------------------------------------------
+    // Tauri twin of `rest::tests::t23_t26_t27_rest_order_revenue_and_outlook`.
+
+    #[tokio::test]
+    async fn t23_t26_t27_tauri_order_revenue_and_outlook() {
+        let state = admin_app_state().await;
+        // Customer 1 and two projects outside the editor's scope.
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[Capability::PipelineEdit, Capability::AmountView],
+        )
+        .await
+        .expect("admin grants");
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let own = projects_create_body(&state, project_input("P-001", admin.id))
+            .await
+            .expect("sales registers a project");
+        let conversion: ConversionRequest = serde_json::from_value(serde_json::json!({
+            "rowVersion": own.row_version,
+            "convertedOn": "2026-11-20",
+            "confirmedAmount": 2_800_000,
+            "basis": "注文書受領",
+            "plannedStart": "2026-12-01",
+            "plannedEnd": "2027-03-31",
+            "revenuePlan": [{ "month": "2026-12", "amount": 2_800_000 }],
+            "scope": "whole"
+        }))
+        .expect("input");
+        let summary = order_convert_body(&state, own.id, conversion)
+            .await
+            .expect("convert");
+        assert_eq!(summary.confirmed_amount, Some(2_800_000));
+        let recognition: RecognitionInput = serde_json::from_value(serde_json::json!({
+            "recognizedOn": "2026-12-25",
+            "amount": 1_000_000
+        }))
+        .expect("input");
+        assert!(matches!(
+            revenue_recognition_create_body(&state, own.id, recognition.clone()).await,
+            Err(BantoError::Forbidden)
+        ));
+        // Granting is the administrator's: switch sessions for it.
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[
+                Capability::PipelineEdit,
+                Capability::AmountView,
+                Capability::FinanceClose,
+            ],
+        )
+        .await
+        .expect("admin grants finance");
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let summary = revenue_recognition_create_body(&state, own.id, recognition)
+            .await
+            .expect("recognize");
+        assert_eq!(summary.remaining, Some(1_800_000));
+        let outlook = outlook_get_body(&state, OutlookQuery::default())
+            .await
+            .expect("outlook");
+        assert_eq!(outlook.totals.total, 2_800_000);
+        assert_eq!(
+            order_get_body(&state, own.id)
+                .await
+                .expect("order")
+                .recognized_total,
+            1_000_000
+        );
+
+        // The administrator role sees no amounts.
+        state.set_session_for_test(Some(DesktopSession::Account(admin)));
+        assert!(matches!(
+            order_get_body(&state, own.id).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(outlook_get_body(&state, OutlookQuery::default())
+            .await
+            .expect("outlook")
+            .rows
+            .is_empty());
+        let denied: Vec<_> = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows
+            .into_iter()
+            .filter(|r| r.action == "denied")
+            .collect();
+        assert!(denied.iter().all(|r| r.origin == "tauri"));
+        assert!(denied.iter().any(|r| r.resource == "revenue_recognitions"));
+        assert!(denied.iter().any(|r| r.resource == "orders"));
     }
 }

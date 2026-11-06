@@ -229,6 +229,10 @@ pub enum Operation {
     /// Edit a project's ledger entry: its sales owner (`pipeline.edit`) or
     /// its manager (`project.manage`).
     EditProject { project_id: i64 },
+    /// Convert a project to an order, request order changes and re-plan
+    /// its ordered revenue (banto-cost P3b): its sales owner or its manager,
+    /// as for [`Operation::EditProject`], and the amounts must be visible.
+    EditOrder { project_id: i64 },
 }
 
 impl Operation {
@@ -249,6 +253,7 @@ impl Operation {
             Operation::EditMasters => "edit_masters",
             Operation::CreateProject => "create_project",
             Operation::EditProject { .. } => "edit_project",
+            Operation::EditOrder { .. } => "edit_order",
         }
     }
 
@@ -260,7 +265,8 @@ impl Operation {
             | Operation::EditPipeline { project_id }
             | Operation::ManageProject { project_id }
             | Operation::Approve { project_id, .. }
-            | Operation::EditProject { project_id } => Some(project_id),
+            | Operation::EditProject { project_id }
+            | Operation::EditOrder { project_id } => Some(project_id),
             Operation::ViewRates
             | Operation::EditRates
             | Operation::FinanceClose
@@ -409,7 +415,10 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
                 return Err(Denial::MissingCapability(Capability::PipelineEdit));
             }
         }
-        Operation::EditProject { project_id } => {
+        Operation::EditProject { project_id } | Operation::EditOrder { project_id } => {
+            if matches!(op, Operation::EditOrder { .. }) {
+                require(subject, Capability::AmountView)?;
+            }
             let as_sales = subject.has(Capability::PipelineEdit)
                 && subject.holds(project_id, MemberKind::Sales);
             let as_manager = subject.has(Capability::ProjectManage)
@@ -1132,6 +1141,21 @@ mod tests {
             &[(P2, MemberKind::Manager)],
         );
         allow(&pm, Operation::EditProject { project_id: P2 });
+        // Orders need the amounts on top of the same scope (P3b).
+        assert_eq!(
+            deny(&pm, Operation::EditOrder { project_id: P2 }),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        let pm_amounts = subject(
+            4,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P2, MemberKind::Manager)],
+        );
+        allow(&pm_amounts, Operation::EditOrder { project_id: P2 });
+        assert_eq!(
+            deny(&pm_amounts, Operation::EditOrder { project_id: P1 }),
+            Denial::OutOfProjectScope { project_id: P1 }
+        );
         assert_eq!(
             deny(&Subject::outsider(), Operation::ViewMasters),
             Denial::NotCompanyMember

@@ -416,7 +416,35 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'pipeline_versions_adopt',
 			rest: 'POST /api/projects/{id}/pipeline-versions/{versionId}/adopt',
 			role: 'Editor'
-		}
+		},
+		// banto-cost P3b: 受注・売上・見通しの書き込みも editor 床＋authorize_audited。
+		{ tauri: 'order_convert', rest: 'POST /api/projects/{id}/order/convert', role: 'Editor' },
+		{
+			tauri: 'order_change_create',
+			rest: 'POST /api/projects/{id}/order/changes',
+			role: 'Editor'
+		},
+		{
+			tauri: 'order_change_decide',
+			rest: 'POST /api/projects/{id}/order/changes/{changeId}/decide',
+			role: 'Editor'
+		},
+		{
+			tauri: 'revenue_plan_replace',
+			rest: 'PUT /api/projects/{id}/order/revenue-plan',
+			role: 'Editor'
+		},
+		{
+			tauri: 'revenue_recognition_create',
+			rest: 'POST /api/projects/{id}/order/recognitions',
+			role: 'Editor'
+		},
+		{
+			tauri: 'revenue_recognition_cancel',
+			rest: 'POST /api/projects/{id}/order/recognitions/{recognitionId}/cancel',
+			role: 'Editor'
+		},
+		{ tauri: 'outlook_snapshot_create', rest: 'POST /api/outlook/snapshots', role: 'Editor' }
 	];
 
 	// ロール床を照合したい読み取り系の対（CR-6）。読み取りは rule 8 の存在対称の
@@ -441,7 +469,12 @@ const isAllowedPackageImport = (spec) =>
 			rest: 'GET /api/projects/{id}/pipeline-versions',
 			role: 'Viewer'
 		},
-		{ tauri: 'pipeline_overview', rest: 'GET /api/pipeline/overview', role: 'Viewer' }
+		{ tauri: 'pipeline_overview', rest: 'GET /api/pipeline/overview', role: 'Viewer' },
+		// banto-cost P3b の読み取り。
+		{ tauri: 'order_get', rest: 'GET /api/projects/{id}/order', role: 'Viewer' },
+		{ tauri: 'outlook_get', rest: 'GET /api/outlook', role: 'Viewer' },
+		{ tauri: 'outlook_snapshots_list', rest: 'GET /api/outlook/snapshots', role: 'Viewer' },
+		{ tauri: 'outlook_snapshot_get', rest: 'GET /api/outlook/snapshots/{id}', role: 'Viewer' }
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -500,6 +533,10 @@ const isAllowedPackageImport = (spec) =>
 		'items_get',
 		'items_list',
 		'ping',
+		'order_get',
+		'outlook_get',
+		'outlook_snapshot_get',
+		'outlook_snapshots_list',
 		'pipeline_overview',
 		'pipeline_versions_list',
 		'project_members_list',
@@ -531,6 +568,10 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/projects/{id}',
 		'GET /api/projects/{id}/pipeline-versions',
 		'GET /api/pipeline/overview',
+		'GET /api/projects/{id}/order',
+		'GET /api/outlook',
+		'GET /api/outlook/snapshots',
+		'GET /api/outlook/snapshots/{id}',
 		'POST /api/customers/list',
 		'POST /api/projects/list',
 		'GET /api/ui-settings/{key}',

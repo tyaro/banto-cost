@@ -6,8 +6,9 @@
 	 * the update carries it back; a stale one is a `rowVersion` field error
 	 * that no field owns, listed above the form.
 	 *
-	 * An ordered-side project (受注〜精算完了) shows its status read-only:
-	 * those statuses are reached through order conversion, a later phase.
+	 * Order conversion and ordered revenue (P3b) are OrderSection.svelte; it
+	 * asks this page to reload after a conversion (status and rowVersion change).
+	 * An ordered project's status moves only between 受注・進行中・作業完了.
 	 * Viewing needs admin or `ViewProject` on this project (design 第2章);
 	 * `forbidden` shows a no-access state.
 	 *
@@ -30,6 +31,7 @@
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import PipelineSection from './PipelineSection.svelte';
+	import OrderSection from './OrderSection.svelte';
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -46,14 +48,18 @@
 	let status = $state('');
 	let customerName = $state('');
 	let managerName = $state('');
+	let projectCode = $state('');
+	let projectRowVersion = $state(0);
 	let formErrors = $state<string[]>([]);
 
 	// The pipeline section's own form counts too (PR #9 review).
 	let pipelineDirty = $state(false);
 	let pipelineBusy = $state(false);
+	let ordersDirty = $state(false);
+	let ordersBusy = $state(false);
 	const guard = guardUnsavedChanges({
-		isDirty: () => (store?.isDirty ?? false) || pipelineDirty,
-		isSaving: () => (formResource?.saving ?? false) || pipelineBusy
+		isDirty: () => (store?.isDirty ?? false) || pipelineDirty || ordersDirty,
+		isSaving: () => (formResource?.saving ?? false) || pipelineBusy || ordersBusy
 	});
 
 	async function loadForm() {
@@ -65,6 +71,8 @@
 		status = String(initial.status ?? '');
 		customerName = String(initial.customerName ?? '');
 		managerName = String(initial.managerName ?? '');
+		projectCode = String(initial.code ?? '');
+		projectRowVersion = Number(initial.rowVersion ?? 0);
 		const built = projectFormSchema({ ...pickers, currentStatus: status });
 		store = createFormStore(built, initial, formValidationMessages());
 		schema = built;
@@ -175,6 +183,20 @@
 	</div>
 
 	{#if schema && idValid}
+		{#key status}
+			<OrderSection
+				projectId={parsedId}
+				code={projectCode}
+				{status}
+				rowVersion={projectRowVersion}
+				{canWrite}
+				onProjectChanged={() => void loadForm()}
+				onPendingChange={(pending) => {
+					ordersDirty = pending.dirty;
+					ordersBusy = pending.busy;
+				}}
+			/>
+		{/key}
 		<PipelineSection
 			projectId={parsedId}
 			{ordered}
