@@ -81,7 +81,7 @@ Bantoの3ロールは全順序で、「経理は単価を見られるが利用�
 - テーブル：`user_capabilities`・`project_members`（マイグレーション `0009_authz.sql`、SQLite / Postgres）。`project_members.project_id` は外部キーを持たない（SQLite では既存の表に後から外部キーを足せないため）。代わりに `AuthzService::add_project_member` が案件の存在を確かめる（P3a）。
 - 操作：`GET /api/authz/me`、`GET・PUT /api/users/{id}/capabilities`（admin）、`GET /api/projects/{id}/members`（admin か案件範囲）、`PUT・DELETE /api/projects/{id}/members/{userId}/{kind}`（admin）。Tauri は `authz_*`・`project_members_*`。画面は P3 で作る。
 - P3b で操作 `EditOrder` を足した（受注転換・受注変更の登録・売上予定の組み替え）。範囲は `EditProject` と同じ（担当営業の `pipeline.edit` か責任者の `project.manage`）で、加えて `amount.view` が要る。
-- 自己承認（2026-11-06 ユーザー決定）：操作するのは1人なので、受注変更の承認だけは依頼者本人の承認を認める（`orders::ORDER_CHANGE_POLICY`、仕様第4章の小規模例外）。使ったときは監査ログの詳細に `selfApproval: true` を残す。判定関数の既定（自己承認の禁止）は変えず、P4 以降の工数・直接費の承認は別に決める。
+- 自己承認（2026-11-06 ユーザー決定）：操作するのは1人なので、承認は依頼者本人でもよい（仕様第4章の小規模例外）。P3b では受注変更の承認に適用した（`orders::ORDER_CHANGE_POLICY`）。P4 の工数・直接費の承認にも適用する。そのときは `ORDER_CHANGE_POLICY` を会社の承認方針として共通化し、REST と Tauri の両経路に同じ値を渡す。使ったときは監査ログの詳細に `selfApproval: true` を残す。判定関数の既定（自己承認の禁止）は変えない。
 
 ## 3 データモデル案
 
