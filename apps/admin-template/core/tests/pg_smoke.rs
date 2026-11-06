@@ -34,6 +34,8 @@ async fn reset_schema(url: &str) {
         .await
         .expect("connect for schema reset");
     for stmt in [
+        "DROP TABLE IF EXISTS outlook_snapshot_rows, outlook_snapshots, revenue_clearings, \
+         revenue_recognitions, revenue_plan, order_changes, order_conversions CASCADE",
         "DROP TABLE IF EXISTS pipeline_revenue_plan, pipeline_versions, projects, customers, \
          project_members, user_capabilities CASCADE",
         "DROP TABLE IF EXISTS attachments, audit_log, users, settings, items CASCADE",

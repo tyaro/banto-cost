@@ -49,6 +49,17 @@
 //! | POST   | `/api/projects/{id}/pipeline-versions` | `PipelineVersionInput` | `PipelineVersion` (editor+ + `EditPipeline`) |
 //! | POST   | `/api/projects/{id}/pipeline-versions/{versionId}/adopt` | - | `PipelineVersion` (editor+ + `EditPipeline`) |
 //! | GET    | `/api/pipeline/overview` | -          | `PipelineOverview` (any role; scope `amount_projects`) |
+//! | GET    | `/api/projects/{id}/order` | -        | `OrderSummary` (any role + `ViewProjectAmounts`; P3b) |
+//! | POST   | `/api/projects/{id}/order/convert` | `ConversionRequest` | `OrderSummary` (editor+ + `EditOrder`; `rowVersion`) |
+//! | POST   | `/api/projects/{id}/order/changes` | `ChangeRequest` | `OrderSummary` (editor+ + `EditOrder`) |
+//! | POST   | `/api/projects/{id}/order/changes/{changeId}/decide` | `ChangeDecision` | `OrderSummary` (editor+ + `ViewProjectAmounts` + `Approve`, self-approval allowed and audited) |
+//! | PUT    | `/api/projects/{id}/order/revenue-plan` | `ReplanInput` | `OrderSummary` (editor+ + `EditOrder`; `revenueVersion`) |
+//! | POST   | `/api/projects/{id}/order/recognitions` | `RecognitionInput` | `OrderSummary` (editor+ + `FinanceClose` + `ViewProjectAmounts`) |
+//! | POST   | `/api/projects/{id}/order/recognitions/{recognitionId}/cancel` | `CancelInput` | `OrderSummary` (as above) |
+//! | GET    | `/api/outlook?from&to&compare` | -    | `OutlookView` (any role; scope `amount_projects`) |
+//! | GET    | `/api/outlook/snapshots` | -          | `SnapshotInfo[]` (any role + `ViewMasters`) |
+//! | GET    | `/api/outlook/snapshots/{id}?from&to` | - | `OutlookView` (any role; scope `amount_projects`) |
+//! | POST   | `/api/outlook/snapshots` | `{label}`  | `SnapshotInfo` (editor+ + `ViewAllReports`) |
 //! | GET    | `/api/ui-settings/{key}` | -          | `{value: string \| null}` (any role) |
 //! | PUT    | `/api/ui-settings/{key}` | `{value}`  | 204 (any role)          |
 //! | POST   | `/api/audit-log/list?asOfId=` | `ListParams` | `AuditLogList` (`ListResult` + `asOfId`/`deletionEpoch`, admin; #248) |
@@ -295,6 +306,8 @@ pub struct Services {
     pub customers: crate::customers::CustomersService,
     pub projects: crate::projects::ProjectsService,
     pub pipeline: crate::pipeline::PipelineService,
+    /// banto-cost P3b: order conversion/changes, ordered revenue, outlook.
+    pub orders: crate::orders::OrdersService,
     /// CPU/memory probe (ADR-0013, Issue #185), or `None` when the
     /// `system-metrics` feature is off (or the host platform is
     /// unsupported) - the app layer builds the `Some` case, see
@@ -336,12 +349,14 @@ pub fn api_router(
         customers,
         projects,
         pipeline,
+        orders,
         metrics,
     } = services;
     let business = projects::BusinessServices {
         customers,
         projects,
         pipeline,
+        orders,
         authz: authz.clone(),
         users: users.clone(),
     };

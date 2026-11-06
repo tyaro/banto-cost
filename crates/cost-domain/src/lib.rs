@@ -13,6 +13,7 @@ pub mod closeout;
 pub mod forecast;
 pub mod ledger;
 pub mod money;
+pub mod order;
 pub mod outlook;
 pub mod pipeline;
 pub mod project;

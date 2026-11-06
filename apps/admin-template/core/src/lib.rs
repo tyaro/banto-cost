@@ -14,6 +14,7 @@ pub mod items;
 pub mod pipeline;
 pub mod projects;
 // [scaffold:items] end
+pub mod orders;
 pub mod rest;
 
 // Theme C (docs/template-scope.md §7): the domain-agnostic services moved to

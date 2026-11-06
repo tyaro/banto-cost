@@ -70,6 +70,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -126,6 +127,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     (
@@ -148,6 +150,7 @@ async fn router_with_token() -> (Router, String) {
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth
@@ -165,6 +168,7 @@ async fn router_with_token() -> (Router, String) {
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     (api_router(services, auth, tx, false), token)
@@ -371,6 +375,7 @@ async fn update_via_rest_is_observable_on_the_event_channel() {
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -385,6 +390,7 @@ async fn update_via_rest_is_observable_on_the_event_channel() {
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -764,6 +770,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
@@ -777,6 +784,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     api_router(services, auth, tx, allow_setup)
@@ -983,6 +991,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -999,6 +1008,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     (api_router(services, auth, tx, allow_setup), audit)
@@ -1330,6 +1340,7 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool.clone());
 
     users
@@ -1375,6 +1386,7 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1422,6 +1434,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
     let customers = crate::customers::CustomersService::new(db.clone());
     let projects = crate::projects::ProjectsService::new(db.clone());
     let pipeline = crate::pipeline::PipelineService::new(db.clone());
+    let orders = crate::orders::OrdersService::new(db.clone());
     let audit = AuditLogService::new(db);
 
     users
@@ -1465,6 +1478,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1824,6 +1838,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -1854,6 +1869,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
         customers,
         projects,
         pipeline,
+        orders,
         metrics: Some(metrics),
     };
     let router = api_router(services, auth, tx, false);
@@ -2590,6 +2606,7 @@ async fn router_with_viewer_public(
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     settings
@@ -2615,6 +2632,7 @@ async fn router_with_viewer_public(
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     (
@@ -3317,6 +3335,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
     let customers = crate::customers::CustomersService::new(pool.clone());
     let projects = crate::projects::ProjectsService::new(pool.clone());
     let pipeline = crate::pipeline::PipelineService::new(pool.clone());
+    let orders = crate::orders::OrdersService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -3344,6 +3363,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
         customers,
         projects,
         pipeline,
+        orders,
         metrics: None,
     };
     (api_router(services, auth, tx, false), users)
@@ -4175,4 +4195,226 @@ async fn rest_pipeline_draft_then_adopt() {
         .await
         .unwrap();
     assert_eq!(body_json(response).await.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn t23_t26_t27_rest_order_revenue_and_outlook() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["pipeline.edit", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", 1),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let row_version = project["rowVersion"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/pipeline-versions"),
+            &editor,
+            json!({
+                "stage": "negotiating",
+                "expectedAmount": 3_000_000,
+                "probabilityPct": 60,
+                "expectedOrderMonth": "2026-11",
+                "basis": "見積提出済み",
+                "revenuePlan": [{ "month": "2026-12", "amount": 3_000_000 }],
+                "adopt": true
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/outlook/snapshots",
+            &editor,
+            json!({ "label": "受注前" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "snapshots need report.all"
+    );
+
+    // T23: conversion by the sales owner.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": row_version,
+                "convertedOn": "2026-11-20",
+                "confirmedAmount": 2_800_000,
+                "basis": "注文書受領",
+                "plannedStart": "2026-12-01",
+                "plannedEnd": "2027-03-31",
+                "revenuePlan": [{ "month": "2026-12", "amount": 2_800_000 }],
+                "scope": "whole"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let summary = body_json(response).await;
+    assert_eq!(summary["status"], "ordered");
+    assert_eq!(summary["confirmedAmount"], 2_800_000);
+    assert_eq!(summary["recognizedTotal"], 0);
+
+    // A change requested and approved by the same (only) person: allowed
+    // and audited as a self-approval.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/changes"),
+            &editor,
+            json!({ "deltaAmount": 200_000, "planMonth": "2027-01", "basis": "追加画面" }),
+        ))
+        .await
+        .unwrap();
+    let summary = body_json(response).await;
+    assert_eq!(summary["pendingTotal"], 200_000);
+    let change_id = summary["changes"][0]["id"].as_i64().unwrap();
+
+    // Without finance.close there is no recognition (and no approval:
+    // approving needs project.manage on the project or finance.close).
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/recognitions"),
+            &editor,
+            json!({ "recognizedOn": "2026-12-25", "amount": 1_000_000 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!([
+            "pipeline.edit",
+            "amount.view",
+            "finance.close",
+            "report.all"
+        ]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/changes/{change_id}/decide"),
+            &editor,
+            json!({ "approve": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["confirmedAmount"], 3_000_000);
+
+    // T26: recognition clears the plan.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/recognitions"),
+            &editor,
+            json!({ "recognizedOn": "2026-12-25", "amount": 1_000_000 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let summary = body_json(response).await;
+    assert_eq!(summary["remaining"], 2_000_000);
+    assert_eq!(summary["issues"], json!([]));
+
+    // T27: outlook and snapshot.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/outlook/snapshots",
+            &editor,
+            json!({ "label": "12月報告" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot_id = body_json(response).await["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/outlook?from=2026-12&to=2027-01&compare={snapshot_id}"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let outlook = body_json(response).await;
+    assert_eq!(outlook["rows"][0]["month"], "2026-12");
+    assert_eq!(outlook["rows"][0]["recognized"], 1_000_000);
+    assert_eq!(outlook["rows"][0]["orderedPlan"], 1_800_000);
+    assert_eq!(outlook["rows"][0]["difference"], 0);
+    assert_eq!(outlook["totals"]["total"], 3_000_000);
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/outlook/snapshots/{snapshot_id}"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["snapshot"]["label"], "12月報告");
+
+    // No company grant: no order detail, an empty outlook.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/order"), &viewer))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/outlook", &viewer))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["rows"], json!([]));
+    // The administrator role sees no amounts either.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/order"), &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let rows = audit.list(ListParams::default()).await.unwrap().rows;
+    let approval = rows
+        .iter()
+        .find(|r| r.action == "approve_change")
+        .expect("approval audited");
+    assert!(
+        approval
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("\"selfApproval\":true")),
+        "{:?}",
+        approval.detail
+    );
+    let denied = denied_entries(&audit).await;
+    assert!(denied.iter().any(|r| r.resource == "revenue_recognitions"));
+    assert!(denied.iter().any(|r| r.resource == "outlook_snapshots"));
 }

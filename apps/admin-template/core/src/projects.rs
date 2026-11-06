@@ -143,7 +143,9 @@ fn length_check(
 /// Field rules (spec §5.1) via `cost_domain::project::validate_project`, plus
 /// the lengths and formats the wire needs. `current` is the stored status on
 /// update: moving onto the ordered side happens through order conversion
-/// (P3b), never by editing the status here.
+/// (`crate::orders`), never by editing the status here, and an ordered
+/// project never goes back to a pre-order status
+/// (`ProjectStatus::can_edit_to`).
 fn validate(input: &ProjectInput, current: Option<ProjectStatus>) -> Result<Clean, BantoError> {
     let mut errors = Vec::new();
     let code = input.code.trim().to_string();
@@ -165,10 +167,18 @@ fn validate(input: &ProjectInput, current: Option<ProjectStatus>) -> Result<Clea
         errors.push(field_error("status", "状態が正しくありません"));
     }
     if let Some(status) = status {
-        if Some(status) != current && !status.settable_directly() {
+        let allowed = match current {
+            Some(current) => current.can_edit_to(status),
+            None => status.settable_directly(),
+        };
+        if !allowed {
             errors.push(field_error(
                 "status",
-                "受注済みの状態へは受注転換で切り替えてください",
+                if current.is_some_and(ProjectStatus::is_ordered) {
+                    "受注済みの案件は受注・進行中・作業完了の間だけ切り替えられます"
+                } else {
+                    "受注済みの状態へは受注転換で切り替えてください"
+                },
             ));
         }
     }
