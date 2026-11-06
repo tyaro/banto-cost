@@ -9886,6 +9886,8 @@ mod tests {
             revenue_recognition_create_body(&state, own.id, recognition.clone()).await,
             Err(BantoError::Forbidden)
         ));
+        // Granting is the administrator's: switch sessions for it.
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
         authz_capabilities_set_body(
             &state,
             editor.id,
@@ -9897,6 +9899,7 @@ mod tests {
         )
         .await
         .expect("admin grants finance");
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
         let summary = revenue_recognition_create_body(&state, own.id, recognition)
             .await
             .expect("recognize");
