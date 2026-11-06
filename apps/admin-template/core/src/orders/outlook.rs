@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use banto_admin_services::authz::ProjectScope;
 use banto_core::BantoError;
 use cost_domain::outlook::{monthly_outlook, OutlookKey};
+use cost_domain::pipeline::Stage;
 use cost_domain::project::ProjectStatus;
 use cost_domain::YearMonth;
 use serde::{Deserialize, Serialize};
@@ -104,7 +105,8 @@ pub struct OutlookView {
     pub rows: Vec<OutlookRow>,
     /// Sum of the month rows in range (the 時期未定 row is not included).
     pub totals: OutlookFigures,
-    /// Pre-order projects left out of the weighted figures (amount or probability unset).
+    /// Active pre-order projects left out of the weighted figures: amount or
+    /// probability unset, or no adopted version yet.
     pub excluded: Vec<ProjectRef>,
     /// Ordered projects whose plan does not match the unrecognized remainder.
     pub revenue_issues: Vec<ProjectIssues>,
@@ -295,6 +297,19 @@ impl OrdersService {
                     .filter(|e| e.id == project_id.to_string())
                     .cloned()
                     .collect();
+                // An active pre-order project without an adopted version has an
+                // unknown forecast: list it as left out, never as a silent 0
+                // (lost / cancelled / on hold leave the outlook on purpose).
+                let active = ProjectStatus::parse(&status)
+                    .is_some_and(|s| s.pipeline_stage(Stage::Lead).is_active_pipeline());
+                if entry.is_empty() && active {
+                    out.excluded.push(ProjectRef {
+                        project_id,
+                        code: code.clone(),
+                        name: name.clone(),
+                    });
+                    continue;
+                }
                 (Vec::new(), Vec::new(), Vec::new(), entry)
             };
             let o = monthly_outlook(&recognitions, &open, &pipeline);
@@ -588,6 +603,23 @@ mod tests {
         .await
         .unwrap();
         let b = pipeline_project(&db, "P-B", 1_000_000, 50, "2027-01").await;
+        // An active project with only a draft (no adopted version) is listed
+        // as left out, not counted as 0; a lost one is simply out.
+        let projects = crate::projects::ProjectsService::new(db.clone());
+        let c = projects
+            .create(crate::projects::tests::input("P-C"), None)
+            .await
+            .unwrap()
+            .id;
+        let mut draft = crate::orders::tests::version(500_000, 50, "2027-01");
+        draft.adopt = false;
+        PipelineService::new(db.clone())
+            .create_version(c, draft, None)
+            .await
+            .unwrap();
+        let mut lost = crate::projects::tests::input("P-D");
+        lost.status = "lost".into();
+        projects.create(lost, None).await.unwrap();
         let v = svc
             .outlook(&ProjectScope::All, OutlookQuery::default())
             .await
@@ -612,6 +644,10 @@ mod tests {
         assert_eq!(
             v.totals.total, 1_500_000,
             "the undated row is not in the month totals"
+        );
+        assert_eq!(
+            v.excluded.iter().map(|p| p.project_id).collect::<Vec<_>>(),
+            vec![c]
         );
         // Range and scope.
         let jan = svc

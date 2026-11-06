@@ -987,7 +987,7 @@
   "outlook.colPending": "未確定追加売上（別枠）",
   "outlook.monthTotal": "月の合計（時期未定を除く）",
   "outlook.tableNote": "時期未定は独立した行で、どの月にも配分しません。未確定追加売上は見通しに含めません。確定売上や会社の会計損益ではありません。",
-  "outlook.excludedTitle": "金額または確度が未設定で見込から除いた案件",
+  "outlook.excludedTitle": "見込から除いた案件（金額・確度が未設定、または採用版なし）",
   "outlook.issuesTitle": "売上予定と未計上残が合わない案件",
   "outlook.snapshotLabel": "スナップショットの名前",
   "outlook.snapshotPlaceholder": "例：11月 経営会議",

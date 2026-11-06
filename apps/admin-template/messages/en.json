@@ -987,7 +987,7 @@
   "outlook.colPending": "Unconfirmed additions (separate)",
   "outlook.monthTotal": "Months total (excl. undecided)",
   "outlook.tableNote": "Timing-undecided amounts are their own row and are never spread over months. Unconfirmed additions are not in the outlook. This is not booked revenue or the company's accounts.",
-  "outlook.excludedTitle": "Projects left out (amount or probability unset)",
+  "outlook.excludedTitle": "Projects left out (amount or probability unset, or no adopted version)",
   "outlook.issuesTitle": "Projects whose plan does not match the remainder",
   "outlook.snapshotLabel": "Snapshot name",
   "outlook.snapshotPlaceholder": "e.g. November meeting",
