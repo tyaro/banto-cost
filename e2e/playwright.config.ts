@@ -177,7 +177,16 @@ export default defineConfig({
 				...devices['Desktop Chrome'],
 				viewport: { width: 1440, height: 900 },
 				reducedMotion: 'reduce',
-				baseURL: VISUAL_BASE_URL
+				baseURL: VISUAL_BASE_URL,
+				// Keyboard scrolling (Home/End/PageDown on a focused scroll
+				// region) is animated by Chromium regardless of `reducedMotion`,
+				// so a test that presses the next key once the previous scroll
+				// "arrived" races the tail of that animation. Harmless on one
+				// worker; with 4 workers on 4 vCPUs the frames slow down and
+				// grid-long-errors' PageDown check went flaky (CI 2026-11-06).
+				// Without the animation each key scrolls in one step. Screenshots
+				// are unaffected (they are taken at rest).
+				launchOptions: { args: ['--disable-smooth-scrolling'] }
 			},
 			expect: {
 				// §12.1: pixel-level tolerance for the whole project, so specs
