@@ -22,6 +22,8 @@
 
 ## [Unreleased]
 
+- banto-cost P3a: 顧客・案件台帳・案件見込の版（下書き・採用・月別売上予定）と案件見込一覧を追加（マイグレーション `0010_projects.sql`、REST / Tauri の両経路、ADR-0028 の能力×案件範囲で判定。受入条件 T12/T13/T21/T22/T24/T25 のテスト）。
+
 - banto-cost P2: 業務の権限を能力（capability）× 案件範囲で判定する `banto_admin_services::authz` と、能力の付与・案件メンバーの REST / Tauri 操作を追加（マイグレーション `0009_authz.sql`、ADR-0028、受入条件 T12/T19/T20 の両経路テスト）。
 
 ## [6.10.0] - 2026-11-05

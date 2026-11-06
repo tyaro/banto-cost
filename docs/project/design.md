@@ -78,7 +78,7 @@ Bantoの3ロールは全順序で、「経理は単価を見られるが利用�
 - 判定関数：`crates/banto-admin-services/src/authz.rs` の `authorize`。一覧・検索・CSV の絞り込みは同じ規則から作る `visible_projects` / `amount_projects`。
 - 会社データへの所属は、この DB での能力の明示付与だけで決まる。admin ロールでも能力が無ければ業務データを見られない。grant セッションと認証無効モードの合成セッションは所属を持たない（T19/T20）。
 - 判定の既定：担当種別 `worker` は案件の基本情報と自分の工数入力だけで、金額は見ない。金額は `amount.view` に加えて、`manager`・`sales` の担当か、`report.all`・`finance.close` が要る。個人別単価は `finance.rate` だけ。
-- テーブル：`user_capabilities`・`project_members`（マイグレーション `0009_authz.sql`、SQLite / Postgres）。`project_members.project_id` の外部キーは P3 の案件テーブル作成時に整える。
+- テーブル：`user_capabilities`・`project_members`（マイグレーション `0009_authz.sql`、SQLite / Postgres）。`project_members.project_id` は外部キーを持たない（SQLite では既存の表に後から外部キーを足せないため）。代わりに `AuthzService::add_project_member` が案件の存在を確かめる（P3a）。
 - 操作：`GET /api/authz/me`、`GET・PUT /api/users/{id}/capabilities`（admin）、`GET /api/projects/{id}/members`（admin か案件範囲）、`PUT・DELETE /api/projects/{id}/members/{userId}/{kind}`（admin）。Tauri は `authz_*`・`project_members_*`。画面は P3 で作る。
 
 ## 3 データモデル案
@@ -107,6 +107,17 @@ quotes(id, project_id, version_no, amount, is_selected, note, …)
 
 - 集計対象は「案件ごとの最新 `adopted` 版」一つ（T22）。
 - `pipeline_revenue_plan` の合計は `expected_amount` と一致させる（不一致は不足ありで表示）。
+
+#### 3.1.1 実装（P3a、2026-11-06）
+
+- マイグレーション `0010_projects.sql`（SQLite / Postgres）：`customers`・`projects`・`pipeline_versions`・`pipeline_revenue_plan`。`quotes`・`is_scope`・`parent_project_id` は部分受注・追加見込を扱う P3b で足す。
+- 顧客は削除せず `active` で使用中止にする。使用中止の顧客は新しい案件には選べないが、既に使っている案件ではそのまま残る。
+- 案件の責任者 `manager_user_id` は必須とし、同じトランザクションで `project_members` の `manager` 行も更新する（認可はこの表を読む。ADR-0028）。営業担当（`pipeline.edit`）が登録した案件では、登録者を `sales` メンバーにする。
+- 案件の状態は、編集画面では受注前の状態（引合・見積中・交渉中）と失注・中止・保留だけを選べる。受注済みの側（受注・進行中・作業完了・精算完了）へは P3b の受注転換で移す。受注後は予定開始日・完了日を必須にする（`cost_domain::project::validate_project`）。
+- 案件見込の版は保存後に書き換えない。変更は新しい版にし、下書きを採用するときは根拠を必須にする（T29）。版に記録できる営業段階は引合・見積中・交渉中・内示ありだけで、失注・中止・保留・受注は案件の状態で表す（集計段階は `ProjectStatus::pipeline_stage`、T24）。受注済みの案件には版を記録しない。
+- 不足あり：金額・確度・受注予定月の未設定、売上予定なし、売上予定の合計と見込受注額の不一致、採用版なし。いずれも0円・0%に置き換えず、案件見込一覧に表示する（T25）。
+- 案件見込一覧（`GET /api/pipeline/overview`）は `amount_projects` の範囲だけを返す。受注予定月別（`pipeline::by_order_month`）と売上予定月別（`outlook::monthly_outlook` の未受注の売上見込）を分けて返し、足し合わせない。
+- 同時編集：顧客と案件は `row_version` で楽観ロックし、古い版での更新は `rowVersion` の入力エラーで拒否する（T13）。Postgres では版番号の採番を案件行の `FOR UPDATE` で直列化する。
 
 ### 3.2 受注・売上
 
@@ -226,16 +237,17 @@ Banto の `(app)` ルート配下に置く。一覧はデータグリッド、�
 
 ## 6 実装の段階案
 
-| 段階 | 内容                                                   | 完了条件                                 |
-| ---- | ------------------------------------------------------ | ---------------------------------------- |
-| P0   | リポジトリ作成、Banto コピー・リネーム・プリセット、CI | Banto の既存検証が通る                   |
-| P1   | `cost-domain` の計算と受入条件の単体テスト             | T02, T05, T06, T08, T21, T27, T28 が通る |
-| P2   | 能力・案件範囲の認可、案件・顧客・工程マスタ           | T12, T19, T20（両経路の認可テスト）      |
-| P3   | 案件見込・受注転換・売上予定・月次見通し               | T21〜T27                                 |
-| P4   | 予算版・工数・単価・直接費・発注                       | T02〜T05, T09, T10, T14                  |
-| P5   | 完了見込版・注意表示・全体一覧                         | T06, T28, T30                            |
-| P6   | 承認・締め・訂正・CSV                                  | T11, T13, T15, T17                       |
-| P7   | バックアップ復元の確認、代表案件での試行               | T18、手計算との照合                      |
+| 段階 | 内容                                                               | 完了条件                                 |
+| ---- | ------------------------------------------------------------------ | ---------------------------------------- |
+| P0   | リポジトリ作成、Banto コピー・リネーム・プリセット、CI             | Banto の既存検証が通る                   |
+| P1   | `cost-domain` の計算と受入条件の単体テスト                         | T02, T05, T06, T08, T21, T27, T28 が通る |
+| P2   | 能力・案件範囲の認可、案件・顧客・工程マスタ                       | T12, T19, T20（両経路の認可テスト）      |
+| P3a  | 顧客・案件台帳・案件見込の版（下書き・採用）・案件見込一覧         | T21, T22, T25（2026-11-06）              |
+| P3b  | 受注転換・部分受注・受注変更・売上予定と計上の消し込み・月次見通し | T23, T24, T26, T27                       |
+| P4   | 予算版・工数・単価・直接費・発注                                   | T02〜T05, T09, T10, T14                  |
+| P5   | 完了見込版・注意表示・全体一覧                                     | T06, T28, T30                            |
+| P6   | 承認・締め・訂正・CSV                                              | T11, T13, T15, T17                       |
+| P7   | バックアップ復元の確認、代表案件での試行                           | T18、手計算との照合                      |
 
 ## 7 画面プロトタイプの位置づけ
 
