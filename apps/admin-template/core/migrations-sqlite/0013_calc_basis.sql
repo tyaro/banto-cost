@@ -1,0 +1,65 @@
+-- banto-cost P4a (docs/project/design.md §10): the calc basis - hourly cost
+-- rates, day length, thresholds - as company values with an effective date
+-- (版), overridable per project and per item.
+--
+-- A change is always a NEW row; nothing here is updated or deleted, so the
+-- whole history stays (T31). A project override with `value IS NULL` means
+-- "back to the company basis from `valid_from` on" (T34). No company value is
+-- seeded: an item nobody has set is 未設定, never 0 (banto-cost CLAUDE.md).
+
+-- The item catalog. `value_type` MUST match `cost_domain::calc_basis::ValueKind`;
+-- `edit_capability` is the capability that changes the company value (and
+-- may override any project); `managers_may_override` also lets the
+-- project's manager override it (design §10.3).
+CREATE TABLE calc_items (
+    key TEXT PRIMARY KEY,
+    item_group TEXT NOT NULL,
+    label TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    value_type TEXT NOT NULL CHECK (value_type IN ('yen','minutes','percent','days')),
+    project_overridable INTEGER NOT NULL CHECK (project_overridable IN (0, 1)),
+    managers_may_override INTEGER NOT NULL CHECK (managers_may_override IN (0, 1)),
+    edit_capability TEXT NOT NULL CHECK (edit_capability IN ('finance.rate','finance.close')),
+    sort_order INTEGER NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    CHECK (project_overridable = 1 OR managers_may_override = 0)
+);
+
+INSERT INTO calc_items (key, item_group, label, unit, value_type, project_overridable,
+    managers_may_override, edit_capability, sort_order) VALUES
+    ('emp_rate', 'labor', '社員の時間原価単価（標準）', 'yen_per_hour', 'yen', 1, 0, 'finance.rate', 10),
+    ('forecast_rate', 'labor', '見込み用単価（残工数）', 'yen_per_hour', 'yen', 1, 1, 'finance.rate', 20),
+    ('budget_rate', 'labor', '予算用単価', 'yen_per_hour', 'yen', 1, 1, 'finance.rate', 30),
+    ('subcontract_office_rate', 'subcontract', '外注単価（社内作業）', 'yen_per_hour', 'yen', 1, 1, 'finance.rate', 40),
+    ('subcontract_site_rate', 'subcontract', '外注単価（現地作業）', 'yen_per_hour', 'yen', 1, 1, 'finance.rate', 50),
+    ('day_minutes', 'conversion', '1日の基準時間（人日換算）', 'minutes', 'minutes', 1, 0, 'finance.rate', 60),
+    ('lodging_rate', 'travel', '宿泊費の見込単価', 'yen_per_night', 'yen', 1, 1, 'finance.close', 70),
+    ('vehicle_rate', 'travel', '車両費の見込単価', 'yen_per_km', 'yen', 1, 1, 'finance.close', 80),
+    ('tax_rate', 'tax_input', '標準消費税率', 'percent', 'percent', 0, 0, 'finance.close', 90),
+    ('time_unit', 'tax_input', '工数の入力単位', 'minutes', 'minutes', 0, 0, 'finance.close', 100),
+    ('review_delay_days', 'alert', '確認遅れ日数', 'days', 'days', 0, 0, 'finance.close', 110),
+    ('low_margin_pct', 'alert', '低利益率の閾値', 'percent', 'percent', 1, 1, 'finance.close', 120);
+
+CREATE TABLE calc_values (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_key TEXT NOT NULL REFERENCES calc_items(key),
+    scope TEXT NOT NULL CHECK (scope IN ('company','project')),
+    project_id INTEGER REFERENCES projects(id),
+    valid_from TEXT NOT NULL,
+    value INTEGER,
+    version_no INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK ((scope = 'company' AND project_id IS NULL AND value IS NOT NULL)
+        OR (scope = 'project' AND project_id IS NOT NULL))
+);
+
+-- One row per item, scope and effective date; versions are numbered per item
+-- and scope. Both are enforced here too, so two concurrent saves cannot both
+-- pass the service's check (T13).
+CREATE UNIQUE INDEX calc_values_valid_from
+    ON calc_values (item_key, scope, COALESCE(project_id, 0), valid_from);
+CREATE UNIQUE INDEX calc_values_version
+    ON calc_values (item_key, scope, COALESCE(project_id, 0), version_no);
+CREATE INDEX calc_values_project ON calc_values (project_id);

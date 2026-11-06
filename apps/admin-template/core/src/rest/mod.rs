@@ -52,6 +52,12 @@
 //! | GET    | `/api/outlook/snapshots` | -          | `SnapshotInfo[]` (any role + `ViewMasters`) |
 //! | GET    | `/api/outlook/snapshots/{id}?from&to` | - | `OutlookView` (any role; scope `amount_projects`) |
 //! | POST   | `/api/outlook/snapshots` | `{label}`  | `SnapshotInfo` (editor+ + `ViewAllReports`) |
+//! | GET    | `/api/calc-basis?on` | -          | `CompanyBasis` (any role + `ViewCalcBasis`; P4a) |
+//! | POST   | `/api/calc-basis/preview` | `CalcValueInput` | `ImpactPreview` (any role + `EditCalcBasis`) |
+//! | POST   | `/api/calc-basis`     | `CalcValueInput` | `CalcValueRow` (editor+ + `EditCalcBasis`) |
+//! | GET    | `/api/projects/{id}/calc-basis?on` | - | `ProjectBasis` (any role + `ViewProjectAmounts`) |
+//! | POST   | `/api/projects/{id}/calc-basis/preview` | `CalcValueInput` | `ImpactPreview` (any role + `OverrideCalcBasis`) |
+//! | POST   | `/api/projects/{id}/calc-basis` | `CalcValueInput` | `CalcValueRow` (editor+ + `OverrideCalcBasis`) |
 //! | GET    | `/api/ui-settings/{key}` | -          | `{value: string \| null}` (any role) |
 //! | PUT    | `/api/ui-settings/{key}` | `{value}`  | 204 (any role)          |
 //! | POST   | `/api/audit-log/list?asOfId=` | `ListParams` | `AuditLogList` (`ListResult` + `asOfId`/`deletionEpoch`, admin; #248) |
@@ -258,6 +264,8 @@ pub struct Services {
     pub pipeline: crate::pipeline::PipelineService,
     /// banto-cost P3b: order conversion/changes, ordered revenue, outlook.
     pub orders: crate::orders::OrdersService,
+    /// banto-cost P4a: calc basis (company values and project overrides).
+    pub calc_basis: crate::calc_basis::CalcBasisService,
     /// CPU/memory probe (ADR-0013, Issue #185), or `None` when the
     /// `system-metrics` feature is off (or the host platform is
     /// unsupported) - the app layer builds the `Some` case, see
@@ -295,6 +303,7 @@ pub fn api_router(
         projects,
         pipeline,
         orders,
+        calc_basis,
         metrics,
     } = services;
     let business = projects::BusinessServices {
@@ -302,6 +311,7 @@ pub fn api_router(
         projects,
         pipeline,
         orders,
+        calc_basis,
         authz: authz.clone(),
         users: users.clone(),
     };

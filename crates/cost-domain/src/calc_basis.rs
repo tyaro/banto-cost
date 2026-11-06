@@ -132,6 +132,91 @@ pub fn validate_new(
     Ok(())
 }
 
+/// 項目の値の種類。値の範囲を決める（設計書 10.3 の単位）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    /// 円（時間単価・宿泊単価など）。
+    Yen,
+    /// 分（1日の基準時間・工数の入力単位）。
+    Minutes,
+    /// 整数パーセント（消費税率・低利益率の閾値）。
+    Percent,
+    /// 日数（確認遅れ日数）。
+    Days,
+}
+
+impl ValueKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "yen" => Some(Self::Yen),
+            "minutes" => Some(Self::Minutes),
+            "percent" => Some(Self::Percent),
+            "days" => Some(Self::Days),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Yen => "yen",
+            Self::Minutes => "minutes",
+            Self::Percent => "percent",
+            Self::Days => "days",
+        }
+    }
+
+    /// 受け付ける値の範囲（両端を含む）。0円の単価は「未設定」と区別できないので受け付けない。
+    pub fn range(self) -> (i64, i64) {
+        match self {
+            Self::Yen => (1, 100_000_000),
+            Self::Minutes => (1, 1_440),
+            Self::Percent => (0, 100),
+            Self::Days => (0, 365),
+        }
+    }
+
+    pub fn accepts(self, value: i64) -> bool {
+        let (lo, hi) = self.range();
+        (lo..=hi).contains(&value)
+    }
+}
+
+/// 会社基準を変える行 `new` について、適用開始日に自分の上書きが効いていて影響しない案件
+/// （設計書 10.5「上書き済みで影響しない案件数」）。明細の有無に関係なく求める。
+pub fn shielded_projects(values: &[CalcValue], new: &CalcValue) -> Vec<String> {
+    if new.scope != Scope::Company {
+        return Vec::new();
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for row in values.iter().filter(|r| r.item == new.item) {
+        let Scope::Project(pid) = &row.scope else {
+            continue;
+        };
+        if out.contains(pid) {
+            continue;
+        }
+        if let Some(Resolved {
+            source: Source::ProjectOverride { .. },
+            ..
+        }) = resolve(values, &new.item, Some(pid), new.valid_from, None)
+        {
+            out.insert(pid.clone());
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// 次の版番号（同じ項目・同じ範囲の行の最大＋1）。
+pub fn next_version(values: &[CalcValue], item: &str, scope: &Scope) -> u32 {
+    values
+        .iter()
+        .filter(|r| r.item == item && &r.scope == scope)
+        .map(|r| r.version)
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
 /// 計算基準を使う明細（工数・費用・見込）の状態。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageStatus {
@@ -433,6 +518,59 @@ mod tests {
         assert_eq!(imp.affected_projects, vec!["P-1".to_string()]);
         assert_eq!(imp.pending, 1);
         assert!(imp.shielded_projects.is_empty());
+    }
+
+    #[test]
+    fn t31_版番号は項目と範囲ごとに続く() {
+        let mut v = sample();
+        assert_eq!(next_version(&v, "emp_rate", &Scope::Company), 3);
+        assert_eq!(next_version(&v, "lodging", &Scope::Company), 1);
+        v.push(project("P-1", "emp_rate", "2026-07-01", Some(5_500)));
+        assert_eq!(
+            next_version(&v, "emp_rate", &Scope::Project("P-1".into())),
+            2
+        );
+        assert_eq!(
+            next_version(&v, "emp_rate", &Scope::Project("P-2".into())),
+            1
+        );
+    }
+
+    #[test]
+    fn 上書き中の案件は会社基準の変更で影響しない() {
+        let mut v = sample();
+        v.push(project("P-1", "fc_rate", "2026-07-01", Some(5_500)));
+        v.push(project("P-2", "fc_rate", "2026-07-01", Some(6_000)));
+        v.push(project("P-2", "fc_rate", "2026-12-01", None));
+        v.push(project("P-3", "fc_rate", "2027-04-01", Some(6_000)));
+        v.push(project("P-4", "emp_rate", "2026-07-01", Some(6_000)));
+        let new = company("fc_rate", "2027-01-01", 5_200, 2);
+        // P-2 は会社基準に戻し済み、P-3 はまだ上書きが始まっていない、P-4 は別の項目。
+        assert_eq!(shielded_projects(&v, &new), vec!["P-1".to_string()]);
+        let ov = project("P-1", "fc_rate", "2027-01-01", Some(5_800));
+        assert!(shielded_projects(&v, &ov).is_empty());
+    }
+
+    #[test]
+    fn 値の範囲() {
+        assert!(
+            !ValueKind::Yen.accepts(0),
+            "0円の単価は未設定と区別できない"
+        );
+        assert!(ValueKind::Yen.accepts(5_000));
+        assert!(ValueKind::Minutes.accepts(480));
+        assert!(!ValueKind::Minutes.accepts(1_441));
+        assert!(ValueKind::Percent.accepts(0));
+        assert!(!ValueKind::Percent.accepts(101));
+        assert!(!ValueKind::Days.accepts(-1));
+        for kind in [
+            ValueKind::Yen,
+            ValueKind::Minutes,
+            ValueKind::Percent,
+            ValueKind::Days,
+        ] {
+            assert_eq!(ValueKind::parse(kind.as_str()), Some(kind));
+        }
     }
 
     #[test]

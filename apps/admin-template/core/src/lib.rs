@@ -5,6 +5,7 @@
 //! services back the embedded REST server in M6.
 
 pub mod assets;
+pub mod calc_basis;
 pub mod customers;
 pub mod db;
 pub mod events;
