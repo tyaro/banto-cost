@@ -19,6 +19,7 @@
 	import type { Component } from 'svelte';
 	import {
 		DockHost,
+		clampWindowToHost,
 		collectPanelIds,
 		createDockState,
 		type DockLayout,
@@ -213,8 +214,8 @@
 	/**
 	 * メモ workspace (spec §5, @banto/dock-svelte). banto-cost removed the
 	 * template's chart panels (they aggregated the `items` demo data), so the
-	 * default layout docks the メモ alone; it can still be undocked, floated
-	 * and (Tauri) popped out, and the layout auto-saves. The storage keys
+	 * default layout is the メモ as a floating window; it can be moved, resized,
+	 * docked into the host and (Tauri) popped out, and the layout auto-saves. The storage keys
 	 * carry `.v2` so a layout saved before the removal - which still names the
 	 * chart panels - is ignored instead of showing empty panes.
 	 */
@@ -223,22 +224,25 @@
 	// Panel id/title/icon defs moved to #lib/banto/panels.ts (spec §5.3 v2):
 	// shared with the standalone routes/panel/[id] route a popped-out panel
 	// renders as, which has no access to this page's own locals.
-	const PANEL_META: Record<string, { title: string; icon: string }> = Object.fromEntries(
-		PANEL_DEFS.map((d) => [d.id, { title: d.title, icon: d.icon! }])
-	);
 
-	/** The seeded default: the メモ docked alone (the host size is unused but kept for the reset button's call shape). */
-	function defaultLayout(_hostW: number, _hostH: number): DockLayout {
-		return {
-			version: 2,
-			floating: [],
-			docked: {
-				type: 'panel',
+	/** The seeded default: the メモ as a floating window at the bottom right. `hostW/H` clamp it into view. */
+	function defaultLayout(hostW: number, hostH: number): DockLayout {
+		const memoDef = PANEL_DEFS.find((d) => d.id === MEMO_PANEL_ID)!;
+		const memo = clampWindowToHost(
+			{
 				id: MEMO_PANEL_ID,
-				title: PANEL_META[MEMO_PANEL_ID].title,
-				icon: PANEL_META[MEMO_PANEL_ID].icon
-			}
-		};
+				title: memoDef.title,
+				icon: memoDef.icon,
+				x: hostW - (memoDef.width ?? 320) - 24,
+				y: hostH - (memoDef.height ?? 220) - 24,
+				width: memoDef.width ?? 320,
+				height: memoDef.height ?? 220,
+				open: true
+			},
+			hostW,
+			hostH
+		);
+		return { version: 2, floating: [memo], docked: null };
 	}
 
 	// M12 (spec §12.1): the UiSettingsProvider key the layout is ALSO saved
@@ -803,7 +807,7 @@
 	}
 
 	.dock-wrapper {
-		height: 300px;
+		height: 360px;
 	}
 
 	.dock-panel {

@@ -43,14 +43,14 @@ export async function expectCheckOutageKeepsTheSession(page: Page, remember: boo
 	expect(remember ? before.local : before.session, 'a stored login token').toBeTruthy();
 
 	await page.route(SESSION_CHECK, checkOutage);
-	await page.goto('/items');
+	await page.goto('/customers');
 	await expect(page.getByText('ログイン状態を確認できませんでした')).toBeVisible();
-	await expect(page).toHaveURL(/\/items$/);
+	await expect(page).toHaveURL(/\/customers$/);
 	expect(await storedTokens(page), 'the token is neither cleared nor replaced').toEqual(before);
 
 	await page.unroute(SESSION_CHECK, checkOutage);
 	await page.getByRole('button', { name: '再試行' }).click();
-	await expect(page).toHaveURL(/\/items$/);
+	await expect(page).toHaveURL(/\/customers$/);
 	await expect(page.getByRole('button', { name: 'ユーザーメニューを開く' })).toBeVisible();
 	expect(await storedTokens(page), 'the original session resumed').toEqual(before);
 }

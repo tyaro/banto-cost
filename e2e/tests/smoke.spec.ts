@@ -7,16 +7,21 @@
  * setup screen. All scenarios share ONE browser page/session and run in
  * file order (`describe.serial` + `workers: 1`, config-wide): later
  * scenarios rely on state earlier ones created (the admin account, the
- * item, the viewer account, the audit trail, ...), the same way a person
+ * customers, the viewer account, the audit trail, ...), the same way a person
  * clicking through the app once would. This is intentionally NOT a
  * from-scratch-state-per-test suite - keep new scenarios in this ordering
  * discipline rather than trying to make them independent.
  *
  * Deliberately scoped to a smoke pass (one scenario per screen, ~11 tests
  * total, per roadmap M18's non-scope note) - not exhaustive coverage of any
- * one feature (M14 audit log, M15 CSV, M16 command palette, M17 backups,
- * M20 attachments already have their own focused unit/integration tests
- * elsewhere).
+ * one feature (M14 audit log, M16 command palette, M17 backups already
+ * have their own focused unit/integration tests elsewhere).
+ *
+ * banto-cost: the template's `items` demo was removed (2026-11). The CRUD /
+ * unsaved-changes / SPA scenarios now run on the 顧客 (customers) screens;
+ * the items-only ones (inline grid editing, CSV export/import, the list
+ * filter/sort round trip and its last-edited marker, the cross-client nav
+ * badge - customers send no change events) were dropped with it.
  *
  * Flakiness: no explicit `waitForTimeout`/`sleep` in this file except one -
  * every wait is either Playwright's built-in locator auto-retry
@@ -37,19 +42,50 @@ const VIEWER_USERNAME = 'e2e-viewer';
 const VIEWER_PASSWORD = 'E2eViewerPass1';
 const VIEWER_DISPLAY_NAME = 'E2E閲覧者';
 
-// Timestamped so a stray leftover row from an interrupted previous run (this
-// suite always starts from a fresh DB, so that shouldn't happen, but the
-// name doubling as the grid-filter needle makes it worth being paranoid)
-// can never collide with the row this run creates.
-const ITEM_NAME = `E2Eテスト商品-${Date.now()}`;
-const ITEM_PRICE = 1200;
-const ITEM_PRICE_UPDATED = 1500;
-const ITEM_STOCK = 10;
+// Fictional customers (banto-cost CLAUDE.md: no real names). Timestamped so
+// the name doubling as the grid-filter needle can never collide with a
+// leftover row.
+const RUN = Date.now();
+const CUSTOMER_A = `E2E見本工業-${RUN}`;
+const CUSTOMER_A_RENAMED = `E2E見本工業（改）-${RUN}`;
+const CUSTOMER_B = `E2E試作電機-${RUN}`;
 
-// Issue #215 scenario 3c: a dedicated item so its filter/sort round trip
-// never touches (or is touched by) scenario 3's own item, which scenario 3
-// deletes at its end.
-const ROUNDTRIP_ITEM_NAME = `E2E往復テスト商品-${Date.now()}`;
+/** Call the REST API from the page with the session's own bearer token (same lookup order as admin-core's HTTP auth provider). */
+async function api<T = unknown>(
+	page: Page,
+	method: string,
+	path: string,
+	body?: unknown
+): Promise<T> {
+	return page.evaluate(
+		async ({ method, path, body }) => {
+			const token =
+				localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
+			const headers: Record<string, string> = {
+				'X-Banto-Client': 'banto',
+				Authorization: `Bearer ${token}`
+			};
+			if (body !== undefined) headers['Content-Type'] = 'application/json';
+			const res = await fetch(path, {
+				method,
+				headers,
+				body: body === undefined ? undefined : JSON.stringify(body)
+			});
+			if (!res.ok) throw new Error(`${method} ${path} failed: ${res.status} ${await res.text()}`);
+			return res.status === 204 ? null : res.json();
+		},
+		{ method, path, body }
+	) as Promise<T>;
+}
+
+/** `YYYY-MM` of this month and next month in the browser's local time (the dashboard's own rule). */
+async function thisAndNextMonth(page: Page): Promise<{ current: string; next: string }> {
+	return page.evaluate(() => {
+		const ym = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+		const now = new Date();
+		return { current: ym(now), next: ym(new Date(now.getFullYear(), now.getMonth() + 1, 1)) };
+	});
+}
 
 /** Open a filterable column's header filter and apply a "contains" filter (the default op) with `value`. Mirrors a user clicking the ▾ icon, typing, and clicking 適用 (FilterPopover.svelte). */
 async function applyColumnFilter(page: Page, columnHeader: string, value: string): Promise<void> {
@@ -57,21 +93,6 @@ async function applyColumnFilter(page: Page, columnHeader: string, value: string
 	await page.getByRole('button', { name: label }).click();
 	const dialog = page.getByRole('dialog', { name: label });
 	await dialog.getByPlaceholder('値を入力').fill(value);
-	await dialog.getByRole('button', { name: '適用' }).click();
-}
-
-/** Same as `applyColumnFilter` but for a number-typed column: picks `op` (FilterPopover.svelte's `<select>`, e.g. `'gte'`) before filling the numeric value. */
-async function applyNumberFilter(
-	page: Page,
-	columnHeader: string,
-	op: string,
-	value: number
-): Promise<void> {
-	const label = `${columnHeader}の絞り込み`;
-	await page.getByRole('button', { name: label }).click();
-	const dialog = page.getByRole('dialog', { name: label });
-	await dialog.getByRole('combobox').selectOption(op);
-	await dialog.getByPlaceholder('値を入力').fill(String(value));
 	await dialog.getByRole('button', { name: '適用' }).click();
 }
 
@@ -133,7 +154,7 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		// Without it, View Transitions (visual-refresh-design.md §11.1) freeze
 		// the OLD page's snapshot for the crossfade after each navigation and
 		// locators can pin an element from the outgoing page (e.g. getByLabel
-		// substring-matching a grid filter button right after goto /items/new).
+		// substring-matching a grid filter button right after goto /customers/new).
 		page = await browser.newPage({ reducedMotion: 'reduce' });
 	});
 
@@ -187,259 +208,114 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		await expect(page).toHaveURL(/\/dashboard$/);
 	});
 
-	test('3. items: create, appears in the grid, edit, delete', async () => {
-		await page.goto('/items');
-		await page.getByRole('button', { name: '新規作成' }).click();
-		await expect(page).toHaveURL(/\/items\/new$/);
+	test('3. customers: create, appears in the list, edit, and the edit persists', async () => {
+		for (const name of [CUSTOMER_A, CUSTOMER_B]) {
+			await page.goto('/customers');
+			await page.getByRole('button', { name: '顧客を登録' }).click();
+			await expect(page).toHaveURL(/\/customers\/new$/);
+			await page.getByLabel('顧客名').fill(name);
+			await page.getByRole('button', { name: '保存' }).click();
+			await expect(page).toHaveURL(/\/customers$/);
+		}
 
-		await page.getByLabel('商品名').fill(ITEM_NAME);
-		await page.getByLabel('価格').fill(String(ITEM_PRICE));
-		await page.getByLabel('在庫').fill(String(ITEM_STOCK));
-		await page.getByRole('button', { name: '保存' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-
-		// Server-mode grid, 1,000 seeded demo rows: filter by name (unique,
-		// timestamped) rather than scrolling/scanning for the new row.
-		await applyColumnFilter(page, '商品名', ITEM_NAME);
-		const row = rowWithText(page, ITEM_NAME);
+		await applyColumnFilter(page, '顧客名', CUSTOMER_A);
+		const row = rowWithText(page, CUSTOMER_A);
 		await expect(row).toBeVisible();
+		await expect(rowWithText(page, CUSTOMER_B)).toHaveCount(0);
+		await clearColumnFilter(page, '顧客名');
+		await expect(rowWithText(page, CUSTOMER_B)).toBeVisible();
 
 		const openLink = row.getByRole('link', { name: '開く' });
 		const href = await openLink.getAttribute('href');
-		expect(href).toMatch(/^\/items\/\d+$/);
-		const itemUrl = new RegExp(`${href}$`);
-
-		// Keyboard edit completion returns focus for the next action (#212,
-		// spec §4.5). Use real server saves before continuing without a mouse.
-		const grid = page.getByRole('grid');
-		const priceCell = row.locator('[data-cell-field="price"]');
-		const editor = grid.locator('.cell-editor');
-		// Hold every list response while saving two different columns (#212,
-		// PR #225 P1). A successful update must become the next edit's row
-		// before refresh completes, otherwise its full payload loses a save.
-		let releaseLists!: () => void;
-		const listGate = new Promise<void>((resolve) => {
-			releaseLists = resolve;
-		});
-		let heldLists = 0;
-		const listUrl = /\/api\/items\/list$/;
-		const pendingLists = new Set<Promise<void>>();
-		await page.route(listUrl, (route) => {
-			const pending = (async () => {
-				if (route.request().method() !== 'POST') return route.continue();
-				const response = await route.fetch();
-				heldLists++;
-				await listGate;
-				await route.fulfill({ response });
-			})();
-			pendingLists.add(pending);
-			return pending.finally(() => pendingLists.delete(pending));
-		});
-		try {
-			await priceCell.dblclick();
-			await editor.fill(String(ITEM_PRICE + 1));
-			await page.keyboard.press('Tab');
-			await expect(grid).toBeFocused();
-			await expect.poll(() => heldLists).toBeGreaterThan(0);
-			await page.keyboard.press('F2');
-			await expect(editor).toHaveValue(String(ITEM_STOCK));
-			await editor.fill(String(ITEM_STOCK + 1));
-			await page.keyboard.press('Enter');
-			await expect(grid).toBeFocused();
-			const saved = await page.evaluate(async (url) => {
-				const token =
-					localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
-				const response = await fetch(`/api${url}`, {
-					headers: { 'X-Banto-Client': 'banto', Authorization: `Bearer ${token}` }
-				});
-				if (!response.ok) throw new Error(`get item failed: ${response.status}`);
-				return response.json();
-			}, href!);
-			expect(saved).toMatchObject({ price: ITEM_PRICE + 1, stock: ITEM_STOCK + 1 });
-			// Restore through the same keyboard path, still without any list
-			// response reaching the app, for the existing CRUD assertions below.
-			await page.keyboard.press('F2');
-			await expect(editor).toHaveValue(String(ITEM_STOCK + 1));
-			await editor.fill(String(ITEM_STOCK));
-			await page.keyboard.press('Shift+Tab');
-			await expect(grid).toBeFocused();
-			await page.keyboard.press('F2');
-			await expect(editor).toHaveValue(String(ITEM_PRICE + 1));
-			await editor.fill(String(ITEM_PRICE));
-			await page.keyboard.press('Enter');
-			await expect(grid).toBeFocused();
-		} finally {
-			releaseLists();
-			// Finish the held replies before disabling network interception.
-			while (pendingLists.size > 0) await Promise.all([...pendingLists]);
-			await page.unrouteAll({ behavior: 'wait' });
-		}
-		await priceCell.dblclick();
-		for (const price of [ITEM_PRICE + 1, ITEM_PRICE]) {
-			await expect(editor).toBeFocused();
-			await editor.fill(String(price));
-			await page.keyboard.press('Enter');
-			await expect(grid).toBeFocused();
-			// The saved row is available even before the provider's refresh.
-			await expect(priceCell).toHaveText(`¥${price.toLocaleString('en-US')}`);
-			await page.keyboard.press('F2');
-			await expect(editor).toHaveValue(String(price));
-		}
-		await editor.fill('9999');
-		await page.keyboard.press('Escape');
-		await expect(editor).toHaveCount(0);
-		await expect(grid).toBeFocused();
-		await page.keyboard.press('ArrowRight');
-		await expect(grid.locator('.cell.active')).toHaveAttribute('data-cell-field', 'stock');
-		await page.keyboard.press('F2');
-		await expect(editor).toBeFocused();
-		await page.keyboard.press('Tab');
-		await expect(grid).toBeFocused();
-		await expect(grid.locator('.cell.active')).toHaveAttribute('data-cell-field', 'updatedAt');
-		await page.keyboard.press('ArrowLeft');
-		await page.keyboard.press('F2');
-		await expect(editor).toBeFocused();
-		await page.keyboard.press('Shift+Tab');
-		await expect(grid).toBeFocused();
-		await expect(grid.locator('.cell.active')).toHaveAttribute('data-cell-field', 'price');
-
-		// Non-editing Tab follows native focus order (spec §4.5, #211).
-		// jsdom cannot perform default Tab navigation, so exercise both grid
-		// boundaries here, with one filtered row to keep the sequence bounded.
-		const createButton = page.getByRole('button', { name: '新規作成' });
-		await row.locator('[data-cell-field="name"]').click();
-		await expect(grid).toBeFocused();
-		await page.keyboard.press('Home');
-		await expect(grid.locator('.cell.active')).toHaveAttribute('data-cell-field', 'open');
-		await page.keyboard.press('Shift+Tab');
-		await expect(createButton).toBeFocused();
-		await page.keyboard.press('Tab');
-		await expect(grid).toBeFocused();
-		await page.keyboard.press('End');
-		await expect(grid.locator('.cell.active')).toHaveAttribute('data-cell-field', 'updatedAt');
-
-		// Keep header sort/filter controls and the row link reachable. Tab
-		// events bubbling from those controls must not move the selected cell
-		// or trap focus either; the non-sortable actions header is not a tab stop.
-		const headerControls = await grid
-			.getByRole('row')
-			.first()
-			.locator('[tabindex="0"], button')
-			.all();
-		expect(headerControls.length).toBeGreaterThan(0);
-		for (const control of [...headerControls, openLink]) {
-			await page.keyboard.press('Tab');
-			await expect(control).toBeFocused();
-		}
-		await page.keyboard.press('Tab');
-		await expect(grid.locator(':focus')).toHaveCount(0);
-		for (const control of [openLink, ...[...headerControls].reverse(), grid, createButton]) {
-			await page.keyboard.press('Shift+Tab');
-			await expect(control).toBeFocused();
-		}
-		await expect(grid.locator('.cell.active')).toHaveAttribute('data-cell-field', 'updatedAt');
-
-		// Activate controls reached by Tab while an editable cell remains
-		// selected: Enter must act on the focused control, not start editing.
-		await row.locator('[data-cell-field="name"]').click();
-		await page.keyboard.press('Tab');
-		await expect(grid.getByRole('button', { name: 'ID', exact: true })).toBeFocused();
-		await page.keyboard.press('Enter');
-		await expect(grid.getByRole('columnheader').nth(1)).toHaveAttribute('aria-sort', 'ascending');
-		await expect(grid.locator('.cell-editor')).toHaveCount(0);
-		await expect(row).toBeVisible();
-		await row.locator('[data-cell-field="name"]').click();
-		for (const control of headerControls.slice(0, 4)) {
-			await page.keyboard.press('Tab');
-			await expect(control).toBeFocused();
-		}
-		await expect(grid.getByRole('button', { name: '商品名の絞り込み' })).toBeFocused();
-		await page.keyboard.press('Enter');
-		const filterDialog = page.getByRole('dialog', { name: '商品名の絞り込み' });
-		await expect(filterDialog).toBeVisible();
-		await expect(grid.locator('.cell-editor')).toHaveCount(0);
-		// #213: keyboard events inside the filter retain native control
-		// behavior even while an editable grid cell remains selected.
-		const filterInput = filterDialog.getByPlaceholder('値を入力');
-		const filterOperator = filterDialog.getByRole('combobox');
-		await filterInput.fill(ITEM_NAME);
-		for (const [key, caret] of [
-			['Home', 0],
-			['ArrowRight', 1],
-			['ArrowLeft', 0],
-			['End', ITEM_NAME.length]
-		] as const) {
-			await page.keyboard.press(key);
-			await expect(filterInput).toBeFocused();
-			await expect
-				.poll(() => filterInput.evaluate((input: HTMLInputElement) => input.selectionStart))
-				.toBe(caret);
-			await expect(row.locator('.cell.active')).toHaveAttribute('data-cell-field', 'name');
-			await expect(editor).toHaveCount(0);
-		}
-		await page.keyboard.press('Shift+Tab');
-		await expect(filterOperator).toBeFocused();
-		await page.keyboard.press('ArrowDown');
-		await expect(filterOperator).toHaveValue('starts_with');
-		await page.keyboard.press('ArrowDown');
-		await expect(filterOperator).toHaveValue('eq');
-		await page.keyboard.press('Tab');
-		await expect(filterInput).toBeFocused();
-		await page.keyboard.press('Tab');
-		await expect(filterDialog.getByRole('button', { name: '適用', exact: true })).toBeFocused();
-		await page.keyboard.press('Shift+Tab');
-		await expect(filterInput).toBeFocused();
-		await expect(row.locator('.cell.active')).toHaveAttribute('data-cell-field', 'name');
-		await expect(editor).toHaveCount(0);
-		const appliedFilter = page.waitForRequest(
-			(request) =>
-				new URL(request.url()).pathname === '/api/items/list' && request.method() === 'POST'
-		);
-		await page.keyboard.press('Enter');
-		expect((await appliedFilter).postDataJSON().filters).toEqual([
-			{ field: 'name', op: 'eq', value: ITEM_NAME }
-		]);
-		await expect(filterDialog).toHaveCount(0);
-		await expect(grid.locator('.cell-editor')).toHaveCount(0);
-		await expect(row).toBeVisible();
-		await row.locator('[data-cell-field="name"]').click();
-		for (const control of [...headerControls, openLink]) {
-			await page.keyboard.press('Tab');
-			await expect(control).toBeFocused();
-		}
-
-		// Edit: change price, save, and independently re-open the record (by
-		// URL, not via the grid/filter again) to confirm the new value
-		// actually persisted server-side.
-		await page.keyboard.press('Enter');
-		await expect(page).toHaveURL(itemUrl);
-		await expect(page.getByLabel('価格')).toHaveValue(String(ITEM_PRICE));
-		await page.getByLabel('価格').fill(String(ITEM_PRICE_UPDATED));
+		expect(href).toMatch(/^\/customers\/\d+$/);
+		await openLink.click();
+		await expect(page).toHaveURL(new RegExp(`${href}$`));
+		await expect(page.getByLabel('顧客名')).toHaveValue(CUSTOMER_A);
+		await page.getByLabel('顧客名').fill(CUSTOMER_A_RENAMED);
+		await page.getByLabel('備考').fill('E2E備考');
 		await page.getByRole('button', { name: '保存' }).click();
-		await expect(page).toHaveURL(/\/items$/);
+		await expect(page).toHaveURL(/\/customers$/);
 
+		// Re-open by URL (not through the grid) to confirm the server kept it.
 		await page.goto(href!);
-		await expect(page.getByLabel('価格')).toHaveValue(String(ITEM_PRICE_UPDATED));
+		await expect(page.getByLabel('顧客名')).toHaveValue(CUSTOMER_A_RENAMED);
+		await expect(page.getByLabel('備考')).toHaveValue('E2E備考');
 
-		// Delete (window.confirm - accept it before triggering the click).
-		page.once('dialog', (dialog) => dialog.accept());
-		await page.getByRole('button', { name: '削除' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-
-		await page.goto(href!);
-		await expect(page.getByText('商品が見つかりません')).toBeVisible();
+		// An id that is not a record shows the not-found state.
+		await page.goto('/customers/999999');
+		await expect(page.getByText('顧客が見つかりません')).toBeVisible();
 	});
 
-	// Issue #214: leaving the item form with unsaved input asks first. "Stay"
+	// The dashboard's 案件と売上の要約 reads the server aggregates: one project
+	// with an adopted estimate (¥1,000,000 at 50%, revenue planned next month)
+	// and one without any adopted version (= needs attention).
+	test('3g. dashboard: the summary shows the pipeline, the outlook and the projects needing attention', async () => {
+		await page.goto('/dashboard');
+		await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
+		const months = await thisAndNextMonth(page);
+		const users = await api<{ id: number; username: string }[]>(page, 'GET', '/api/users');
+		const manager = users.find((user) => user.username === ADMIN_USERNAME)!;
+		// The administrator sees no amounts by default (design 第2章): grant the
+		// sales / amount / company-report capabilities first.
+		await api(page, 'PUT', `/api/users/${manager.id}/capabilities`, {
+			capabilities: ['pipeline.edit', 'amount.view', 'report.all']
+		});
+		const customers = await api<{ rows: { id: number; name: string }[] }>(
+			page,
+			'POST',
+			'/api/customers/list',
+			{}
+		);
+		const customer = customers.rows.find((row) => row.name === CUSTOMER_B)!;
+		const project = (code: string, name: string) =>
+			api<{ id: number }>(page, 'POST', '/api/projects', {
+				code,
+				name,
+				customerId: customer.id,
+				managerUserId: manager.id,
+				status: 'quoting'
+			});
+		const estimated = await project(`E2E-${RUN}-1`, 'E2E見込あり案件');
+		await project(`E2E-${RUN}-2`, 'E2E採用版なし案件');
+		await api(page, 'POST', `/api/projects/${estimated.id}/pipeline-versions`, {
+			stage: 'quoting',
+			expectedAmount: 1_000_000,
+			probabilityPct: 50,
+			expectedOrderMonth: months.current,
+			expectedStartMonth: null,
+			expectedEndMonth: null,
+			estCostAtOrder: null,
+			basis: 'E2E見積提出',
+			nextAction: null,
+			confirmedOn: null,
+			revenuePlan: [{ month: months.next, amount: 1_000_000 }],
+			adopt: true
+		});
+
+		await page.reload();
+		const tile = (id: string) => page.locator(`[data-tile="${id}"] .stat-value`);
+		await expect(tile('pipeline-total')).toHaveText('¥1,000,000');
+		await expect(tile('pipeline-weighted')).toHaveText('¥500,000');
+		await expect(tile('outlook-this-month')).toHaveText('¥0');
+		await expect(tile('outlook-next-month')).toHaveText('¥500,000');
+		await expect(tile('attention')).toHaveText('1');
+
+		// Each business screen is one click away.
+		await page.getByRole('link', { name: /^案件見込 受注前/ }).click();
+		await expect(page).toHaveURL(/\/pipeline$/);
+		await expect(page.getByText('E2E見込あり案件').first()).toBeVisible();
+	});
+
+	// Issue #214: leaving the customer form with unsaved input asks first. "Stay"
 	// keeps the input, "leave" moves; no prompt after a save, after undoing
 	// the edit, or for a clean form.
-	test('3a. items: unsaved input asks before leaving, save and a clean form do not', async () => {
+	test('3a. customers: unsaved input asks before leaving, save and a clean form do not', async () => {
 		const dialogs = trackDialogs(page);
 		const unsaved = page.getByText('未保存の変更があります');
 		const mainNav = page.getByRole('navigation', { name: '主要ナビゲーション' });
 		try {
-			await page.goto('/items/new');
-			const name = page.getByLabel('商品名');
+			await page.goto('/customers/new');
+			const name = page.getByLabel('顧客名');
 			await expect(name).toBeVisible();
 			await expect(unsaved).toHaveCount(0);
 
@@ -450,57 +326,44 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 			dialogs.answer(false);
 			await mainNav.getByRole('link', { name: 'ダッシュボード' }).click();
 			await expect.poll(() => dialogs.messages).toEqual([LEAVE_PROMPT]);
-			await expect(page).toHaveURL(/\/items\/new$/);
+			await expect(page).toHaveURL(/\/customers\/new$/);
 			await expect(name).toHaveValue('E2E未保存の入力');
 			await expect(page.getByRole('button', { name: '保存' })).toBeEnabled();
 
 			// Leave via the form's own "back to list" (= cancel).
 			dialogs.answer(true);
 			await page.getByRole('link', { name: '一覧へ戻る' }).click();
-			await expect(page).toHaveURL(/\/items$/);
+			await expect(page).toHaveURL(/\/customers$/);
 			expect(dialogs.messages).toHaveLength(2);
 
 			// Typing and then undoing the edit is not "unsaved".
-			await page.getByRole('button', { name: '新規作成' }).click();
-			await expect(page).toHaveURL(/\/items\/new$/);
-			await page.getByLabel('商品名').fill('一時的');
+			await page.getByRole('button', { name: '顧客を登録' }).click();
+			await expect(page).toHaveURL(/\/customers\/new$/);
+			await page.getByLabel('顧客名').fill('一時的');
 			await expect(unsaved).toBeVisible();
-			await page.getByLabel('商品名').fill('');
+			await page.getByLabel('顧客名').fill('');
 			await expect(unsaved).toHaveCount(0);
 			// Blur first: the now-empty required field shows its error on
 			// blur, which shifts the footer - clicking straight away would let
 			// that layout shift swallow the click.
-			await page.getByLabel('商品名').blur();
+			await page.getByLabel('顧客名').blur();
 			await expect(page.getByText('必須項目です')).toBeVisible();
 			await page.getByRole('link', { name: '一覧へ戻る' }).click();
-			await expect(page).toHaveURL(/\/items$/);
+			await expect(page).toHaveURL(/\/customers$/);
 
 			// A successful save goes back to the list without a prompt.
-			await page.getByRole('button', { name: '新規作成' }).click();
-			await expect(page).toHaveURL(/\/items\/new$/);
-			await page.getByLabel('商品名').fill(`E2E未保存ガード-${Date.now()}`);
-			await page.getByLabel('価格').fill('10');
-			await page.getByLabel('在庫').fill('1');
+			await page.getByRole('button', { name: '顧客を登録' }).click();
+			await expect(page).toHaveURL(/\/customers\/new$/);
+			await page.getByLabel('顧客名').fill(`E2E未保存ガード-${Date.now()}`);
 			const created = page.waitForResponse(
 				(response) =>
-					new URL(response.url()).pathname === '/api/items' &&
+					new URL(response.url()).pathname === '/api/customers' &&
 					response.request().method() === 'POST'
 			);
 			await page.getByRole('button', { name: '保存' }).click();
-			const createdId = ((await (await created).json()) as { id: number }).id;
-			await expect(page).toHaveURL(/\/items$/);
+			expect((await created).ok()).toBe(true);
+			await expect(page).toHaveURL(/\/customers$/);
 			expect(dialogs.messages).toHaveLength(2);
-
-			// Keep the item count at its seed baseline for later scenarios.
-			await page.evaluate(async (id) => {
-				const token =
-					localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
-				const res = await fetch(`/api/items/${id}`, {
-					method: 'DELETE',
-					headers: { 'X-Banto-Client': 'banto', Authorization: `Bearer ${token}` }
-				});
-				if (!res.ok) throw new Error(`delete failed: ${res.status}`);
-			}, createdId);
 		} finally {
 			dialogs.stop();
 		}
@@ -513,7 +376,7 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 	// chunk - this page was freshly loaded, so the dashboard's is not in the
 	// module cache yet) are both held so the order is fixed:
 	// agree to leave -> save succeeds -> the chosen screen finishes loading.
-	test('3b. items: a save that finishes after agreeing to leave does not override the chosen screen', async () => {
+	test('3b. customers: a save that finishes after agreeing to leave does not override the chosen screen', async () => {
 		const dialogs = trackDialogs(page);
 		const mainNav = page.getByRole('navigation', { name: '主要ナビゲーション' });
 		let releaseSave!: () => void;
@@ -521,21 +384,18 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		let releaseChunks!: () => void;
 		const chunkGate = new Promise<void>((resolve) => (releaseChunks = resolve));
 		let chunkHeld = false;
-		let createdId: number | undefined;
 		try {
-			await page.goto('/items/new');
-			await page.getByLabel('商品名').fill(`E2E離脱中の保存-${Date.now()}`);
-			await page.getByLabel('価格').fill('10');
-			await page.getByLabel('在庫').fill('1');
+			await page.goto('/customers/new');
+			await page.getByLabel('顧客名').fill(`E2E離脱中の保存-${Date.now()}`);
 
-			await page.route('**/api/items', async (route) => {
+			await page.route('**/api/customers', async (route) => {
 				if (route.request().method() !== 'POST') return route.continue();
 				await saveGate;
 				return route.continue();
 			});
 			const created = page.waitForResponse(
 				(response) =>
-					new URL(response.url()).pathname === '/api/items' &&
+					new URL(response.url()).pathname === '/api/customers' &&
 					response.request().method() === 'POST'
 			);
 			await page.getByRole('button', { name: '保存' }).click();
@@ -554,7 +414,7 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 
 			// The save wins the race while the dashboard is still loading.
 			releaseSave();
-			createdId = ((await (await created).json()) as { id: number }).id;
+			expect((await created).ok()).toBe(true);
 			await expect(page.getByText('保存しました')).toBeVisible();
 
 			releaseChunks();
@@ -567,318 +427,19 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 			await page.unrouteAll({ behavior: 'wait' });
 			dialogs.stop();
 		}
-		// A late goto('/items') would have replaced the dashboard by now:
+		// A late goto('/customers') would have replaced the dashboard by now:
 		// every request it makes has been let through above.
 		await expect(page).toHaveURL(/\/dashboard$/);
-
-		// Keep the item count at its seed baseline for later scenarios.
-		await page.evaluate(async (id) => {
-			const token =
-				localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
-			const res = await fetch(`/api/items/${id}`, {
-				method: 'DELETE',
-				headers: { 'X-Banto-Client': 'banto', Authorization: `Bearer ${token}` }
-			});
-			if (!res.ok) throw new Error(`delete failed: ${res.status}`);
-		}, createdId!);
-	});
-
-	// Issue #215: a list -> detail -> save -> list round trip must restore
-	// the filter/sort the user had (not reset to the page's defaults), mark
-	// the row that was just worked on, and - if the save moved the row
-	// outside the still-active filter - explain that instead of silently
-	// clearing the filter. サーバーモード grid (the page's default), which is
-	// also what scenario 3 above exercises.
-	test('3c. items: a save round trip restores the filter/sort and marks the row; an edit that no longer matches the filter is explained, not hidden by clearing it', async () => {
-		await page.goto('/items');
-		await page.getByRole('button', { name: '新規作成' }).click();
-		await expect(page).toHaveURL(/\/items\/new$/);
-		await page.getByLabel('商品名').fill(ROUNDTRIP_ITEM_NAME);
-		await page.getByLabel('価格').fill('800');
-		await page.getByLabel('在庫').fill('3');
-		await page.getByRole('button', { name: '保存' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-
-		// Narrow to just this row (name filter) and add a second, numeric
-		// filter that price=800 currently satisfies - so editing price alone
-		// can later violate ONLY the second filter without the row ever
-		// leaving view via the first. Also sort - a second axis of "state"
-		// that must survive the round trip alongside the filters.
-		await applyColumnFilter(page, '商品名', ROUNDTRIP_ITEM_NAME);
-		await applyNumberFilter(page, '価格', 'gte', 500);
-		const row = rowWithText(page, ROUNDTRIP_ITEM_NAME);
-		await expect(row).toBeVisible();
-
-		const grid = page.getByRole('grid');
-		// Substring match on the columnheader is stable across a sort toggle
-		// (no other column's name contains "価格"); the inner `.cell-body` is
-		// clicked directly rather than by accessible name, since HeaderCell
-		// appends the sort arrow to THAT name once sorted (e.g. "価格 ▲"),
-		// which would make an `exact: true` button-name lookup stop matching
-		// after the first click.
-		const priceHeader = grid.getByRole('columnheader', { name: '価格' });
-		const priceSortBody = priceHeader.locator('.cell-body');
-		await priceSortBody.click();
-		await expect(priceHeader).toHaveAttribute('aria-sort', 'ascending');
-		await priceSortBody.click();
-		await expect(priceHeader).toHaveAttribute('aria-sort', 'descending');
-
-		const openLink = row.getByRole('link', { name: '開く' });
-		const href = await openLink.getAttribute('href');
-		expect(href).toMatch(/^\/items\/\d+$/);
-		const itemId = href!.split('/').pop();
-		const itemUrl = new RegExp(`${href}$`);
-
-		// Edit 1: price still satisfies both filters (name unaffected, price
-		// 850 >= 500) - the row must still be there, under the same filters
-		// and sort, AND marked as the one just worked on (rowClass
-		// `items-row-last-opened`, +page.svelte).
-		await openLink.click();
-		await expect(page).toHaveURL(itemUrl);
-		await page.getByLabel('価格').fill('850');
-		await page.getByRole('button', { name: '保存' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-
-		await expect(priceHeader).toHaveAttribute('aria-sort', 'descending');
-		await expect(row).toBeVisible();
-		await expect(row).toHaveClass(/items-row-last-opened/);
-		await page.getByRole('button', { name: '商品名の絞り込み' }).click();
-		await expect(
-			page.getByRole('dialog', { name: '商品名の絞り込み' }).getByPlaceholder('値を入力')
-		).toHaveValue(ROUNDTRIP_ITEM_NAME);
-		await page.keyboard.press('Escape');
-		await page.getByRole('button', { name: '価格の絞り込み' }).click();
-		await expect(
-			page.getByRole('dialog', { name: '価格の絞り込み' }).getByPlaceholder('値を入力')
-		).toHaveValue('500');
-		await page.keyboard.press('Escape');
-		await expect(page.getByText(/現在の絞り込み条件に当てはまりません/)).toHaveCount(0);
-
-		// Edit 2: price now FAILS the 価格>=500 filter (still passes the name
-		// filter). The row must disappear from view (真面目にフィルタが効いて
-		// いる証拠) - but the filter itself must NOT be reset, and a notice
-		// must explain why this item no longer shows.
-		await page.goto(href!);
-		await expect(page.getByLabel('価格')).toHaveValue('850');
-		await page.getByLabel('価格').fill('100');
-		await page.getByRole('button', { name: '保存' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-
-		await expect(row).toHaveCount(0);
-		await expect(
-			page.getByText(new RegExp(`商品 #${itemId} は現在の絞り込み条件に当てはまりません`))
-		).toBeVisible();
-		await page.getByRole('button', { name: '商品名の絞り込み' }).click();
-		await expect(
-			page.getByRole('dialog', { name: '商品名の絞り込み' }).getByPlaceholder('値を入力')
-		).toHaveValue(ROUNDTRIP_ITEM_NAME);
-		await page.keyboard.press('Escape');
-		await page.getByRole('button', { name: '価格の絞り込み' }).click();
-		await expect(
-			page.getByRole('dialog', { name: '価格の絞り込み' }).getByPlaceholder('値を入力')
-		).toHaveValue('500');
-		await page.keyboard.press('Escape');
-
-		// Dismissing the notice hides it without touching the filters again.
-		await page.locator('.filter-exclusion-notice').getByRole('button', { name: '閉じる' }).click();
-		await expect(page.locator('.filter-exclusion-notice')).toHaveCount(0);
-		await page.getByRole('button', { name: '商品名の絞り込み' }).click();
-		await expect(
-			page.getByRole('dialog', { name: '商品名の絞り込み' }).getByPlaceholder('値を入力')
-		).toHaveValue(ROUNDTRIP_ITEM_NAME);
-		await page.keyboard.press('Escape');
-
-		// Cleanup: clear the filters and sort (leaves the grid exactly as
-		// later scenarios expect it - unfiltered, unsorted) and delete the
-		// item via the API, same pattern scenario 3a/3b use for their own
-		// leftover items.
-		await clearColumnFilter(page, '商品名');
-		await clearColumnFilter(page, '価格');
-		await priceSortBody.click(); // desc -> removed (toggleSort)
-		await expect(priceHeader).not.toHaveAttribute('aria-sort', 'descending');
-		await page.evaluate(async (id) => {
-			const token =
-				localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
-			const res = await fetch(`/api/items/${id}`, {
-				method: 'DELETE',
-				headers: { 'X-Banto-Client': 'banto', Authorization: `Bearer ${token}` }
-			});
-			if (!res.ok) throw new Error(`delete failed: ${res.status}`);
-		}, itemId!);
-	});
-
-	// Issue #215/#255 review (fix 2): a detail-page save's response can
-	// arrive after this tab's session has already moved on - the user (or
-	// someone else) logged out and a login (same or different account)
-	// completed while the request was still in flight. That response must
-	// not resurrect the OLD session's "last edited row" marker under the
-	// NEW session, or the exclusion-notice check (scenario 3c) would run
-	// against a row that has nothing to do with what's on screen now.
-	test('3d. items: a save response that arrives after logout+re-login does not resurrect the last-edited marker', async () => {
-		await page.goto('/items');
-		await page.getByRole('button', { name: '新規作成' }).click();
-		await expect(page).toHaveURL(/\/items\/new$/);
-		const STALE_SAVE_ITEM_NAME = `E2E陳腐化保存-${Date.now()}`;
-		await page.getByLabel('商品名').fill(STALE_SAVE_ITEM_NAME);
-		await page.getByLabel('価格').fill('300');
-		await page.getByLabel('在庫').fill('2');
-		await page.getByRole('button', { name: '保存' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-
-		await applyColumnFilter(page, '商品名', STALE_SAVE_ITEM_NAME);
-		const row = rowWithText(page, STALE_SAVE_ITEM_NAME);
-		const href = await row.getByRole('link', { name: '開く' }).getAttribute('href');
-		expect(href).toMatch(/^\/items\/\d+$/);
-		const itemId = href!.split('/').pop();
-
-		await page.goto(href!);
-		await expect(page.getByLabel('価格')).toHaveValue('300');
-
-		let releaseSave!: () => void;
-		const saveGate = new Promise<void>((resolve) => (releaseSave = resolve));
-		// Fulfill with a FAKE success instead of `route.continue()`: the real
-		// backend revokes the bearer token on logout, so a request that was
-		// only IN FLIGHT before the logout below would come back 401 either
-		// way once actually forwarded - which would make this test pass
-		// regardless of whether the fix exists (confirmed while writing this
-		// test: `result.ok` was already `false` via the real server, so the
-		// marker-write code this scenario targets was never even reached).
-		// Faking the response is what actually exercises "a save that
-		// SUCCEEDS after the session moved on", the case the fix guards.
-		await page.route(`**/api/items/${itemId}`, async (route) => {
-			if (route.request().method() !== 'PUT') return route.continue();
-			await saveGate;
-			return route.fulfill({
-				status: 200,
-				contentType: 'application/json',
-				body: JSON.stringify({
-					id: Number(itemId),
-					name: STALE_SAVE_ITEM_NAME,
-					price: 850,
-					stock: 2,
-					updatedAt: '2026-01-01'
-				})
-			});
-		});
-		try {
-			await page.getByLabel('価格').fill('850');
-			await page.getByRole('button', { name: '保存' }).click();
-			// The click starts `formResource.submit()`, which is now held at
-			// the route above - no response yet, so nothing to `waitForResponse`
-			// on until `releaseSave()` below.
-
-			// Logging out is a FORCED navigation (unsavedChanges.ts:
-			// "every path to /login means the session is ending") - no
-			// confirm dialog, unlike scenario 3b's leave-to-dashboard case.
-			await logout(page);
-			await expect(page).toHaveURL(/\/login$/);
-
-			// Re-login as the SAME account: the owner matches again, so only
-			// the session generation (the logout ended the session; the
-			// detail page's captured scope is stale) and the page's own
-			// teardown keep the old save from writing its marker.
-			await page.getByLabel('ユーザー名').fill(ADMIN_USERNAME);
-			await page.getByLabel('パスワード').fill(ADMIN_PASSWORD);
-			await page.getByRole('button', { name: 'ログイン' }).click();
-			await expect(page).toHaveURL(/\/dashboard$/);
-
-			// NOW let the held (faked-success) save resolve - after both the
-			// logout and the next login have fully completed.
-			releaseSave();
-
-			// A deliberate, bounded exception to this file's no-waitForTimeout
-			// policy (like scenario 13b's own exception): there is no visible
-			// UI signal for "handleSubmit's `.then` continuation has run" once
-			// its page has already navigated away twice - `expect.poll` would
-			// wrongly PASS on its very first check (before the write has had a
-			// chance to happen) rather than catch a write that happens a
-			// moment later, since a poll stops at its first matching read.
-			await page.waitForTimeout(500);
-			expect(
-				await page.evaluate(() => sessionStorage.getItem('banto.listView.lastEdited.items'))
-			).toBeNull();
-			// The dashboard is still what's on screen - the stale save did not
-			// drag this tab back to /items either (guard.canAutoNavigate is
-			// false once the user has already left, same as scenario 3b).
-			await expect(page).toHaveURL(/\/dashboard$/);
-		} finally {
-			releaseSave();
-			await page.unrouteAll({ behavior: 'wait' });
-		}
-
-		await page.goto('/items');
-		await page.evaluate(() => sessionStorage.removeItem('banto.listView.lastEdited.items'));
-		await page.evaluate(async (id) => {
-			const token =
-				localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
-			const res = await fetch(`/api/items/${id}`, {
-				method: 'DELETE',
-				headers: { 'X-Banto-Client': 'banto', Authorization: `Bearer ${token}` }
-			});
-			if (!res.ok) throw new Error(`delete failed: ${res.status}`);
-		}, itemId!);
-	});
-
-	// Issue #215/#255 review (fix 3): the CLIENT grid filters/shows rows
-	// through `toItemRow()` (adds the synthetic `category` field), not the
-	// raw `Item`. The exclusion check must run the SAME derivation, or a
-	// category-filtered row whose non-category field was the only thing
-	// saved gets wrongly flagged as excluded even though it's still plainly
-	// visible in the grid.
-	test('3e. items: client mode - saving a field other than category keeps a category-filtered row visible, no false exclusion notice', async () => {
-		await page.goto('/items');
-		await page.getByRole('button', { name: 'クライアント' }).click();
-		await expect(page.getByRole('button', { name: 'クライアント' })).toHaveAttribute(
-			'aria-pressed',
-			'true'
-		);
-
-		await applyColumnFilter(page, 'カテゴリ', '緑茶');
-		const row = page.getByRole('row').filter({ hasText: '緑茶' }).first();
-		await expect(row).toBeVisible();
-		const openLink = row.getByRole('link', { name: '開く' });
-		const href = await openLink.getAttribute('href');
-		expect(href).toMatch(/^\/items\/\d+$/);
-		// `href` (the row's item id) is unique, unlike its name/category text
-		// (many seeded rows share e.g. "緑茶 350ml") - identify the row again
-		// after the round trip by the exact link it renders, not by text.
-		const rowAfterHref = (): Locator =>
-			page.getByRole('row').filter({ has: page.locator(`a[href="${href}"]`) });
-
-		await openLink.click();
-		await expect(page).toHaveURL(new RegExp(`${href}$`));
-		const currentPrice = await page.getByLabel('価格').inputValue();
-		await page.getByLabel('価格').fill(String(Number(currentPrice) + 1));
-		await page.getByRole('button', { name: '保存' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-
-		// Still visible under the same カテゴリ filter, and no false "この行
-		// は現在の絞り込み条件に当てはまりません" notice.
-		await expect(page.getByRole('button', { name: 'クライアント' })).toHaveAttribute(
-			'aria-pressed',
-			'true'
-		);
-		await expect(rowAfterHref()).toBeVisible();
-		await expect(page.getByText(/現在の絞り込み条件に当てはまりません/)).toHaveCount(0);
-
-		await clearColumnFilter(page, 'カテゴリ');
-		// Cleanup: leave the page in the same サーバー default later scenarios
-		// expect (mode is itself session-persisted, Issue #215).
-		await page.getByRole('button', { name: 'サーバー' }).click();
-		await expect(page.getByRole('button', { name: 'サーバー' })).toHaveAttribute(
-			'aria-pressed',
-			'true'
-		);
 	});
 
 	// Issue #290: SvelteKit reuses the page component between two URLs of the
-	// same route (items/1 -> items/2 only updates `page.params`). The detail
+	// same route (customers/1 -> customers/2 only updates `page.params`). The detail
 	// page reads its id once at setup, so without the (app) layout keying the
-	// page on its params the URL moved on while the form, attachments and
+	// page on its params the URL moved on while the form and
 	// save target stayed on the previous record (a save then PUT the WRONG id).
 	// Every hop here is a client-side navigation (anchor click handled by
 	// SvelteKit / history), never a full page load.
-	test('3f. items: moving between two detail URLs (SPA) keeps URL, form and save target on the same record', async () => {
+	test('3f. customers: moving between two detail URLs (SPA) keeps URL, form and save target on the same record', async () => {
 		const dialogs = trackDialogs(page);
 		/** Click a plain anchor to `href`: SvelteKit turns it into a client-side navigation. */
 		const spa = (href: string) =>
@@ -889,27 +450,27 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 				a.click();
 				a.remove();
 			}, href);
-		const readItem = (id: number) =>
+		const readCustomer = (id: number) =>
 			page.evaluate(async (id) => {
 				const token =
 					localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
-				const res = await fetch(`/api/items/${id}`, {
+				const res = await fetch(`/api/customers/${id}`, {
 					headers: { 'X-Banto-Client': 'banto', Authorization: `Bearer ${token}` }
 				});
 				return (await res.json()) as { name: string };
 			}, id);
-		const name = page.getByLabel('商品名');
+		const name = page.getByLabel('顧客名');
 		try {
 			await page.goto('/dashboard');
 			await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
-			const a = await readItem(1);
-			const b = await readItem(2);
+			const a = await readCustomer(1);
+			const b = await readCustomer(2);
 			expect(a.name).not.toBe(b.name);
 
-			// Saves are answered by the test (echoing the body), so the seed data
+			// Saves are answered by the test (echoing the body), so scenario 3's data
 			// is untouched and the request path says which record was targeted.
 			const puts: string[] = [];
-			await page.route('**/api/items/*', async (route) => {
+			await page.route('**/api/customers/*', async (route) => {
 				const request = route.request();
 				if (request.method() !== 'PUT') return route.fallback();
 				puts.push(new URL(request.url()).pathname);
@@ -921,46 +482,46 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 			});
 
 			// B -> A directly (the case that reuses the component).
-			await spa('/items/2');
-			await expect(page).toHaveURL(/\/items\/2$/);
+			await spa('/customers/2');
+			await expect(page).toHaveURL(/\/customers\/2$/);
 			await expect(name).toHaveValue(b.name);
-			await spa('/items/1');
-			await expect(page).toHaveURL(/\/items\/1$/);
+			await spa('/customers/1');
+			await expect(page).toHaveURL(/\/customers\/1$/);
 			await expect(name).toHaveValue(a.name);
 
 			// The user-visible form is A's, so the save must target A.
 			await name.fill(`${a.name}-3f`);
 			await page.getByRole('button', { name: '保存' }).click();
-			await expect(page).toHaveURL(/\/items$/);
-			expect(puts).toEqual(['/api/items/1']);
+			await expect(page).toHaveURL(/\/customers$/);
+			expect(puts).toEqual(['/api/customers/1']);
 
 			// History: A -> list -> B, then back to the list and back to A.
-			await spa('/items/1');
-			await expect(page).toHaveURL(/\/items\/1$/);
+			await spa('/customers/1');
+			await expect(page).toHaveURL(/\/customers\/1$/);
 			await expect(name).toHaveValue(a.name);
-			await spa('/items');
-			await expect(page).toHaveURL(/\/items$/);
-			await spa('/items/2');
-			await expect(page).toHaveURL(/\/items\/2$/);
+			await spa('/customers');
+			await expect(page).toHaveURL(/\/customers$/);
+			await spa('/customers/2');
+			await expect(page).toHaveURL(/\/customers\/2$/);
 			await expect(name).toHaveValue(b.name);
 			await page.goBack();
-			await expect(page).toHaveURL(/\/items$/);
+			await expect(page).toHaveURL(/\/customers$/);
 			await page.goBack();
-			await expect(page).toHaveURL(/\/items\/1$/);
+			await expect(page).toHaveURL(/\/customers\/1$/);
 			await expect(name).toHaveValue(a.name);
 
 			// An unsaved edit is still guarded when the move is to ANOTHER detail
 			// URL: staying keeps the edit and the URL.
 			await name.fill('E2E未保存-3f');
 			dialogs.answer(false);
-			await spa('/items/2');
+			await spa('/customers/2');
 			await expect.poll(() => dialogs.messages).toEqual([LEAVE_PROMPT]);
-			await expect(page).toHaveURL(/\/items\/1$/);
+			await expect(page).toHaveURL(/\/customers\/1$/);
 			await expect(name).toHaveValue('E2E未保存-3f');
 			// Leaving discards it and shows B.
 			dialogs.answer(true);
-			await spa('/items/2');
-			await expect(page).toHaveURL(/\/items\/2$/);
+			await spa('/customers/2');
+			await expect(page).toHaveURL(/\/customers\/2$/);
 			await expect(name).toHaveValue(b.name);
 			expect(dialogs.messages).toHaveLength(2);
 
@@ -968,85 +529,36 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 			// page we are on now: hold B's GET, move on to A, then release it.
 			let release: () => void = () => {};
 			const gate = new Promise<void>((resolve) => (release = resolve));
-			await page.route('**/api/items/2', async (route) => {
+			await page.route('**/api/customers/2', async (route) => {
 				if (route.request().method() !== 'GET') return route.fallback();
 				await gate;
 				await route.fallback();
 			});
-			await spa('/items');
-			await expect(page).toHaveURL(/\/items$/);
-			await spa('/items/2');
-			await expect(page).toHaveURL(/\/items\/2$/);
-			await spa('/items/1');
-			await expect(page).toHaveURL(/\/items\/1$/);
+			await spa('/customers');
+			await expect(page).toHaveURL(/\/customers$/);
+			await spa('/customers/2');
+			await expect(page).toHaveURL(/\/customers\/2$/);
+			await spa('/customers/1');
+			await expect(page).toHaveURL(/\/customers\/1$/);
 			await expect(name).toHaveValue(a.name);
 			release();
 			await page.waitForTimeout(300);
-			await expect(page).toHaveURL(/\/items\/1$/);
+			await expect(page).toHaveURL(/\/customers\/1$/);
 			await expect(name).toHaveValue(a.name);
 
 			// An id that cannot be a record, between two valid ones: not found,
 			// and the next valid id loads normally (no stale "valid" state).
-			await spa('/items/abc');
+			await spa('/customers/abc');
 			await expect(page.getByText('が見つかりません').first()).toBeVisible();
 			await expect(name).toHaveCount(0);
-			await spa('/items/2');
-			await expect(page).toHaveURL(/\/items\/2$/);
+			await spa('/customers/2');
+			await expect(page).toHaveURL(/\/customers\/2$/);
 			await expect(name).toHaveValue(b.name);
 		} finally {
 			dialogs.stop();
-			await page.unroute('**/api/items/*');
-			await page.unroute('**/api/items/2');
+			await page.unroute('**/api/customers/*');
+			await page.unroute('**/api/customers/2');
 		}
-	});
-
-	test('4. CSV export downloads a UTF-8-BOM CSV file', async () => {
-		await page.goto('/items');
-
-		const downloadPromise = page.waitForEvent('download');
-		await page.getByRole('button', { name: 'CSVエクスポート' }).click();
-		const download = await downloadPromise;
-
-		expect(download.suggestedFilename()).toMatch(/^items-\d{8}-\d{4}\.csv$/);
-		const filePath = await download.path();
-		expect(filePath).not.toBeNull();
-
-		// csvForExcel (packages/grid-svelte/src/core/csv.ts) prefixes a UTF-8
-		// BOM so Excel on Japanese Windows opens the file without mojibake -
-		// verify the actual downloaded bytes, not just the in-app helper.
-		const firstBytes = fs.readFileSync(filePath!).subarray(0, 3);
-		expect(Buffer.from(firstBytes)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
-	});
-
-	test('4b. CSV import: the preview shows the first 10 rows, new/update labels, and cancel imports nothing', async () => {
-		await page.goto('/items');
-
-		// 12 data rows: 11 new (no id) + 1 update (id 1) -> over the 10-row
-		// preview limit (issue #218). Cancelled below, never executed, so no
-		// later scenario's data changes.
-		const lines = ['id,name,price,stock', '1,プレビュー更新,150,7'];
-		for (let i = 1; i <= 11; i++) lines.push(`,プレビュー新規${i},${100 + i},${i}`);
-		await page.locator('input[type="file"][accept=".csv,.txt"]').setInputFiles({
-			name: 'preview.csv',
-			mimeType: 'text/csv',
-			buffer: Buffer.from(lines.join('\n'), 'utf-8')
-		});
-
-		const panel = page.locator('section.import-panel');
-		await expect(panel).toBeVisible();
-		await expect(panel.getByText('新規 11件 / 更新 1件 / エラー 0件（全12行）')).toBeVisible();
-		await expect(panel.getByText('全12行中 先頭10行を表示')).toBeVisible();
-		const table = panel.getByRole('table', { name: '取込内容のプレビュー（先頭の行）' });
-		// header row + 10 shown rows (the 12-row file is cut at the limit)
-		await expect(table.getByRole('row')).toHaveCount(11);
-		await expect(table.getByRole('row', { name: /更新.*プレビュー更新/ })).toBeVisible();
-		await expect(table.getByRole('cell', { name: '新規', exact: true }).first()).toBeVisible();
-		await expect(table.getByText('プレビュー新規9')).toBeVisible();
-		await expect(table.getByText('プレビュー新規10')).toHaveCount(0);
-		await expect(panel.getByText('1件は既存レコードの更新です', { exact: false })).toBeVisible();
-
-		await panel.getByRole('button', { name: 'キャンセル' }).click();
-		await expect(panel).toHaveCount(0);
 	});
 
 	test('5. user management: create a viewer account and preserve selection across replies', async () => {
@@ -1345,22 +857,7 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		}
 	});
 
-	test('6. viewer role: no admin nav entries, no items create button; #215 list state does not leak to a different user logging in', async () => {
-		// #215/#255 review (P2): the admin sets a filter/sort and opens a row
-		// right before logging out - none of it may resurrect for the VIEWER
-		// who logs into this same tab next (it would show them the admin's
-		// search term and which row the admin had open).
-		await page.goto('/items');
-		await applyColumnFilter(page, '商品名', '茶');
-		const grid = page.getByRole('grid');
-		const priceHeader = grid.getByRole('columnheader', { name: '価格' });
-		await priceHeader.locator('.cell-body').click();
-		await expect(priceHeader).toHaveAttribute('aria-sort', 'ascending');
-		await rowWithText(page, '茶').first().getByRole('link', { name: '開く' }).click();
-		await expect(page).toHaveURL(/\/items\/\d+$/);
-		await page.goBack();
-		await expect(page).toHaveURL(/\/items$/);
-
+	test('6. viewer role: no admin nav entries, no customer create button', async () => {
 		await logout(page);
 		await expect(page).toHaveURL(/\/login$/);
 
@@ -1374,126 +871,26 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		await expect(page.getByRole('link', { name: 'ユーザー管理' })).toHaveCount(0);
 		await expect(page.getByRole('link', { name: '監査ログ' })).toHaveCount(0);
 
-		await page.goto('/items');
-		await expect(page.getByRole('button', { name: '新規作成' })).toHaveCount(0);
+		// A viewer with no capability (design 第2章) cannot read the customer
+		// master, and is never offered the create button.
+		await page.goto('/customers');
+		await expect(page.getByText('閲覧する権限がありません').first()).toBeVisible();
+		await expect(page.getByRole('button', { name: '顧客を登録' })).toHaveCount(0);
 
-		// The filter, sort and highlighted row the admin left behind must all
-		// be gone - saved list state carries its owner and is only restored
-		// for the identity the guard confirmed (the logout also cleared it;
-		// scenario 6a covers the case where no logout happened in this tab).
-		await page.getByRole('button', { name: '商品名の絞り込み' }).click();
-		await expect(
-			page.getByRole('dialog', { name: '商品名の絞り込み' }).getByPlaceholder('値を入力')
-		).toHaveValue('');
-		await page.keyboard.press('Escape');
-		await expect(grid.getByRole('columnheader', { name: '価格' })).toHaveAttribute(
-			'aria-sort',
-			'none'
-		);
-		await expect(page.locator('.items-row-last-opened')).toHaveCount(0);
-	});
-
-	// Issue #215/#255 4th review (P2 1): two tabs of ONE browser share the
-	// "Remember me" token (localStorage) but not their sessionStorage. The
-	// first tab saves the admin's list state; the second tab logs the admin
-	// out and logs in as the viewer with Remember me - an identity change the
-	// first tab's own login/logout never saw. Opening the list in the first
-	// tab again then passes the guard with the VIEWER's valid token, and must
-	// not restore the admin's search term, sort or highlighted row: saved
-	// state carries its owner and is only restored for the identity the
-	// guard confirmed. (Issue #260 実装-2: the first tab now also follows the
-	// other tab's logout to /login on its own - see below.)
-	test('6a. items: after another tab switches the Remember me user, reloading this tab does not restore the previous user list state', async ({
-		browser
-	}) => {
-		test.setTimeout(90_000);
-		const context = await browser.newContext({ reducedMotion: 'reduce' });
-		const first = await context.newPage();
-		const second = await context.newPage();
-		try {
-			// Hold the first tab's event stream open without ever answering:
-			// otherwise a reconnect that happens to fall between the second
-			// tab's logout and login would find the token gone, end the first
-			// tab's session and clear its state by itself - the stream is not
-			// the path under test (the shared token's `storage` event is).
-			await first.route('**/api/events', () => {});
-
-			await first.goto('/login');
-			await first.getByLabel('ユーザー名').fill(ADMIN_USERNAME);
-			await first.getByLabel('パスワード').fill(ADMIN_PASSWORD);
-			await first.getByLabel('ログイン状態を保持する（30日間）').check();
-			await first.getByRole('button', { name: 'ログイン' }).click();
-			await expect(first).toHaveURL(/\/dashboard$/);
-
-			await first.goto('/items');
-			await applyColumnFilter(first, '商品名', '茶');
-			const firstGrid = first.getByRole('grid');
-			const firstPrice = firstGrid.getByRole('columnheader', { name: '価格' });
-			await firstPrice.locator('.cell-body').click();
-			await expect(firstPrice).toHaveAttribute('aria-sort', 'ascending');
-			await rowWithText(first, '茶').first().getByRole('link', { name: '開く' }).click();
-			await expect(first).toHaveURL(/\/items\/\d+$/);
-			// Wait for the detail page itself (it records the opened row when it
-			// is created) - the URL changes before it has rendered.
-			await expect(first.getByRole('heading', { name: '商品を編集' })).toBeVisible();
-			await first.goBack();
-			await expect(first).toHaveURL(/\/items$/);
-			await expect(first.locator('.items-row-last-opened')).toHaveCount(1);
-			const savedState = () =>
-				first.evaluate(() =>
-					Object.keys(sessionStorage)
-						.filter((key) => key.startsWith('banto.listView.'))
-						.map((key) => sessionStorage.getItem(key))
-						.join('\n')
-				);
-			expect(await savedState(), 'precondition: the admin state is saved').toContain('茶');
-
-			// The second tab: same shared token, so it opens as the admin; then
-			// the admin logs out there and the viewer logs in with Remember me.
-			await second.goto('/dashboard');
-			await expect(second.getByRole('button', { name: 'ユーザーメニューを開く' })).toBeVisible();
-			await logout(second);
-			await expect(second).toHaveURL(/\/login$/);
-			// Issue #260 実装-2 (S-39, I-5): the first tab is no longer left
-			// unaware - the shared token's `storage` event holds its session,
-			// the confirmation finds no token, and its layout re-runs the guard
-			// (generation check), which sends it to /login too.
-			await expect(first).toHaveURL(/\/login$/);
-			await second.getByLabel('ユーザー名').fill(VIEWER_USERNAME);
-			await second.getByLabel('パスワード').fill(VIEWER_PASSWORD);
-			await second.getByLabel('ログイン状態を保持する（30日間）').check();
-			await second.getByRole('button', { name: 'ログイン' }).click();
-			await expect(second).toHaveURL(/\/dashboard$/);
-
-			// Opening the list again in the first tab passes the guard as the
-			// viewer (the shared Remember me token).
-			await first.goto('/items');
-			await expect(first).toHaveURL(/\/items$/);
-			await expect(firstGrid).toBeVisible();
-			await expect(first.getByRole('button', { name: '新規作成' })).toHaveCount(0);
-
-			await first.getByRole('button', { name: '商品名の絞り込み' }).click();
-			await expect(
-				first.getByRole('dialog', { name: '商品名の絞り込み' }).getByPlaceholder('値を入力')
-			).toHaveValue('');
-			await first.keyboard.press('Escape');
-			await expect(firstPrice).toHaveAttribute('aria-sort', 'none');
-			await expect(first.locator('.items-row-last-opened')).toHaveCount(0);
-			expect(await savedState(), "the admin's search term is gone").not.toContain('茶');
-		} finally {
-			await context.close();
-		}
+		// The dashboard totals only the projects in the viewer's scope (none).
+		await page.goto('/dashboard');
+		await expect(page.locator('[data-tile="pipeline-total"] .stat-value')).toHaveText('¥0');
+		await expect(page.locator('[data-tile="attention"] .stat-value')).toHaveText('0');
 	});
 
 	// Issue #215/#255 6th review: the session is still valid (check() passes)
 	// but its identity cannot be fetched for a moment (a 500). That is not
 	// "nobody is signed in": the guard shows its retryable error page, and
-	// nothing about the session - owner, generation, saved list state - is
-	// changed, so the retry restores the list exactly as it was.
-	test('6b. items: an identity outage keeps the list state, and the retry restores it', async () => {
-		await page.goto('/items');
-		await applyColumnFilter(page, '商品名', '茶');
-		await expect(rowWithText(page, '茶').first()).toBeVisible();
+	// nothing about the session - owner, generation - is changed, so the
+	// retry restores the screen.
+	test('6b. an identity outage keeps the session, and the retry restores the screen', async () => {
+		await page.goto('/dashboard');
+		await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
 
 		const outage = (route: Route) =>
 			route.fulfill({
@@ -1504,20 +901,15 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		await page.route('**/api/auth/identity', outage);
 		await page.reload();
 		await expect(page.getByText('ログイン状態を確認できませんでした')).toBeVisible();
-		await expect(page).toHaveURL(/\/items$/);
+		await expect(page).toHaveURL(/\/dashboard$/);
 
 		await page.unroute('**/api/auth/identity', outage);
 		await page.getByRole('button', { name: '再試行' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-		await page.getByRole('button', { name: '商品名の絞り込み' }).click();
-		await expect(
-			page.getByRole('dialog', { name: '商品名の絞り込み' }).getByPlaceholder('値を入力')
-		).toHaveValue('茶');
-		await page.keyboard.press('Escape');
-		await clearColumnFilter(page, '商品名');
+		await expect(page).toHaveURL(/\/dashboard$/);
+		await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
 	});
 
-	test('7. admin: audit log shows the login and items records', async () => {
+	test('7. admin: audit log shows the login and customers records', async () => {
 		await logout(page);
 		await expect(page).toHaveURL(/\/login$/);
 
@@ -1536,8 +928,8 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		// Filters AND together, so the previous one must be cleared before a
 		// resource-only filter is applied, or nothing would match.
 		await clearColumnFilter(page, 'アクション');
-		await applyColumnFilter(page, 'リソース', 'items');
-		await expect(rowWithText(page, 'items').first()).toBeVisible();
+		await applyColumnFilter(page, 'リソース', 'customers');
+		await expect(rowWithText(page, 'customers').first()).toBeVisible();
 	});
 
 	test('7a. audit log: a 0-row filter recovers when cleared, and reload shows failures and new records', async () => {
@@ -1601,13 +993,13 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		await expect(rowWithText(page, '設定変更').first()).toBeVisible();
 	});
 	test('9. command palette: search and navigate to the audit log', async () => {
-		await page.goto('/items');
+		await page.goto('/customers');
 		// The Ctrl+K listener lives on (app)/+layout.svelte's `<svelte:window>`,
 		// which only mounts after the route guard's async work (bantoReady,
 		// the session confirmation) resolves - later than page.goto()'s "load"
 		// event. Wait for a page-specific element first so the keypress below
 		// isn't racing that mount.
-		await expect(page.getByRole('button', { name: 'CSVエクスポート' })).toBeVisible();
+		await expect(page.getByRole('button', { name: '顧客を登録' })).toBeVisible();
 
 		await page.keyboard.press('Control+K');
 		const search = page.getByPlaceholder('画面・操作を検索…');
@@ -1624,8 +1016,8 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 	// composition never toggles it; a held key toggles once and its repeats are
 	// still kept from the browser.
 	test('9a. command palette: Ctrl+K closes it from its own search box; IME and held keys do not toggle it', async () => {
-		await page.goto('/items');
-		await expect(page.getByRole('button', { name: 'CSVエクスポート' })).toBeVisible();
+		await page.goto('/customers');
+		await expect(page.getByRole('button', { name: '顧客を登録' })).toBeVisible();
 		const palette = page.getByRole('dialog', { name: 'コマンドパレット' });
 		const search = page.getByPlaceholder('画面・操作を検索…');
 
@@ -1786,61 +1178,6 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		);
 		await expect(page.getByText('sqlite', { exact: false })).toBeVisible();
 	});
-	// Nav badge (choiapp-feedback-2026-09 §4.1): a `resource_changed` server
-	// event for a resource whose page is NOT on screen shows an
-	// unseen-updates badge on that resource's sidebar entry
-	// (#lib/navBadges.svelte.ts), and visiting the page clears it. The
-	// "another client" is simulated by calling the REST API directly from
-	// the page context with the session's own bearer token - the server
-	// broadcasts the same SSE event either way. Creates then deletes one
-	// item (net zero), so scenario 14's state is untouched.
-	test('13. sidebar: an item change from another client shows an unseen-updates badge', async () => {
-		await page.goto('/dashboard');
-		await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
-
-		const badge = page.locator('.nav-badge');
-		await expect(badge).toHaveCount(0);
-
-		const createdId = await page.evaluate(async () => {
-			// Same lookup order as admin-core's `createHttpAuthProvider().getToken`
-			// (localStorage only when "remember me" was used - this login wasn't).
-			const token =
-				localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
-			const res = await fetch('/api/items', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'X-Banto-Client': 'banto',
-					Authorization: `Bearer ${token}`
-				},
-				body: JSON.stringify({ name: 'E2Eバッジ確認商品', price: 100, stock: 1 })
-			});
-			if (!res.ok) throw new Error(`create failed: ${res.status}`);
-			return ((await res.json()) as { id: number }).id;
-		});
-
-		// SSE delivery -> onInvalidate('items') -> badge on 商品 (the
-		// auto-retrying expect absorbs the event latency).
-		await expect(badge).toHaveText('1');
-
-		// Cleanup while still on the dashboard: the delete broadcasts another
-		// resource_changed, so the same badge counts it too.
-		await page.evaluate(async (id) => {
-			const token =
-				localStorage.getItem('banto.auth.token') ?? sessionStorage.getItem('banto.auth.token');
-			const res = await fetch(`/api/items/${id}`, {
-				method: 'DELETE',
-				headers: { 'X-Banto-Client': 'banto', Authorization: `Bearer ${token}` }
-			});
-			if (!res.ok) throw new Error(`delete failed: ${res.status}`);
-		}, createdId);
-		await expect(badge).toHaveText('2');
-
-		// Landing on the page marks the changes as seen.
-		await page.goto('/items');
-		await expect(badge).toHaveCount(0);
-	});
-
 	// Issue #204 review: a session the server could not verify (500 from the
 	// session check - `/api/auth/identity` since Issue #260 実装-2) stays - regular and "Remember me" tokens alike - and
 	// resumes after "再試行". Public viewing is OFF on this server, so the old
@@ -2162,7 +1499,7 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 			});
 
 			// A fresh load of a protected screen: the guard waits on the held check.
-			await tab.goto('/items', { waitUntil: 'commit' });
+			await tab.goto('/customers', { waitUntil: 'commit' });
 			await guardReleased;
 			// Issue #260 実装-2: the held (stale) `valid` answer is never applied.
 			// The confirmation's signal-caused probe replaced the guard's probe
@@ -2472,10 +1809,10 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		const dialogs = trackDialogs(tab);
 		try {
 			await loginRemembered(tab, ADMIN_USERNAME, ADMIN_PASSWORD);
-			await tab.goto('/items/new');
-			await expect(tab.getByLabel('商品名')).toBeVisible();
+			await tab.goto('/customers/new');
+			await expect(tab.getByLabel('顧客名')).toBeVisible();
 
-			const chunk = nodeChunkOf('routes/(app)/items/+page.svelte');
+			const chunk = nodeChunkOf('routes/(app)/customers/+page.svelte');
 			let release!: () => void;
 			const released = new Promise<void>((resolve) => (release = resolve));
 			let requested!: () => void;
@@ -2503,16 +1840,16 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 
 			// The move completed (the re-run did not send the tab back to the
 			// form) and the list is shown for the re-confirmed session.
-			await expect(tab).toHaveURL(/\/items$/);
-			await expect(tab.getByRole('button', { name: '新規作成' })).toBeVisible();
+			await expect(tab).toHaveURL(/\/customers$/);
+			await expect(tab.getByRole('button', { name: '顧客を登録' })).toBeVisible();
 			await expect(tab.getByRole('button', { name: 'ユーザーメニューを開く' })).toContainText(
 				ADMIN_DISPLAY_NAME
 			);
 
 			// The unsaved-changes guard still runs: "stay" keeps the input.
-			await tab.getByRole('button', { name: '新規作成' }).click();
-			await expect(tab).toHaveURL(/\/items\/new$/);
-			const name = tab.getByLabel('商品名');
+			await tab.getByRole('button', { name: '顧客を登録' }).click();
+			await expect(tab).toHaveURL(/\/customers\/new$/);
+			const name = tab.getByLabel('顧客名');
 			await expect(name).toBeVisible();
 			await name.fill('E2E未保存-326');
 			await expect(tab.getByText('未保存の変更があります')).toBeVisible();
@@ -2522,7 +1859,7 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 				.getByRole('link', { name: 'ダッシュボード' })
 				.click();
 			await expect.poll(() => dialogs.messages).toEqual([LEAVE_PROMPT]);
-			await expect(tab).toHaveURL(/\/items\/new$/);
+			await expect(tab).toHaveURL(/\/customers\/new$/);
 			await expect(name).toHaveValue('E2E未保存-326');
 		} finally {
 			dialogs.stop();
@@ -2560,9 +1897,9 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 			await expect(tab.locator('html')).toHaveAttribute('data-banto-shell-nav', 'launcher');
 
 			const nav = tab.getByRole('navigation', { name: '主要ナビゲーション' });
-			await nav.getByRole('link', { name: '商品' }).click();
-			await expect(tab).toHaveURL(/\/items$/);
-			await expect(nav.getByRole('link', { name: '商品' })).toHaveAttribute('aria-current', 'page');
+			await nav.getByRole('link', { name: '顧客' }).click();
+			await expect(tab).toHaveURL(/\/customers$/);
+			await expect(nav.getByRole('link', { name: '顧客' })).toHaveAttribute('aria-current', 'page');
 
 			await tab.reload();
 			await expect(tab.getByRole('grid')).toBeVisible();
@@ -2599,12 +1936,12 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 	});
 
 	// Issue #432 PR-10 (shared-primitives-upstream-plan §3.5・D9): the dashboard
-	// メモ pane keeps unapplied input across the dock's structure changes (the
-	// draft is owned by the page, the pane is re-created), a close settles it
+	// メモ pane keeps unapplied input while it is moved (the draft is owned by
+	// the page, the pane is re-created on structure changes), a close settles it
 	// (apply / discard / cancel), and leaving the page asks. The apply is held
 	// open by routing the memo's ui-settings PUT, so input typed while it is in
 	// flight must keep the pane open and dirty after v1 is saved.
-	test('13l. dashboard memo: unapplied input survives dock / undock / tabs; close settles it; leaving asks', async () => {
+	test('13l. dashboard memo: unapplied input survives a move; close settles it; leaving asks', async () => {
 		test.setTimeout(90_000);
 		const dialogs = trackDialogs(page);
 		const mainNav = page.getByRole('navigation', { name: '主要ナビゲーション' });
@@ -2614,23 +1951,6 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		const unsaved = workspace.getByText('未保存の変更があります');
 		const settleDialog = page.getByRole('dialog', { name: '保存していないメモ' });
 		const memoToggle = workspace.getByRole('toolbar').getByRole('button', { name: /メモ/ });
-
-		/** Press at `from`, cross the dock's drag threshold, release at `to`. */
-		async function drag(
-			from: { x: number; y: number },
-			to: { x: number; y: number }
-		): Promise<void> {
-			await page.mouse.move(from.x, from.y);
-			await page.mouse.down();
-			await page.mouse.move(from.x + 12, from.y + 12, { steps: 3 });
-			await page.mouse.move(to.x, to.y, { steps: 12 });
-			await page.mouse.up();
-		}
-		async function centerOf(locator: Locator): Promise<{ x: number; y: number }> {
-			const box = await locator.boundingBox();
-			if (!box) throw new Error('not visible');
-			return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-		}
 
 		const memoPath = '/api/ui-settings/dashboard.memo';
 		let releasePut: () => void = () => {};
@@ -2653,55 +1973,15 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 			await memoInput.fill('unsaved');
 			await expect(unsaved).toBeVisible();
 
-			// dock: the floating title bar onto the centre of the 月別更新件数 pane.
-			const titlebar = memoWindow.locator('.titlebar');
-			const barBox = await titlebar.boundingBox();
-			if (!barBox) throw new Error('no title bar');
-			await drag(
-				{ x: barBox.x + 30, y: barBox.y + barBox.height / 2 },
-				await centerOf(page.locator('[data-dock-drop-id="monthly"]'))
-			);
-			await expect(memoWindow).toHaveCount(0);
-			const memoTab = page.getByRole('tab', { name: 'メモ' });
-			await expect(memoTab).toBeVisible();
+			// Moving the window (geometry only, keyboard move mode) re-renders it
+			// without losing the unapplied input. (banto-cost: the template also
+			// docked / tabbed the memo into its chart panes, which were removed.)
+			await memoWindow.getByRole('button', { name: /^メモをキーボードで移動/ }).focus();
+			await page.keyboard.press('Enter');
+			await page.keyboard.press('Shift+ArrowLeft', { delay: 20 });
+			await page.keyboard.press('Enter');
 			await expect(memoInput).toHaveValue('unsaved');
 			await expect(unsaved).toBeVisible();
-
-			// tab switch away and back (the pane is re-created both times).
-			await page.getByRole('tab', { name: '月別更新件数' }).click();
-			await expect(memoInput).toHaveCount(0);
-			await memoTab.click();
-			await expect(memoInput).toHaveValue('unsaved');
-
-			// undock: the tab onto another floating window (= free floating space,
-			// the docked tree fills the host). The window opens at the top left, over
-			// the tab strip, so it is first moved down with the keyboard move mode
-			// (geometry only - a pointer drag over a docked pane would dock it).
-			const trendToggle = workspace.getByRole('toolbar').getByRole('button', { name: /トレンド/ });
-			await trendToggle.click();
-			const trendWindow = page.getByRole('dialog', { name: 'トレンド' });
-			await expect(trendWindow).toBeVisible();
-			// The mode buttons are visually hidden until focused (#433-b).
-			await trendWindow.getByRole('button', { name: /^トレンドをキーボードで移動/ }).focus();
-			await page.keyboard.press('Enter');
-			await page.keyboard.press('Shift+ArrowDown', { delay: 20 });
-			await page.keyboard.press('Shift+ArrowDown', { delay: 20 });
-			await page.keyboard.press('Shift+ArrowDown', { delay: 20 });
-			await page.keyboard.press('Enter');
-			await memoTab.click({ trial: true }); // the tab is not covered any more
-			await drag(
-				await centerOf(memoTab),
-				await centerOf(trendWindow.getByRole('region', { name: 'トレンド', exact: true }))
-			);
-			await expect(memoWindow).toBeVisible();
-			await expect(memoTab).toHaveCount(0);
-			await expect(memoInput).toHaveValue('unsaved');
-			await expect(unsaved).toBeVisible();
-			// A pane with nothing unapplied closes without a question (the toolbar
-			// goes through the same lifecycle as ✕).
-			await trendToggle.click();
-			await expect(trendWindow).toHaveCount(0);
-			await expect(settleDialog).toHaveCount(0);
 
 			// close -> apply, typing while the save is in flight: v1 is saved, the
 			// pane stays open with the later input still unapplied.
@@ -2741,13 +2021,13 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 			// Leaving with unapplied input asks (the router guard): stay, then leave.
 			await memoInput.fill('leave check');
 			dialogs.answer(false);
-			await mainNav.getByRole('link', { name: '商品' }).click();
+			await mainNav.getByRole('link', { name: '顧客' }).click();
 			await expect.poll(() => dialogs.messages).toEqual([LEAVE_PROMPT]);
 			await expect(page).toHaveURL(/\/dashboard$/);
 			await expect(memoInput).toHaveValue('leave check');
 			dialogs.answer(true);
-			await mainNav.getByRole('link', { name: '商品' }).click();
-			await expect(page).toHaveURL(/\/items$/);
+			await mainNav.getByRole('link', { name: '顧客' }).click();
+			await expect(page).toHaveURL(/\/customers$/);
 			expect(dialogs.messages).toHaveLength(2);
 		} finally {
 			dialogs.stop();
