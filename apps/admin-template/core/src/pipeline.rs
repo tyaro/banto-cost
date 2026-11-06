@@ -13,7 +13,9 @@
 //! `ViewProjectAmounts` for a project's versions, and `amount_projects` as
 //! the overview's scope.
 
+use banto_server::ServerEvent;
 use std::collections::{BTreeMap, BTreeSet};
+use tokio::sync::broadcast;
 
 use banto_admin_services::authz::ProjectScope;
 use banto_core::BantoError;
@@ -389,11 +391,25 @@ const VERSION_SELECT: &str = "SELECT v.id, v.project_id, v.version_no, v.kind, v
 #[derive(Clone)]
 pub struct PipelineService {
     db: Db,
+    events: Option<broadcast::Sender<ServerEvent>>,
 }
 
 impl PipelineService {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self { db, events: None }
+    }
+
+    /// Emit `ServerEvent::ResourceChanged { resource: "projects" }` after each
+    /// committed write (spec §3.5), so other clients' `projects` screens refetch
+    /// and their nav badge counts the change. Wired by `banto-serve` and
+    /// `src-tauri` with the app-wide `event_channel()` sender.
+    pub fn with_events(mut self, events: broadcast::Sender<ServerEvent>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    fn notify_changed(&self) {
+        crate::events::notify_changed(&self.events, "projects");
     }
 
     fn ph(&self, n: usize) -> String {
@@ -682,6 +698,7 @@ impl PipelineService {
                 id
             }
         };
+        self.notify_changed();
         self.version(project_id, id).await
     }
 
@@ -732,6 +749,7 @@ impl PipelineService {
                 .map(|_| ()),
         }
         .map_err(banto_storage::storage_error)?;
+        self.notify_changed();
         self.version(project_id, version_id).await
     }
 

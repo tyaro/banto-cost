@@ -20,8 +20,9 @@
  * banto-cost: the template's `items` demo was removed (2026-11). The CRUD /
  * unsaved-changes / SPA scenarios now run on the 顧客 (customers) screens;
  * the items-only ones (inline grid editing, CSV export/import, the list
- * filter/sort round trip and its last-edited marker, the cross-client nav
- * badge - customers send no change events) were dropped with it.
+ * filter/sort round trip and its last-edited marker) were dropped with it.
+ * The cross-client nav badge (scenario 13) runs on customers, which emit
+ * `resource_changed` like items did.
  *
  * Flakiness: no explicit `waitForTimeout`/`sleep` in this file except one -
  * every wait is either Playwright's built-in locator auto-retry
@@ -1178,6 +1179,48 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		);
 		await expect(page.getByText('sqlite', { exact: false })).toBeVisible();
 	});
+
+	// Nav badge (choiapp-feedback-2026-09 §4.1): a `resource_changed` server
+	// event for a resource whose page is NOT on screen shows an
+	// unseen-updates badge on that resource's sidebar entry
+	// (#lib/navBadges.svelte.ts), and visiting the page clears it. The
+	// "another client" is simulated by calling the REST API directly from
+	// the page context with the session's own bearer token - the server
+	// broadcasts the same SSE event either way. Customers are never deleted,
+	// so this leaves one timestamped customer behind (later scenarios do not
+	// count customers).
+	test('13. sidebar: a customer change from another client shows an unseen-updates badge', async () => {
+		await page.goto('/dashboard');
+		await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
+
+		const badge = page.locator('.nav-badge');
+		const customersBadge = page.locator('a[href$="/customers"] .nav-badge');
+		await expect(badge).toHaveCount(0);
+
+		const created = await api<{ id: number; rowVersion: number }>(page, 'POST', '/api/customers', {
+			name: `E2Eバッジ確認-${RUN}`,
+			active: true
+		});
+
+		// SSE delivery -> onInvalidate('customers') -> badge on 顧客 (the
+		// auto-retrying expect absorbs the event latency).
+		await expect(customersBadge).toHaveText('1');
+
+		// An update from the other client is counted too.
+		await api(page, 'PUT', `/api/customers/${created.id}`, {
+			name: `E2Eバッジ確認（改）-${RUN}`,
+			active: true,
+			rowVersion: created.rowVersion
+		});
+		await expect(customersBadge).toHaveText('2');
+		// Only the 顧客 entry: a customer write is not a project change.
+		await expect(badge).toHaveCount(1);
+
+		// Landing on the page marks the changes as seen.
+		await page.goto('/customers');
+		await expect(badge).toHaveCount(0);
+	});
+
 	// Issue #204 review: a session the server could not verify (500 from the
 	// session check - `/api/auth/identity` since Issue #260 実装-2) stays - regular and "Remember me" tokens alike - and
 	// resumes after "再試行". Public viewing is OFF on this server, so the old

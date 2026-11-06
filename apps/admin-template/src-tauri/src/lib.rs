@@ -4564,11 +4564,11 @@ pub fn run() {
             // banto-cost P2 (ADR-0028).
             let authz = AuthzService::new(db.clone());
             // banto-cost P3a.
-            let customers = CustomersService::new(db.clone());
-            let projects = ProjectsService::new(db.clone());
-            let pipeline = PipelineService::new(db.clone());
+            let customers = CustomersService::new(db.clone()).with_events(events.clone());
+            let projects = ProjectsService::new(db.clone()).with_events(events.clone());
+            let pipeline = PipelineService::new(db.clone()).with_events(events.clone());
             // banto-cost P3b.
-            let orders = OrdersService::new(db.clone());
+            let orders = OrdersService::new(db.clone()).with_events(events.clone());
             // banto-cost P4a.
             let calc_basis = CalcBasisService::new(db.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
@@ -4986,7 +4986,7 @@ mod tests {
             ),
             users: UsersService::new(pool.clone()),
             settings: SettingsService::new(pool.clone()),
-            events,
+            events: events.clone(),
             // Issue #204: the production wiring, so cross-transport tests
             // exercise the same session re-check the embedded server uses.
             rest_auth: user_auth_state(
@@ -5002,10 +5002,10 @@ mod tests {
             ),
             system_info: SystemInfoService::new(pool.clone()),
             authz: AuthzService::new(pool.clone()),
-            customers: CustomersService::new(pool.clone()),
-            projects: ProjectsService::new(pool.clone()),
-            pipeline: PipelineService::new(pool.clone()),
-            orders: OrdersService::new(pool.clone()),
+            customers: CustomersService::new(pool.clone()).with_events(events.clone()),
+            projects: ProjectsService::new(pool.clone()).with_events(events.clone()),
+            pipeline: PipelineService::new(pool.clone()).with_events(events.clone()),
+            orders: OrdersService::new(pool.clone()).with_events(events.clone()),
             calc_basis: CalcBasisService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
@@ -5048,7 +5048,7 @@ mod tests {
             ),
             users: UsersService::new(pool.clone()),
             settings: SettingsService::new(pool.clone()),
-            events,
+            events: events.clone(),
             // Issue #204: the production wiring, so cross-transport tests
             // exercise the same session re-check the embedded server uses.
             rest_auth: user_auth_state(
@@ -5061,10 +5061,10 @@ mod tests {
             backup: BackupService::new(db_path, pool.clone()),
             system_info: SystemInfoService::new(pool.clone()),
             authz: AuthzService::new(pool.clone()),
-            customers: CustomersService::new(pool.clone()),
-            projects: ProjectsService::new(pool.clone()),
-            pipeline: PipelineService::new(pool.clone()),
-            orders: OrdersService::new(pool.clone()),
+            customers: CustomersService::new(pool.clone()).with_events(events.clone()),
+            projects: ProjectsService::new(pool.clone()).with_events(events.clone()),
+            pipeline: PipelineService::new(pool.clone()).with_events(events.clone()),
+            orders: OrdersService::new(pool.clone()).with_events(events.clone()),
             calc_basis: CalcBasisService::new(pool.clone()),
             metrics: None,
             started_at: std::time::Instant::now(),

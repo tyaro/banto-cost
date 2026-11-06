@@ -141,10 +141,14 @@ async fn main() {
 
     let system_info = SystemInfoService::new(db.clone());
     let authz = admin_template_core::authz::AuthzService::new(db.clone());
-    let customers = admin_template_core::customers::CustomersService::new(db.clone());
-    let projects = admin_template_core::projects::ProjectsService::new(db.clone());
-    let pipeline = admin_template_core::pipeline::PipelineService::new(db.clone());
-    let orders = admin_template_core::orders::OrdersService::new(db.clone());
+    let customers = admin_template_core::customers::CustomersService::new(db.clone())
+        .with_events(events.clone());
+    let projects =
+        admin_template_core::projects::ProjectsService::new(db.clone()).with_events(events.clone());
+    let pipeline =
+        admin_template_core::pipeline::PipelineService::new(db.clone()).with_events(events.clone());
+    let orders =
+        admin_template_core::orders::OrdersService::new(db.clone()).with_events(events.clone());
     let calc_basis = admin_template_core::calc_basis::CalcBasisService::new(db.clone());
     // ADR-0013 (Issue #185): the sampler is stateful (CPU% needs a delta
     // between refreshes, see `SystemMetricsSampler::sample`'s doc comment),

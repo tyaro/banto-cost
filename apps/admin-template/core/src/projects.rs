@@ -10,6 +10,7 @@
 
 use banto_admin_services::authz::ProjectScope;
 use banto_core::{BantoError, FilterOp, FilterState, ListParams, ListResult};
+use banto_server::ServerEvent;
 use banto_storage::{ColumnMap, Db};
 use cost_domain::project::{
     validate_project, ProjectInput as DomainInput, ProjectIssue, ProjectStatus,
@@ -17,6 +18,7 @@ use cost_domain::project::{
 use cost_domain::Date;
 use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Sqlite};
+use tokio::sync::broadcast;
 
 use crate::customers::{clean_optional, field_error, now_expr, stale_version_error};
 
@@ -234,11 +236,25 @@ fn validate(input: &ProjectInput, current: Option<ProjectStatus>) -> Result<Clea
 #[derive(Clone)]
 pub struct ProjectsService {
     db: Db,
+    events: Option<broadcast::Sender<ServerEvent>>,
 }
 
 impl ProjectsService {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self { db, events: None }
+    }
+
+    /// Emit `ServerEvent::ResourceChanged { resource: "projects" }` after each
+    /// committed write (spec §3.5), so other clients' `projects` screens refetch
+    /// and their nav badge counts the change. Wired by `banto-serve` and
+    /// `src-tauri` with the app-wide `event_channel()` sender.
+    pub fn with_events(mut self, events: broadcast::Sender<ServerEvent>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    fn notify_changed(&self) {
+        crate::events::notify_changed(&self.events, "projects");
     }
 
     fn ph(&self, n: usize) -> String {
@@ -524,6 +540,7 @@ impl ProjectsService {
                 id
             }
         };
+        self.notify_changed();
         self.get(id).await
     }
 
@@ -653,6 +670,7 @@ impl ProjectsService {
         if affected == 0 {
             return Err(stale_version_error());
         }
+        self.notify_changed();
         self.get(id).await
     }
 }
