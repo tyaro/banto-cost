@@ -58,7 +58,6 @@ use admin_template_core::backup::BackupService;
 use admin_template_core::db::{display_target, init_db_from_target, is_postgres_url};
 use admin_template_core::events::event_channel;
 use admin_template_core::first_boot::seed_first_boot_settings;
-use admin_template_core::items::ItemsService;
 use admin_template_core::rest::{api_router, user_auth_state, Services};
 use admin_template_core::settings::{ServerSettings, SettingsService};
 use admin_template_core::system_info::SystemInfoService;
@@ -126,7 +125,6 @@ async fn main() {
         .expect("init_db should succeed");
 
     let events = event_channel();
-    let items = ItemsService::new(db.clone()).with_events(events.clone());
     let users = UsersService::new(db.clone());
     let settings = SettingsService::new(db.clone());
     // D1-a (display-preset-plan.md, Issue #190 prep): seed
@@ -237,7 +235,6 @@ async fn main() {
     // the baseline security headers, regardless of which inner router
     // produced it.
     let services = Services {
-        items,
         users,
         settings,
         audit,

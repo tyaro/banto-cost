@@ -43,9 +43,6 @@ use admin_template_core::pipeline::{
     PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
 };
 use admin_template_core::projects::{Project, ProjectInput, ProjectsService};
-// [scaffold:items] begin
-use admin_template_core::items::{ImportResult, Item, ItemImportRow, ItemInput, ItemsService};
-// [scaffold:items] end
 use admin_template_core::rest::{api_router, user_auth_state, Services};
 use admin_template_core::settings::{
     auth_server_combination_allowed, AuditSettings, AuthSettings, ServerSettings, SettingsService,
@@ -78,9 +75,6 @@ struct AppState {
     /// ADR-0021 decision 13). Separate from `server`, whose lock is not held
     /// while UAC waits.
     firewall_change_running: std::sync::atomic::AtomicBool,
-    // [scaffold:items] begin
-    items: ItemsService,
-    // [scaffold:items] end
     /// The webview window's own session identity, set by `auth_login`/
     /// `auth_setup` and cleared by `auth_logout` - all called directly via
     /// `invoke()`, never through `/api/auth/login`. `Some` means logged in;
@@ -134,7 +128,7 @@ struct AppState {
     /// (spec §11.2/§11.4's enabled/bind/port).
     settings: SettingsService,
     /// App-wide resource-change/notice broadcast (spec §3.5): every
-    /// `ItemsService` mutation feeds this, and it is fanned out two ways -
+    /// business-service mutation feeds this, and it is fanned out two ways -
     /// to the webview via the `banto://event` forwarding task spawned in
     /// `setup()`, and (only while the embedded server is running) to LAN
     /// browser clients via `GET /api/events` (`banto_server::sse_route`).
@@ -171,25 +165,17 @@ struct AppState {
     /// desktop counterpart to REST's `record_write`, conventions §1); the few
     /// whose shape differs (import's `ok`/`failed`, `login_failed`, the
     /// escape-hatch config write, the startup `restore_applied`) build their
-    /// entry by hand. Shares the same pool as `items`/`users`/`settings` (all
-    /// four are `Clone` handles onto the one on-disk SQLite DB, see `run()`'s
+    /// entry by hand. Shares the same pool as `users`/`settings` (all
+    /// are `Clone` handles onto the one on-disk SQLite DB, see `run()`'s
     /// `setup()`).
     audit: AuditLogService,
     /// Backup/restore (spec M17): `VACUUM INTO` snapshots into `backups/`
     /// next to the DB file, plus the restore staging flow. Shares the same
-    /// pool as `items`/`users`/`settings`/`audit` - only its `db_path` is
+    /// pool as `users`/`settings`/`audit` - only its `db_path` is
     /// unique to this service (needed to resolve `backups/` and
     /// `restore-pending.sqlite3`'s location, see `crate::backup`'s doc
     /// comment).
     backup: BackupService,
-
-    /// `exports/` directory (sibling of `attachments/`/`backups/` under the
-    /// app's data dir) - the desktop counterpart of the LAN browser's
-    /// `<a download>` CSV export (finding⑤ Option A): `items_export_csv_to_folder`
-    /// writes the exported file here and reveals it in the OS file explorer,
-    /// same "no native save dialog in v1" fallback as
-    /// `backups_open_folder`/`attachments_open_folder`.
-    exports_dir: PathBuf,
     /// System diagnostics probe (M-review 2026-08 §2.4), backing the admin
     /// `system_info` command and its symmetric `GET /api/system/info` route.
     /// DB-only (dialect/latency/migration version/attachment size); the
@@ -664,8 +650,7 @@ async fn require_role(
 /// `"tauri"` and `result` always `"ok"`.
 ///
 /// The handlers whose entry does not fit this shape build their `AuditEntry`
-/// by hand, exactly as their REST counterparts do: [`items_import_body`]'s
-/// `ok`/`failed` result, [`auth_login`]'s `login_failed` (no [`UserIdentity`],
+/// by hand, exactly as their REST counterparts do: [`auth_login`]'s `login_failed` (no [`UserIdentity`],
 /// `result: "failed"`), [`auth_config_apply`]'s escape hatch (actor may be
 /// absent), the `denied` entry in [`require_role`] itself, and the startup
 /// `restore_applied` (no caller identity exists yet).
@@ -696,147 +681,6 @@ async fn record_ok(
 fn ping() -> &'static str {
     concat!("banto ", env!("CARGO_PKG_VERSION"))
 }
-
-// [scaffold:items] begin
-//
-// D1-d (display-preset-plan.md, Issue #190 prep): the items_* command group
-// (CRUD + import), contiguous so a future `display`/`items` remover can
-// delete it with one `cutRegion` on these markers.
-
-/// Read-only (spec M10 RBAC): any authenticated role (`viewer` and up), so
-/// `require_role`'s floor is the least-privileged role.
-#[tauri::command]
-async fn items_list(
-    state: State<'_, AppState>,
-    params: ListParams,
-) -> Result<ListResult<Item>, BantoError> {
-    require_role(&state, Role::Viewer, "items").await?;
-    state.items.list(params).await
-}
-
-#[tauri::command]
-async fn items_get(state: State<'_, AppState>, id: i64) -> Result<Item, BantoError> {
-    require_role(&state, Role::Viewer, "items").await?;
-    state.items.get(id).await
-}
-
-#[tauri::command]
-async fn items_create(state: State<'_, AppState>, values: ItemInput) -> Result<Item, BantoError> {
-    let actor = require_role(&state, Role::Editor, "items").await?;
-    let item = state.items.create(values).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        "items",
-        Some(&item.id.to_string()),
-        Some(serde_json::json!({ "name": item.name })),
-    )
-    .await;
-    Ok(item)
-}
-
-#[tauri::command]
-async fn items_update(
-    state: State<'_, AppState>,
-    id: i64,
-    values: ItemInput,
-) -> Result<Item, BantoError> {
-    let actor = require_role(&state, Role::Editor, "items").await?;
-    let item = state.items.update(id, values).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        "items",
-        Some(&item.id.to_string()),
-        Some(serde_json::json!({ "name": item.name })),
-    )
-    .await;
-    Ok(item)
-}
-
-/// Body of [`items_delete`], split out (spec M14 pattern, see
-/// [`items_import_body`]) so its authz + attachment-sweep + audit behavior is
-/// testable with a plain `&AppState` in this crate's own `cargo test`.
-async fn items_delete_body(state: &AppState, id: i64) -> Result<(), BantoError> {
-    let actor = require_role(state, Role::Editor, "items").await?;
-    state.items.delete(id).await?;
-
-    record_ok(
-        &state.audit,
-        &actor,
-        "delete",
-        "items",
-        Some(&id.to_string()),
-        None,
-    )
-    .await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn items_delete(state: State<'_, AppState>, id: i64) -> Result<(), BantoError> {
-    items_delete_body(&state, id).await
-}
-
-/// Body of [`items_import`], split out the same way [`change_own_password`]
-/// is (spec M14 pattern) so the audit-recording behavior is testable with a
-/// plain `&AppState` in this crate's own `cargo test` - `tauri::State`
-/// cannot be constructed outside a running tauri app, but it derefs to
-/// `&AppState`, so the command below is a one-line adapter.
-///
-/// Unlike `items_create`/`update`/`delete` above, [`ItemsService::import`]
-/// itself never fails on bad ROW data - an all-or-nothing rollback comes
-/// back as `Ok(ImportResult)` with `errors` populated (spec M15 design
-/// decision, see that method's doc comment) - so this always records
-/// exactly one `action: "import"` entry: `result: "ok"` with a
-/// `{created,updated}` summary when `errors` is empty, `result: "failed"`
-/// with an `{errorCount}` summary when the batch was rolled back. It only
-/// skips the write the way every other command here does: when the service
-/// call returns `Err` outright (e.g. the row-count limit), which `?`
-/// propagates before this function's audit code runs.
-async fn items_import_body(
-    state: &AppState,
-    rows: Vec<ItemImportRow>,
-) -> Result<ImportResult, BantoError> {
-    let actor = require_role(state, Role::Editor, "items").await?;
-    let result = state.items.import(rows).await?;
-    let (result_tag, detail) = if result.errors.is_empty() {
-        (
-            "ok",
-            serde_json::json!({ "created": result.created, "updated": result.updated }),
-        )
-    } else {
-        (
-            "failed",
-            serde_json::json!({ "errorCount": result.errors.len() }),
-        )
-    };
-    state
-        .audit
-        .record(AuditEntry {
-            actor_username: Some(&actor.username),
-            actor_role: Some(actor.role.as_str()),
-            action: "import",
-            resource: "items",
-            entity_id: None,
-            detail: Some(detail),
-            origin: "tauri",
-            result: result_tag,
-        })
-        .await;
-    Ok(result)
-}
-
-#[tauri::command]
-async fn items_import(
-    state: State<'_, AppState>,
-    rows: Vec<ItemImportRow>,
-) -> Result<ImportResult, BantoError> {
-    items_import_body(&state, rows).await
-}
-// [scaffold:items] end
 
 /// `GET`-ish command: has an account been created yet (spec §3.3/§8.2)? The
 /// login page calls this first to decide between the first-run setup form
@@ -2054,9 +1898,6 @@ fn build_status(saved: &ServerSettings, slot: &ServerSlot) -> ServerStatusResult
 // `Services` through this wrapper too would only add an assembly hop.
 #[allow(clippy::too_many_arguments)]
 async fn start_embedded_server(
-    // [scaffold:items] begin
-    items: ItemsService,
-    // [scaffold:items] end
     users: UsersService,
     settings: SettingsService,
     audit: AuditLogService,
@@ -2082,9 +1923,6 @@ async fn start_embedded_server(
     // same as `banto-serve.rs`'s equivalent composition, so every response
     // this embedded server produces carries the baseline security headers.
     let services = Services {
-        // [scaffold:items] begin
-        items,
-        // [scaffold:items] end
         users,
         settings,
         audit,
@@ -2680,31 +2518,26 @@ async fn server_apply_body(
     // fallible step), so everything fallible happens BEFORE the listener is
     // reachable by a request.
     let generation = slot.generation;
-    let launch = |bound: BoundServer| {
-        async move {
-            start_embedded_server(
-                // [scaffold:items] begin
-                state.items.clone(),
-                // [scaffold:items] end
-                state.users.clone(),
-                state.settings.clone(),
-                state.audit.clone(),
-                state.backup.clone(),
-                state.system_info.clone(),
-                state.authz.clone(),
-                state.customers.clone(),
-                state.projects.clone(),
-                state.pipeline.clone(),
-                state.orders.clone(),
-                state.metrics.clone(),
-                state.rest_auth.clone(),
-                state.events.clone(),
-                state.reach_check.clone(),
-                generation,
-                bound,
-            )
-            .await
-        }
+    let launch = |bound: BoundServer| async move {
+        start_embedded_server(
+            state.users.clone(),
+            state.settings.clone(),
+            state.audit.clone(),
+            state.backup.clone(),
+            state.system_info.clone(),
+            state.authz.clone(),
+            state.customers.clone(),
+            state.projects.clone(),
+            state.pipeline.clone(),
+            state.orders.clone(),
+            state.metrics.clone(),
+            state.rest_auth.clone(),
+            state.events.clone(),
+            state.reach_check.clone(),
+            generation,
+            bound,
+        )
+        .await
     };
 
     // Issue #287 / #294 review: bind -> save -> serve. The new settings are
@@ -4307,8 +4140,7 @@ async fn audit_config_apply(
 
 // --- M17: SQLite backup/restore ---------------------------------------------
 
-/// Body of [`backups_create`], split out the same way [`change_own_password`]/
-/// [`items_import_body`] are (spec M14 pattern) so the audit-recording
+/// Body of [`backups_create`], split out the same way [`change_own_password`] is (spec M14 pattern) so the audit-recording
 /// behavior is testable with a plain `&AppState` in this crate's own `cargo
 /// test` - `tauri::State` cannot be constructed outside a running tauri app.
 async fn backups_create_body(state: &AppState) -> Result<BackupInfo, BantoError> {
@@ -4445,68 +4277,6 @@ async fn backups_cancel_restore(state: State<'_, AppState>) -> Result<(), BantoE
     backups_cancel_restore_body(&state).await
 }
 
-// [scaffold:items] begin
-//
-// D1-d: `items_export_csv_to_folder` is desktop-only CSV export - not
-// contiguous with the items_* CRUD/import block above (it lives next to the
-// other `*_open_folder` desktop commands), so it gets its own marker pair.
-
-/// `viewer`+ (items list is Viewer-readable): write an exported CSV to the
-/// app's `exports/` dir and open that folder in the OS file explorer - the desktop
-/// counterpart of the LAN browser's `<a download>` (the same "no native save
-/// dialog in v1" fallback `backups_open_folder`/`attachments_open_folder`
-/// use). The CSV bytes are already client-visible data (the caller can see
-/// the list), so this opens no new authz surface and is not audited, matching
-/// the browser download. **Windows-only** reveal by design (see
-/// `backups_open_folder`); non-Windows returns `opened:false`, not an error.
-#[tauri::command]
-async fn items_export_csv_to_folder(
-    state: State<'_, AppState>,
-    content: String,
-    file_name: String,
-) -> Result<OpenFolderResult, BantoError> {
-    require_role(&state, Role::Viewer, "items").await?;
-    // Sanitize: use ONLY the final path component, reject empty/traversal.
-    let safe = std::path::Path::new(&file_name)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| BantoError::Other("invalid file name".into()))?;
-    // Self-heal: recreate `exports/` if it was removed since startup (user
-    // deleted it, or a data dir predating this feature) so a missing folder
-    // never silently drops the export - the "folder-missing fallback".
-    std::fs::create_dir_all(&state.exports_dir).map_err(|e| BantoError::Other(e.to_string()))?;
-    let file_path = state.exports_dir.join(safe);
-    std::fs::write(&file_path, content.as_bytes()).map_err(|e| BantoError::Other(e.to_string()))?;
-    let path = file_path.display().to_string();
-
-    #[cfg(target_os = "windows")]
-    {
-        // Open the `exports/` folder in Explorer - the SAME invocation as
-        // `backups_open_folder`/`attachments_open_folder` (a single
-        // directory arg). `explorer /select,<file>` to reveal the file
-        // pre-selected is unreliable here: Explorer's non-standard comma/space
-        // command-line parsing (std's arg quoting splits `/select,` and the
-        // path into two tokens) makes it pop a spurious "location unavailable"
-        // dialog even when the file was written fine. `path` (the file) is
-        // still returned for the non-Windows fallback message.
-        let opened = std::process::Command::new("explorer")
-            .arg(&state.exports_dir)
-            .spawn()
-            .is_ok();
-        Ok(OpenFolderResult { opened, path })
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(OpenFolderResult {
-            opened: false,
-            path,
-        })
-    }
-}
-// [scaffold:items] end
-
 /// Pop a dock panel out into a REAL native window (spec §5.3 v2 - the
 /// "ウィンドウ分離" mode the v1 doc comment left as a future extension
 /// point). Thin by design: this is the ONLY Tauri-aware half of the pop-out
@@ -4598,9 +4368,6 @@ pub fn run() {
                 tauri::async_runtime::block_on(init_db(&db_path)).expect("init_db should succeed");
 
             let events = event_channel();
-            // [scaffold:items] begin
-            let items = ItemsService::new(db.clone()).with_events(events.clone());
-            // [scaffold:items] end
             let users = UsersService::new(db.clone());
             let settings = SettingsService::new(db.clone());
             // D1-a (display-preset-plan.md, Issue #190 prep): seed
@@ -4616,10 +4383,6 @@ pub fn run() {
             }
             let backup = BackupService::new(db_path.clone(), db.clone());
 
-            // Desktop CSV export (finding⑤ Option A): same sibling-directory
-            // convention as `attachments/`/`backups/` above.
-            let exports_dir = data_dir.join("exports");
-            std::fs::create_dir_all(&exports_dir).expect("create exports dir");
             // System diagnostics probe (M-review 2026-08 §2.4). Built before
             // `audit` moves `db`, same as the other services above.
             let system_info = SystemInfoService::new(db.clone());
@@ -4845,9 +4608,6 @@ pub fn run() {
             // `running: false` so the user can pick another port.
             let initial_server = initial_bound.map(|bound| {
                 tauri::async_runtime::block_on(start_embedded_server(
-                    // [scaffold:items] begin
-                    items.clone(),
-                    // [scaffold:items] end
                     users.clone(),
                     settings.clone(),
                     audit.clone(),
@@ -4902,9 +4662,6 @@ pub fn run() {
             }
 
             app.manage(AppState {
-                // [scaffold:items] begin
-                items,
-                // [scaffold:items] end
                 auth: Mutex::new(AuthSlot::new(initial_auth)),
                 firewall_change_running: std::sync::atomic::AtomicBool::new(false),
                 auth_io: AuthIo::production(&users, &settings),
@@ -4923,7 +4680,6 @@ pub fn run() {
                 )),
                 audit,
                 backup,
-                exports_dir,
                 system_info,
                 authz,
                 customers,
@@ -4938,15 +4694,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
-            // [scaffold:items] begin
-            items_list,
-            items_get,
-            items_create,
-            items_update,
-            items_delete,
-            items_import,
-            items_export_csv_to_folder,
-            // [scaffold:items] end
             auth_status,
             auth_setup,
             auth_login,
@@ -5045,9 +4792,6 @@ mod tests {
             .expect("init_db_memory");
         let events = event_channel();
         AppState {
-            // [scaffold:items] begin
-            items: ItemsService::new(pool.clone()).with_events(events.clone()),
-            // [scaffold:items] end
             auth: Mutex::new(AuthSlot::default()),
             firewall_change_running: std::sync::atomic::AtomicBool::new(false),
             auth_config_lock: AsyncMutex::new(()),
@@ -5081,7 +4825,6 @@ mod tests {
             // tests exercise command bodies that never touch `metrics`.
             metrics: None,
 
-            exports_dir: PathBuf::from("unused-in-tests").join("exports"),
             started_at: std::time::Instant::now(),
         }
     }
@@ -5110,9 +4853,6 @@ mod tests {
             .expect("init_db");
         let events = event_channel();
         AppState {
-            // [scaffold:items] begin
-            items: ItemsService::new(pool.clone()).with_events(events.clone()),
-            // [scaffold:items] end
             auth: Mutex::new(AuthSlot::default()),
             firewall_change_running: std::sync::atomic::AtomicBool::new(false),
             auth_config_lock: AsyncMutex::new(()),
@@ -5140,7 +4880,6 @@ mod tests {
             pipeline: PipelineService::new(pool.clone()),
             orders: OrdersService::new(pool.clone()),
             metrics: None,
-            exports_dir: dir.path().join("exports"),
             started_at: std::time::Instant::now(),
         }
     }
@@ -5212,192 +4951,6 @@ mod tests {
             result.rows
         );
     }
-
-    // [scaffold:items] begin
-    // --- M15: CSV import -----------------------------------------------------
-    //
-    // D1-d/PR-D2: the whole M15 suite exercises `items_import_body`, so it is
-    // items-only and travels with the `items` remover.
-
-    /// `editor` can import; a mixed create+update batch succeeds and is
-    /// recorded as exactly ONE `action: "import"` audit entry (spec M15:
-    /// "件数サマリ付き1件記録"), with a `{created,updated}` summary detail
-    /// and no `entityId`.
-    #[tokio::test]
-    async fn items_import_records_one_audit_entry_on_success() {
-        let state = app_state().await;
-        let editor = state
-            .users
-            .create_user("editor", "password123", "編集者", Role::Editor)
-            .await
-            .expect("create_user");
-        state.set_session_for_test(Some(DesktopSession::Account(editor)));
-
-        let existing = state
-            .items
-            .create(ItemInput {
-                name: "Existing".to_string(),
-                price: 10,
-                stock: 1,
-            })
-            .await
-            .expect("seed create");
-
-        let result = items_import_body(
-            &state,
-            vec![
-                ItemImportRow {
-                    id: Some(existing.id),
-                    name: "Updated".to_string(),
-                    price: 20,
-                    stock: 2,
-                },
-                ItemImportRow {
-                    id: None,
-                    name: "Brand New".to_string(),
-                    price: 30,
-                    stock: 3,
-                },
-            ],
-        )
-        .await
-        .expect("items_import_body should succeed");
-        assert_eq!(result.created, 1);
-        assert_eq!(result.updated, 1);
-        assert!(result.errors.is_empty());
-
-        let audit = state
-            .audit
-            .list(ListParams::default())
-            .await
-            .expect("audit list");
-        let entries: Vec<_> = audit.rows.iter().filter(|r| r.action == "import").collect();
-        assert_eq!(
-            entries.len(),
-            1,
-            "expected exactly one import entry, got {:?}",
-            audit.rows
-        );
-        let entry = entries[0];
-        assert_eq!(entry.actor_username.as_deref(), Some("editor"));
-        assert_eq!(entry.actor_role.as_deref(), Some("editor"));
-        assert_eq!(entry.resource, "items");
-        assert_eq!(entry.entity_id, None);
-        assert_eq!(entry.origin, "tauri");
-        assert_eq!(entry.result, "ok");
-        let detail: serde_json::Value =
-            serde_json::from_str(entry.detail.as_deref().expect("detail should be set")).unwrap();
-        assert_eq!(detail, serde_json::json!({ "created": 1, "updated": 1 }));
-    }
-
-    /// A per-row validation error rolls the whole batch back - including the
-    /// otherwise-valid row in the same batch - and is recorded as a single
-    /// `result: "failed"` entry summarizing the error count (spec M15).
-    #[tokio::test]
-    async fn items_import_validation_error_rolls_back_and_is_recorded_as_failed() {
-        let state = app_state().await;
-        let editor = state
-            .users
-            .create_user("editor", "password123", "編集者", Role::Editor)
-            .await
-            .expect("create_user");
-        state.set_session_for_test(Some(DesktopSession::Account(editor)));
-
-        // `app_state()` is backed by `init_db_memory` (spec §12), which
-        // seeds 1,000 demo rows - capture that baseline rather than
-        // asserting an absolute `0` below, since this test cares about "did
-        // the import add anything", not "is the table empty".
-        let before = state
-            .items
-            .list(ListParams::default())
-            .await
-            .expect("list")
-            .total_count;
-
-        let result = items_import_body(
-            &state,
-            vec![
-                ItemImportRow {
-                    id: None,
-                    name: "Valid".to_string(),
-                    price: 10,
-                    stock: 1,
-                },
-                ItemImportRow {
-                    id: None,
-                    name: "".to_string(), // fails validation
-                    price: 1,
-                    stock: 1,
-                },
-            ],
-        )
-        .await
-        .expect("items_import_body should return Ok with row errors, not Err");
-        assert_eq!(result.created, 0);
-        assert_eq!(result.updated, 0);
-        assert_eq!(result.errors.len(), 1);
-
-        let list = state.items.list(ListParams::default()).await.expect("list");
-        assert_eq!(
-            list.total_count, before,
-            "a rolled-back import must not leave partial rows"
-        );
-
-        let audit = state
-            .audit
-            .list(ListParams::default())
-            .await
-            .expect("audit list");
-        let entry = audit
-            .rows
-            .iter()
-            .find(|r| r.action == "import")
-            .unwrap_or_else(|| panic!("expected an import entry, got {:?}", audit.rows));
-        assert_eq!(entry.result, "failed");
-        assert_eq!(entry.actor_username.as_deref(), Some("editor"));
-        let detail: serde_json::Value =
-            serde_json::from_str(entry.detail.as_deref().expect("detail should be set")).unwrap();
-        assert_eq!(detail, serde_json::json!({ "errorCount": 1 }));
-    }
-
-    /// `viewer` cannot import (spec M15: editor+ only, same `require_role`
-    /// floor as `items_create`/`update`/`delete`).
-    #[tokio::test]
-    async fn viewer_cannot_import_items() {
-        let state = app_state().await;
-        let viewer = state
-            .users
-            .create_user("viewer", "password123", "閲覧者", Role::Viewer)
-            .await
-            .expect("create_user");
-        state.set_session_for_test(Some(DesktopSession::Account(viewer)));
-        let before = state
-            .items
-            .list(ListParams::default())
-            .await
-            .expect("list")
-            .total_count;
-
-        let err = items_import_body(
-            &state,
-            vec![ItemImportRow {
-                id: None,
-                name: "Nope".to_string(),
-                price: 1,
-                stock: 1,
-            }],
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, BantoError::Forbidden));
-
-        let list = state.items.list(ListParams::default()).await.expect("list");
-        assert_eq!(
-            list.total_count, before,
-            "a forbidden import must not touch the table"
-        );
-    }
-    // [scaffold:items] end
 
     // --- M17: SQLite backup/restore -------------------------------------------
 
@@ -5515,55 +5068,6 @@ mod tests {
             audit_after_cancel.rows
         );
     }
-
-    // [scaffold:items] begin
-    /// [`items_delete_body`] records one `delete`/`items` entry; with no
-    /// attachments swept for the record, `detail` is `None` (M-review 2026-08
-    /// M-5).
-    #[tokio::test]
-    async fn items_delete_is_recorded_as_delete() {
-        let state = app_state().await;
-        let editor = state
-            .users
-            .create_user("editor", "password123", "編集者", Role::Editor)
-            .await
-            .expect("create_user");
-        state.set_session_for_test(Some(DesktopSession::Account(editor)));
-        let item = state
-            .items
-            .create(ItemInput {
-                name: "Doomed".to_string(),
-                price: 1,
-                stock: 1,
-            })
-            .await
-            .expect("seed item");
-
-        items_delete_body(&state, item.id)
-            .await
-            .expect("delete should succeed");
-
-        let audit = state
-            .audit
-            .list(ListParams::default())
-            .await
-            .expect("audit list");
-        let entry = audit
-            .rows
-            .iter()
-            .find(|r| r.action == "delete" && r.resource == "items")
-            .unwrap_or_else(|| panic!("expected a delete/items entry, got {:?}", audit.rows));
-        assert_eq!(entry.actor_username.as_deref(), Some("editor"));
-        assert_eq!(entry.actor_role.as_deref(), Some("editor"));
-        assert_eq!(
-            entry.entity_id.as_deref(),
-            Some(item.id.to_string().as_str())
-        );
-        assert_eq!(entry.origin, "tauri");
-        assert_eq!(entry.result, "ok");
-        assert_eq!(entry.detail, None, "no attachments removed -> detail None");
-    }
-    // [scaffold:items] end
 
     /// [`auth_config_apply_body`]'s normal (non-escape-hatch) path records a
     /// `settings_change`/`settings` entry attributed to the admin, with an
@@ -5923,7 +5427,7 @@ mod tests {
             &format!("{change:?}: users_create from the old desktop session"),
         );
         assert_unauthorized(
-            require_role(state, Role::Viewer, "items").await,
+            require_role(state, Role::Viewer, "projects").await,
             &format!("{change:?}: any role from the old desktop session"),
         );
         assert!(
@@ -6098,7 +5602,7 @@ mod tests {
             assert_desktop_session_ended(&target_desktop, change).await;
             assert_lan_sessions_ended(&server, [&target_regular, &target_remembered], change).await;
             assert!(
-                require_role(&host, Role::Viewer, "items").await.is_ok(),
+                require_role(&host, Role::Viewer, "projects").await.is_ok(),
                 "{change:?}: the bystander's desktop session must survive"
             );
             assert!(
@@ -6214,7 +5718,7 @@ mod tests {
         .unwrap();
 
         assert_unauthorized(
-            require_role(&target_desktop, Role::Viewer, "items").await,
+            require_role(&target_desktop, Role::Viewer, "projects").await,
             "the old session of a re-created username",
         );
     }
@@ -6274,7 +5778,7 @@ mod tests {
         user.id = LOCAL_SESSION_ID;
         state.set_session_for_test(Some(DesktopSession::Account(user)));
         assert_unauthorized(
-            require_role(&state, Role::Viewer, "items").await,
+            require_role(&state, Role::Viewer, "projects").await,
             "an account session whose id does not match its row",
         );
     }
