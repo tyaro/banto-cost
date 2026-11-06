@@ -302,29 +302,50 @@ jobs:
         run: cargo build -p admin-template-core --bin banto-serve --features embed-ui
 
       # `--with-deps` runs apt-get, and the Azure apt mirror is sometimes
-      # extremely slow (2026-11-06: this step took 10 min in one job and 22 s in
-      # the other, same commit). Point apt's download cache at a directory we
-      # cache (keyed by the runner image and the lockfile, which pins the
-      # Playwright version), so a warm run downloads no .deb at all, and cap
-      # the step so a stalled mirror fails fast instead of eating the job.
+      # extremely slow (2026-11-06: 9 font packages / 21.9 MB took over 10 min,
+      # while the same step took 22 s an hour earlier). apt's download cache is
+      # pointed at a directory we cache (keyed by the runner image and the
+      # lockfile, which pins the Playwright version), so a warm run downloads
+      # no .deb at all. The cache is saved even when the step fails or times
+      # out, so the .deb files that did arrive are not fetched again.
       - name: Restore apt package cache (Playwright deps)
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        id: apt-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/apt-archives
-          key: playwright-apt-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-apt-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
           restore-keys: |
+            playwright-apt-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('pnpm-lock.yaml') }}-
             playwright-apt-${{ env.ImageOS }}-
 
       - name: Install Playwright Chromium
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           mkdir -p ~/apt-archives/partial
+          ls ~/apt-archives/*.deb 2>/dev/null | sort > "$RUNNER_TEMP/apt-before" || true
           printf 'Dir::Cache::Archives "%s";\nAcquire::Retries "3";\nAPT::Keep-Downloaded-Packages "true";\n' "$HOME/apt-archives" \
             | sudo tee /etc/apt/apt.conf.d/99banto-ci-cache
           pnpm exec playwright install --with-deps chromium
-          # apt leaves root-only files that the cache save step (runner user) cannot read.
+
+      # apt leaves root-only files that the save step (runner user) cannot read.
+      - name: Prepare apt package cache for saving
+        id: apt-prepare
+        if: always() && steps.apt-cache.outcome == 'success'
+        run: |
           sudo rm -rf ~/apt-archives/lock ~/apt-archives/partial
-          sudo chown -R "$USER" ~/apt-archives
+          sudo chown -R "$USER" ~/apt-archives || true
+          # Save a new entry only when .deb files were added (keys are immutable,
+          # so a partial cache from a timed-out run gets topped up this way).
+          if [ "$(ls ~/apt-archives/*.deb 2>/dev/null | sort)" != "$(cat "$RUNNER_TEMP/apt-before" 2>/dev/null)" ]; then
+            echo changed=true >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save apt package cache (Playwright deps)
+        if: always() && steps.apt-cache.outcome == 'success' && steps.apt-prepare.outputs.changed == 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/apt-archives
+          key: playwright-apt-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       # Smoke (`pnpm e2e`) and viewer-public (`pnpm e2e:public-viewer`, Issue
       # #189: a second banto-serve started with BANTO_VIEWER_PUBLIC=1 by the
@@ -378,29 +399,50 @@ jobs:
         run: pnpm build
 
       # `--with-deps` runs apt-get, and the Azure apt mirror is sometimes
-      # extremely slow (2026-11-06: this step took 10 min in one job and 22 s in
-      # the other, same commit). Point apt's download cache at a directory we
-      # cache (keyed by the runner image and the lockfile, which pins the
-      # Playwright version), so a warm run downloads no .deb at all, and cap
-      # the step so a stalled mirror fails fast instead of eating the job.
+      # extremely slow (2026-11-06: 9 font packages / 21.9 MB took over 10 min,
+      # while the same step took 22 s an hour earlier). apt's download cache is
+      # pointed at a directory we cache (keyed by the runner image and the
+      # lockfile, which pins the Playwright version), so a warm run downloads
+      # no .deb at all. The cache is saved even when the step fails or times
+      # out, so the .deb files that did arrive are not fetched again.
       - name: Restore apt package cache (Playwright deps)
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        id: apt-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/apt-archives
-          key: playwright-apt-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-apt-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
           restore-keys: |
+            playwright-apt-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('pnpm-lock.yaml') }}-
             playwright-apt-${{ env.ImageOS }}-
 
       - name: Install Playwright Chromium
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           mkdir -p ~/apt-archives/partial
+          ls ~/apt-archives/*.deb 2>/dev/null | sort > "$RUNNER_TEMP/apt-before" || true
           printf 'Dir::Cache::Archives "%s";\nAcquire::Retries "3";\nAPT::Keep-Downloaded-Packages "true";\n' "$HOME/apt-archives" \
             | sudo tee /etc/apt/apt.conf.d/99banto-ci-cache
           pnpm exec playwright install --with-deps chromium
-          # apt leaves root-only files that the cache save step (runner user) cannot read.
+
+      # apt leaves root-only files that the save step (runner user) cannot read.
+      - name: Prepare apt package cache for saving
+        id: apt-prepare
+        if: always() && steps.apt-cache.outcome == 'success'
+        run: |
           sudo rm -rf ~/apt-archives/lock ~/apt-archives/partial
-          sudo chown -R "$USER" ~/apt-archives
+          sudo chown -R "$USER" ~/apt-archives || true
+          # Save a new entry only when .deb files were added (keys are immutable,
+          # so a partial cache from a timed-out run gets topped up this way).
+          if [ "$(ls ~/apt-archives/*.deb 2>/dev/null | sort)" != "$(cat "$RUNNER_TEMP/apt-before" 2>/dev/null)" ]; then
+            echo changed=true >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save apt package cache (Playwright deps)
+        if: always() && steps.apt-cache.outcome == 'success' && steps.apt-prepare.outputs.changed == 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/apt-archives
+          key: playwright-apt-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       # Baselines under e2e/visual/**/*-snapshots are committed pre-generated
       # on Linux, so this ubuntu-latest runner diffs against them directly -
