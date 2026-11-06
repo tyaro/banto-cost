@@ -4,12 +4,14 @@
  * items.ts). Wire shape: `admin_template_core::projects::Project` /
  * `ProjectInput`; updates send back the `rowVersion` that was read. No delete.
  *
- * Status rule (spec §5.1 / §5.5): only the pre-order statuses and 失注・中止・保留
- * may be chosen here - the ordered side (受注〜精算完了) is reached through order
- * conversion (a later phase). The registered schema lists EVERY status so the
- * list grid can label any row; the form pages call `projectFormSchema()` to get
- * the narrowed (or, for an already-ordered project, read-only) status field and
- * an optional customer / manager picker.
+ * Status rule (spec §5.1 / §5.5, `ProjectStatus::can_edit_to`): before the order
+ * only the pre-order statuses and 失注・中止・保留 may be chosen here - the
+ * ordered side is reached through order conversion (P3b, OrderSection.svelte).
+ * An ordered project moves only between 受注・進行中・作業完了; 精算完了 comes
+ * from the close-out check (T17) and is read-only. The registered schema lists
+ * EVERY status so the list grid can label any row; the form pages call
+ * `projectFormSchema()` to get the narrowed status field and an optional
+ * customer / manager picker.
  *
  * Labels are lazy getters for the same reason as items.ts.
  */
@@ -60,7 +62,10 @@ export const SETTABLE_STATUSES: readonly string[] = [
 	'on_hold'
 ];
 
-/** Ordered side (受注〜精算完了): no pipeline versions, status read-only here. */
+/** Statuses an ordered project may move between on the ledger form. */
+export const ORDERED_EDITABLE_STATUSES: readonly string[] = ['ordered', 'in_progress', 'work_done'];
+
+/** Ordered side (受注〜精算完了): no pipeline versions. */
 export function isOrderedStatus(status: string): boolean {
 	return (
 		!SETTABLE_STATUSES.includes(status) && (PROJECT_STATUSES as readonly string[]).includes(status)
@@ -176,7 +181,7 @@ export const projectsSchema: FormSchema = {
 };
 
 export interface ProjectFormOptions {
-	/** The stored status when editing; an ordered-side one makes the field read-only. */
+	/** The stored status when editing; an ordered-side one narrows the field to the ordered side. */
 	currentStatus?: string;
 	/** Customers to pick from (active ones, plus the current one). Omitted = numeric id input. */
 	customers?: FieldOption[];
@@ -205,7 +210,10 @@ export function projectFormSchema(options: ProjectFormOptions = {}): FormSchema 
 	return {
 		fields: projectsSchema.fields.map((field): FieldDef => {
 			if (field.name === 'status') {
-				if (ordered) return extend(field, { readonly: true });
+				if (ordered && options.currentStatus === 'settled') {
+					return extend(field, { readonly: true });
+				}
+				if (ordered) return extend(field, { options: statusOptions(ORDERED_EDITABLE_STATUSES) });
 				return extend(field, { options: statusOptions(SETTABLE_STATUSES) });
 			}
 			if (field.name === 'customerId' && options.customers) {

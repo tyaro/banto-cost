@@ -1,11 +1,18 @@
 /**
  * banto-cost P3a display rules: unset values are 未設定, never 0; the
- * project form only offers the directly settable statuses and freezes an
- * ordered-side one (spec §5.1 / §5.4).
+ * project form only offers the directly settable statuses, keeps an ordered
+ * project on the ordered side and freezes a settled one (spec §5.1 / §5.4).
  */
 import { describe, expect, it } from 'vitest';
 import * as m from '#lib/paraglide/messages.js';
-import { formatPct, formatYen, issueLabel, statusLabel, unmatchedFieldErrors } from './costFormat';
+import {
+	formatPct,
+	formatSignedYen,
+	formatYen,
+	issueLabel,
+	statusLabel,
+	unmatchedFieldErrors
+} from './costFormat';
 import { isOrderedStatus, projectFormSchema, SETTABLE_STATUSES } from './resources/projects';
 
 describe('costFormat', () => {
@@ -36,6 +43,15 @@ describe('costFormat', () => {
 	});
 });
 
+describe('formatSignedYen', () => {
+	it('signs the amount and keeps null as unset', () => {
+		expect(formatSignedYen(300000)).toBe('+¥300,000');
+		expect(formatSignedYen(-100000)).toBe('-¥100,000');
+		expect(formatSignedYen(0)).toBe('¥0');
+		expect(formatSignedYen(null)).not.toBe('¥0');
+	});
+});
+
 describe('projectFormSchema', () => {
 	const statusField = (schema: ReturnType<typeof projectFormSchema>) =>
 		schema.fields.find((field) => field.name === 'status')!;
@@ -48,7 +64,15 @@ describe('projectFormSchema', () => {
 	it('makes an ordered-side status read-only', () => {
 		expect(isOrderedStatus('in_progress')).toBe(true);
 		expect(isOrderedStatus('on_hold')).toBe(false);
-		expect(statusField(projectFormSchema({ currentStatus: 'ordered' })).readonly).toBe(true);
+		// An ordered project moves only on the ordered side; settled is read-only.
+		const ordered = statusField(projectFormSchema({ currentStatus: 'ordered' }));
+		expect(ordered.readonly).toBeFalsy();
+		expect(ordered.options!.map((option) => option.value)).toEqual([
+			'ordered',
+			'in_progress',
+			'work_done'
+		]);
+		expect(statusField(projectFormSchema({ currentStatus: 'settled' })).readonly).toBe(true);
 		expect(statusField(projectFormSchema({ currentStatus: 'lead' })).readonly).toBeFalsy();
 	});
 

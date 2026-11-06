@@ -136,7 +136,8 @@ export interface PipelineOverview {
 
 export const DEMO_MODE_MESSAGE = 'デモモードでは利用できません';
 
-function demoModeError(): ProviderError {
+/** Shared with ordersAdmin.ts (same transport, same demo-mode refusal). */
+export function demoModeError(): ProviderError {
 	return new ProviderError({ kind: 'other', message: DEMO_MODE_MESSAGE });
 }
 
@@ -169,7 +170,7 @@ function toProviderError(err: unknown): ProviderError {
 	return new ProviderError({ kind: 'other', message });
 }
 
-async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 	try {
 		return (await invoke(cmd, args)) as T;
 	} catch (err) {
@@ -179,7 +180,7 @@ async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Pr
 
 const NETWORK_ERROR_MESSAGE = 'サーバーに接続できません';
 
-interface HttpInit {
+export interface HttpInit {
 	method: string;
 	body?: unknown;
 }
@@ -190,7 +191,7 @@ function currentToken(): string | null {
 	return auth.getToken ? auth.getToken() : null;
 }
 
-async function httpRequest<T>(path: string, init: HttpInit): Promise<T> {
+export async function httpRequest<T>(path: string, init: HttpInit): Promise<T> {
 	const hasBody = init.body !== undefined;
 	const headers: Record<string, string> = { ...CSRF_HEADER };
 	if (hasBody) headers['Content-Type'] = 'application/json';

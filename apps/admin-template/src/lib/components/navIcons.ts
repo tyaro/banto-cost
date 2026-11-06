@@ -7,7 +7,7 @@
 import type { Component } from 'svelte';
 import { LayoutDashboard, Package, Users, ScrollText, Settings } from '@lucide/svelte';
 import { Palette } from '@lucide/svelte';
-import { Building, FolderKanban, TrendingUp } from '@lucide/svelte';
+import { Building, CalendarRange, FolderKanban, TrendingUp } from '@lucide/svelte';
 import type { CostNavIconKey, DemoNavIconKey, NavIconKey } from '#lib/navigation.js';
 
 export const NAV_ICONS: Record<NavIconKey | CostNavIconKey | DemoNavIconKey, Component> = {
@@ -18,6 +18,7 @@ export const NAV_ICONS: Record<NavIconKey | CostNavIconKey | DemoNavIconKey, Com
 	settings: Settings,
 	'ui-demo': Palette,
 	pipeline: TrendingUp,
+	outlook: CalendarRange,
 	projects: FolderKanban,
 	customers: Building
 };

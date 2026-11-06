@@ -22,6 +22,7 @@
 
 ## [Unreleased]
 
+- banto-cost P3b: 受注転換（全部・一部）、受注変更（未確定追加売上と承認）、受注済み売上予定の組み替え、売上計上と予定の消し込み・取消、月次売上見通しとスナップショット（T23 T24 T26 T27）。REST `/api/projects/{id}/order/*`・`/api/outlook*` と Tauri `order_*`・`revenue_*`・`outlook_*`、操作 `EditOrder`、マイグレーション `0011_orders.sql`、案件詳細の「受注・売上」と画面 `/outlook`。
 - CI の軽量化: visual 回帰を4並列に、smoke と viewer-public を1回の実行に、i18n の CDN 遮断検査を frontend ジョブへ統合（旧ジョブはリネーム後に対象パッケージが無く何も検査していなかったので `--fail-if-no-match` で直す）、Tauri check の apt パッケージをキャッシュし手順に時間制限。
 
 - banto-cost P3a: 顧客・案件台帳・案件見込の版（下書き・採用・月別売上予定）と案件見込一覧を追加（マイグレーション `0010_projects.sql`、REST / Tauri の両経路、ADR-0028 の能力×案件範囲で判定。受入条件 T12/T13/T21/T22/T24/T25 のテスト）。

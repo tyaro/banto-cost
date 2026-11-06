@@ -39,7 +39,7 @@
 1. **新規リポジトリ**（仮称 `tyaro/banto-cost`）に Banto v6.10.0 をコピーし、`rename.mjs` と `scaffold --preset standard` で開始する。
    - 個人用 banto-business の派生ではなく、Banto 本体から派生する。個人用データとの混入（T19/T20）を構造的に防ぐ。
    - `@banto/*` を git タグ依存で使う方式（`consume-as-git-dependency.md`）も候補。テンプレート部分の更新を追いやすいが、初期の手数は増える。どちらにするかはリポジトリ作成時に決める。
-2. DBは開発時 SQLite、社内運用は PostgreSQL。マイグレーションは両方を同時に保つ（Banto規約§11）。
+2. DBは開発・社内運用とも SQLite（2026-11-06 ユーザー決定：小さい会社で操作するのは1人、ほかのDBを入れない）。PostgreSQL 版のマイグレーションは Banto規約§11 に合わせて同名で保つが、検証の主対象は SQLite とする。
 3. 計算ロジックは Rust の純粋なドメインクレート（仮称 `cost-domain`）にまとめる。tauri / axum / sqlx に依存させず、受入条件の計算（T02, T05, T06, T21, T27, T28 など）を単体テストで固定する。
 
 ## 2 権限モデル
@@ -80,6 +80,8 @@ Bantoの3ロールは全順序で、「経理は単価を見られるが利用�
 - 判定の既定：担当種別 `worker` は案件の基本情報と自分の工数入力だけで、金額は見ない。金額は `amount.view` に加えて、`manager`・`sales` の担当か、`report.all`・`finance.close` が要る。個人別単価は `finance.rate` だけ。
 - テーブル：`user_capabilities`・`project_members`（マイグレーション `0009_authz.sql`、SQLite / Postgres）。`project_members.project_id` は外部キーを持たない（SQLite では既存の表に後から外部キーを足せないため）。代わりに `AuthzService::add_project_member` が案件の存在を確かめる（P3a）。
 - 操作：`GET /api/authz/me`、`GET・PUT /api/users/{id}/capabilities`（admin）、`GET /api/projects/{id}/members`（admin か案件範囲）、`PUT・DELETE /api/projects/{id}/members/{userId}/{kind}`（admin）。Tauri は `authz_*`・`project_members_*`。画面は P3 で作る。
+- P3b で操作 `EditOrder` を足した（受注転換・受注変更の登録・売上予定の組み替え）。範囲は `EditProject` と同じ（担当営業の `pipeline.edit` か責任者の `project.manage`）で、加えて `amount.view` が要る。
+- 自己承認（2026-11-06 ユーザー決定）：操作するのは1人なので、受注変更の承認だけは依頼者本人の承認を認める（`orders::ORDER_CHANGE_POLICY`、仕様第4章の小規模例外）。使ったときは監査ログの詳細に `selfApproval: true` を残す。判定関数の既定（自己承認の禁止）は変えず、P4 以降の工数・直接費の承認は別に決める。
 
 ## 3 データモデル案
 
@@ -133,6 +135,20 @@ revenue_recognitions(id, project_id, recognized_on, amount, basis,
 
 - 確定受注額 ＝ 受注転換額 ＋ 承認済み受注変更の合計。
 - 未計上残 ＝ 確定受注額 − 計上済み合計。`revenue_plan` の合計と一致を検査（マイナス残は不整合）。
+
+#### 3.2.1 実装（P3b、2026-11-06）
+
+- マイグレーション `0011_orders.sql`（SQLite / Postgres）：`order_conversions`・`order_changes`・`revenue_plan`・`revenue_recognitions`・`revenue_clearings`・`outlook_snapshots`・`outlook_snapshot_rows`。`projects` に `parent_project_id`（一部受注の残りの元）と `revenue_version` を足した。設計案の `quotes` は使っていない（見積の版は案件見込の版で足りている）。
+- 計算規則は `cost_domain::order`（転換の検査・確定受注額・未確定追加売上）と `cost_domain::revenue`（`replan`・`apply_change`・`auto_clear`・`with_sale`・`without_sale`。いずれも結果を `OrderedRevenue::check` に通す）。サービスは `admin_template_core::orders`。
+- 受注転換（T23）：受注前で有効な状態（引合・見積中・交渉中・保留）だけ。同じ案件を `ordered` にし、受注日・確定受注額・根拠・予定開始日と完了日・売上予定（合計＝確定受注額）を記録する。案件見込の版は書き換えず、転換前の状態と直前の採用版を `order_conversions` に残す。売上は計上しない。案件の `row_version` で楽観ロックする。
+- 一部受注（T24）：受注分は元の案件、残りは新しい受注前の案件（`parent_project_id`、元の担当営業・責任者を引き継ぐ）にし、その案件見込を採用版1として同じトランザクションで記録する。受注分は未受注見込に残らない。
+- 受注済みの案件は受注前の状態へ戻せない。案件の編集画面では受注・進行中・作業完了の間だけ動かせる（`ProjectStatus::can_edit_to`）。精算完了は T17 の検査（P6）で扱う。
+- 受注変更：差額・売上予定の月（または時期未定）・根拠で登録し、承認までは未確定追加売上（確定受注額に含めない）。承認で確定受注額と指定月の売上予定に加える。減額で予定や未計上残がマイナスになる承認は拒否する。却下は理由必須で、どちらも履歴に残る。
+- 売上予定の組み替え：未計上の額だけを月（または時期未定）に配り直す。合計は未計上残に一致させ、消込済みの行は残す。
+- 売上計上（T26）：`finance.close` が記録する。計上月の予定 → それより前の月 → 後の月 → 時期未定の順に自動で消し込む。受注額の超過・消し込み不足は拒否し、0円に丸めない。誤りは理由をつけて取り消し（行と消し込みは履歴に残す）、予定は未消込に戻る。
+- 同時更新：受注・売上への書き込みはすべて `projects.revenue_version` の比較更新から始め、同じ状態を見た二人が両方とも検査を通ることを防ぐ（T13）。案件の編集フォームの `row_version` とは分けた。
+- 月次見通し（T27、`GET /api/outlook`）：案件ごとに `outlook::monthly_outlook` で計上済み・受注済み予定（未消込分）・未受注×確度を求めて足し、三つの内訳と合計を返す。時期未定は独立の行で月の合計に入れない。未確定追加売上は別の列で合計に入れない。範囲は `amount_projects`。
+- スナップショット：`report.all` が全案件の見通しを案件×月の行で保存する。後の受注転換・計上で変わらない。表示・比較（前回差異）は呼び出した人の `amount_projects` の行だけ。
 
 ### 3.3 予算・工数・直接費
 
@@ -243,7 +259,7 @@ Banto の `(app)` ルート配下に置く。一覧はデータグリッド、�
 | P1   | `cost-domain` の計算と受入条件の単体テスト                         | T02, T05, T06, T08, T21, T27, T28 が通る |
 | P2   | 能力・案件範囲の認可、案件・顧客・工程マスタ                       | T12, T19, T20（両経路の認可テスト）      |
 | P3a  | 顧客・案件台帳・案件見込の版（下書き・採用）・案件見込一覧         | T21, T22, T25（2026-11-06）              |
-| P3b  | 受注転換・部分受注・受注変更・売上予定と計上の消し込み・月次見通し | T23, T24, T26, T27                       |
+| P3b  | 受注転換・部分受注・受注変更・売上予定と計上の消し込み・月次見通し | T23, T24, T26, T27（2026-11-06）         |
 | P4   | 予算版・工数・単価・直接費・発注                                   | T02〜T05, T09, T10, T14                  |
 | P5   | 完了見込版・注意表示・全体一覧                                     | T06, T28, T30                            |
 | P6   | 承認・締め・訂正・CSV                                              | T11, T13, T15, T17                       |

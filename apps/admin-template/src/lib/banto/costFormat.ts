@@ -77,6 +77,41 @@ export function issueLabel(issue: string): string {
 	return ISSUE_LABELS[issue]?.() ?? issue;
 }
 
+const REVENUE_ISSUE_LABELS: Record<string, () => string> = {
+	over_recognized: () => m['orders.issue.overRecognized'](),
+	plan_mismatch: () => m['orders.issue.planMismatch'](),
+	over_cleared: () => m['orders.issue.overCleared'](),
+	clearing_exceeds_sale: () => m['orders.issue.clearingExceedsSale'](),
+	unknown_plan: () => m['orders.issue.unknownPlan'](),
+	invalid_amount: () => m['orders.issue.invalidAmount'](),
+	duplicate_plan_month: () => m['orders.issue.duplicatePlanMonth'](),
+	unknown_sale: () => m['orders.issue.unknownSale']()
+};
+
+/** Localized label of an ordered-revenue issue code (`cost_domain::revenue::RevenueIssue`). */
+export function revenueIssueLabel(issue: string): string {
+	return REVENUE_ISSUE_LABELS[issue]?.() ?? issue;
+}
+
+const CHANGE_STATUS_LABELS: Record<string, () => string> = {
+	pending: () => m['orders.changeStatus.pending'](),
+	approved: () => m['orders.changeStatus.approved'](),
+	rejected: () => m['orders.changeStatus.rejected']()
+};
+
+/** Order-change status label (pending = 未確定追加売上). */
+export function changeStatusLabel(status: string): string {
+	return CHANGE_STATUS_LABELS[status]?.() ?? status;
+}
+
+/** A signed yen amount (+¥300,000 / -¥100,000) for order-change deltas and differences. */
+export function formatSignedYen(value: number | null | undefined): string {
+	if (value === null || value === undefined) return m['cost.unset']();
+	if (value > 0) return `+¥${value.toLocaleString()}`;
+	if (value < 0) return `-¥${(-value).toLocaleString()}`;
+	return '¥0';
+}
+
 /**
  * Server field errors that no rendered field shows (e.g. a stale `rowVersion`
  * after someone else saved the record first) - the form pages list these
