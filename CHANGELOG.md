@@ -22,6 +22,8 @@
 
 ## [Unreleased]
 
+- CI の軽量化: visual 回帰を4並列に、smoke と viewer-public を1回の実行に、i18n の CDN 遮断検査を frontend ジョブへ統合（旧ジョブはリネーム後に対象パッケージが無く何も検査していなかったので `--fail-if-no-match` で直す）、Tauri check の apt パッケージをキャッシュし手順に時間制限。
+
 - banto-cost P3a: 顧客・案件台帳・案件見込の版（下書き・採用・月別売上予定）と案件見込一覧を追加（マイグレーション `0010_projects.sql`、REST / Tauri の両経路、ADR-0028 の能力×案件範囲で判定。受入条件 T12/T13/T21/T22/T24/T25 のテスト）。
 
 - banto-cost P2: 業務の権限を能力（capability）× 案件範囲で判定する `banto_admin_services::authz` と、能力の付与・案件メンバーの REST / Tauri 操作を追加（マイグレーション `0009_authz.sql`、ADR-0028、受入条件 T12/T19/T20 の両経路テスト）。

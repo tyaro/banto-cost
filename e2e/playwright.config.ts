@@ -32,7 +32,7 @@
  * workflow), same division of labor as `.claude/launch.json`'s
  * `banto-serve` entry.
  *
- * The whole suite runs single-worker/serial in one spec file
+ * The whole suite runs single-worker/serial (project `workers: 1`) in one spec file
  * (`tests/smoke.spec.ts`) against one shared `page` - each scenario builds
  * on state the previous one created (the admin account, the item, the
  * viewer account, ...), mirroring how a person would actually click through
@@ -111,7 +111,15 @@ export default defineConfig({
 	outputDir: path.join(dirname, 'test-results'),
 	globalTeardown: path.join(dirname, 'global-teardown.ts'),
 	fullyParallel: false,
-	workers: 1,
+	// Total worker limit. The two smoke projects pin themselves to one worker
+	// below (their single spec file shares one `page` and builds state scenario
+	// by scenario); only `visual` actually fans out. Its specs are independent
+	// (browser demo mode: each test gets a fresh context, so InMemory data and
+	// localStorage never leak between files), and running them on one worker
+	// made it the slowest CI job (2026-11-06: 4.5 min of a 5.5 min job).
+	// Files run in parallel; tests inside one file stay in order
+	// (`fullyParallel: false`). GitHub's ubuntu runners have 4 vCPUs.
+	workers: process.env.CI ? 4 : undefined,
 	// A single retry in CI absorbs shared-runner hiccups (slow first paint,
 	// a cold-cache SQLite VACUUM INTO for the backup scenario) without
 	// masking a genuinely broken scenario - locally we want an immediate,
@@ -146,7 +154,7 @@ export default defineConfig({
 		// M18 smoke suite (unchanged behavior): explicit testDir so adding the
 		// `visual` project below can never pull tests/visual/*.spec.ts into the
 		// wrong project or vice versa.
-		{ name: 'chromium', testDir: './tests', use: { ...devices['Desktop Chrome'] } },
+		{ name: 'chromium', testDir: './tests', workers: 1, use: { ...devices['Desktop Chrome'] } },
 		// Viewer-public mode (Issue #189): LAN/REST mode like `chromium`, but
 		// against the second banto-serve started with BANTO_VIEWER_PUBLIC=1
 		// (see `webServer` below). Own testDir so neither project can pick up
@@ -154,6 +162,7 @@ export default defineConfig({
 		{
 			name: 'public-viewer',
 			testDir: './tests-public-viewer',
+			workers: 1,
 			use: { ...devices['Desktop Chrome'], baseURL: PUBLIC_VIEWER_BASE_URL }
 		},
 		// Phase 0 visual regression + axe-core (visual-refresh-design.md §12).
@@ -168,7 +177,16 @@ export default defineConfig({
 				...devices['Desktop Chrome'],
 				viewport: { width: 1440, height: 900 },
 				reducedMotion: 'reduce',
-				baseURL: VISUAL_BASE_URL
+				baseURL: VISUAL_BASE_URL,
+				// Keyboard scrolling (Home/End/PageDown on a focused scroll
+				// region) is animated by Chromium regardless of `reducedMotion`,
+				// so a test that presses the next key once the previous scroll
+				// "arrived" races the tail of that animation. Harmless on one
+				// worker; with 4 workers on 4 vCPUs the frames slow down and
+				// grid-long-errors' PageDown check went flaky (CI 2026-11-06).
+				// Without the animation each key scrolls in one step. Screenshots
+				// are unaffected (they are taken at rest).
+				launchOptions: { args: ['--disable-smooth-scrolling'] }
 			},
 			expect: {
 				// §12.1: pixel-level tolerance for the whole project, so specs

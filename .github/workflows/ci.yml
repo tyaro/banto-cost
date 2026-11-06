@@ -54,6 +54,29 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # i18n サプライチェーン/再現性ガード（テンプレート実用性レビュー §2）。
+      # inlang プラグインは以前 jsdelivr の CDN URL で参照されており、毎ビルド
+      # CDN 取得＝`--frozen-lockfile` の再現性の外だった。取得失敗時 paraglide-js は
+      # WARN 後 exit 0 で空カタログを吐く（fail-open）ため、CI は常に緑・被害は
+      # 閉域網の端末で発生していた。プラグインをローカル devDependency に移した
+      # うえで、依存 install の直後に CDN を遮断し、以降の手順（compile・check・
+      # build）すべてが (1) CDN に一切依存しないこと (2) fail-closed ガード
+      # (scripts/check-i18n-nonempty.mjs) が非空カタログを保証すること、を検証する。
+      # もし何かが CDN 取得に退行したら 127.0.0.1 への接続が失敗し、空カタログ
+      # → ガードが非0終了してこのジョブが赤になる。
+      # （以前は別ジョブ i18n-offline だった。install までが同じなので統合した。
+      # なお旧ジョブはリネーム後も `--filter admin-template` のままで、どの
+      # パッケージにも当たらず何も検査せずに緑だった。`--fail-if-no-match` で
+      # 同じ取りこぼしを赤にする）
+      - name: Block CDN egress (jsdelivr / unpkg / esm.sh)
+        run: |
+          echo "127.0.0.1 cdn.jsdelivr.net" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 unpkg.com" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 esm.sh" | sudo tee -a /etc/hosts
+
+      - name: Compile i18n from local plugins (offline)
+        run: pnpm --filter banto-cost-app --fail-if-no-match paraglide:compile
+
       - name: Lint (ESLint)
         run: pnpm lint
 
@@ -89,49 +112,6 @@ jobs:
 
       - name: Build
         run: pnpm build
-
-  # i18n サプライチェーン/再現性ガード（テンプレート実用性レビュー §2）。
-  # inlang プラグインは以前 jsdelivr の CDN URL で参照されており、毎ビルド
-  # CDN 取得＝`--frozen-lockfile` の再現性の外だった。取得失敗時 paraglide-js は
-  # WARN 後 exit 0 で空カタログを吐く（fail-open）ため、CI は常に緑・被害は
-  # 閉域網の端末で発生していた。プラグインをローカル devDependency に移した
-  # うえで、このジョブは「依存 install 後に CDN を遮断してから compile」して
-  # (1) CDN に一切依存しないこと (2) fail-closed ガード
-  # (scripts/check-i18n-nonempty.mjs) が非空カタログを保証すること、を検証する。
-  i18n-offline:
-    name: i18n (CDN-blocked reproducibility)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # jsdelivr（および一般的な npm ミラー CDN）をブラックホール化する。
-      # ローカル参照が正しければ compile はこれで一切影響を受けない。もし
-      # 何かが CDN 取得に退行したら 127.0.0.1 への接続が失敗し、空カタログ
-      # → fail-closed ガードが非0終了してこのジョブが赤になる。
-      - name: Block CDN egress (jsdelivr)
-        run: |
-          echo "127.0.0.1 cdn.jsdelivr.net" | sudo tee -a /etc/hosts
-          echo "127.0.0.1 unpkg.com" | sudo tee -a /etc/hosts
-          echo "127.0.0.1 esm.sh" | sudo tee -a /etc/hosts
-
-      # ローカルプラグインから compile が成功し、ガードが非空カタログを
-      # 通すことを確認する（CDN 遮断下でも緑になるのが正しい状態）。
-      - name: Compile i18n from local plugins (offline)
-        run: pnpm --filter admin-template paraglide:compile
 
   rust:
     name: Rust (fmt / clippy / check / test)
@@ -321,16 +301,67 @@ jobs:
       - name: Build banto-serve (embed-ui)
         run: cargo build -p admin-template-core --bin banto-serve --features embed-ui
 
+      # `--with-deps` runs apt-get, and the Azure apt mirror is sometimes
+      # extremely slow (2026-11-06: 9 font packages / 21.9 MB took over 10 min,
+      # while the same step took 22 s an hour earlier). apt's download cache is
+      # pointed at a directory we cache (keyed by the runner image and the
+      # lockfile, which pins the Playwright version), so a warm run downloads
+      # no .deb at all. The cache is saved even when the step fails or times
+      # out, so the .deb files that did arrive are not fetched again.
+      # ImageOS / ImageVersion are the runner's shell variables, not the
+      # workflow `env` context (`env.ImageOS` is empty in an expression).
+      - name: Read runner image version
+        id: image
+        run: |
+          echo "os=${ImageOS}" >> "$GITHUB_OUTPUT"
+          echo "id=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore apt package cache (Playwright deps)
+        id: apt-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/apt-archives
+          key: playwright-apt-${{ steps.image.outputs.id }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
+          restore-keys: |
+            playwright-apt-${{ steps.image.outputs.id }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            playwright-apt-${{ steps.image.outputs.os }}-
+
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 20
+        run: |
+          mkdir -p ~/apt-archives/partial
+          ls ~/apt-archives/*.deb 2>/dev/null | sort > "$RUNNER_TEMP/apt-before" || true
+          printf 'Dir::Cache::Archives "%s";\nAcquire::Retries "3";\nAPT::Keep-Downloaded-Packages "true";\n' "$HOME/apt-archives" \
+            | sudo tee /etc/apt/apt.conf.d/99banto-ci-cache
+          pnpm exec playwright install --with-deps chromium
 
-      - name: Run E2E smoke suite
-        run: pnpm e2e
+      # apt leaves root-only files that the save step (runner user) cannot read.
+      - name: Prepare apt package cache for saving
+        id: apt-prepare
+        if: always() && steps.apt-cache.outcome == 'success'
+        run: |
+          sudo rm -rf ~/apt-archives/lock ~/apt-archives/partial
+          sudo chown -R "$USER" ~/apt-archives || true
+          # Save a new entry only when .deb files were added (keys are immutable,
+          # so a partial cache from a timed-out run gets topped up this way).
+          if [ "$(ls ~/apt-archives/*.deb 2>/dev/null | sort)" != "$(cat "$RUNNER_TEMP/apt-before" 2>/dev/null)" ]; then
+            echo changed=true >> "$GITHUB_OUTPUT"
+          fi
 
-      # Viewer-public mode (Issue #189): second banto-serve started with
-      # BANTO_VIEWER_PUBLIC=1 by the same playwright config.
-      - name: Run E2E viewer-public suite
-        run: pnpm e2e:public-viewer
+      - name: Save apt package cache (Playwright deps)
+        if: always() && steps.apt-cache.outcome == 'success' && steps.apt-prepare.outputs.changed == 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/apt-archives
+          key: playwright-apt-${{ steps.image.outputs.id }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Smoke (`pnpm e2e`) and viewer-public (`pnpm e2e:public-viewer`, Issue
+      # #189: a second banto-serve started with BANTO_VIEWER_PUBLIC=1 by the
+      # same playwright config) in ONE run: each project is pinned to one
+      # worker and has its own server and DB, so they run side by side instead
+      # of back to back.
+      - name: Run E2E smoke + viewer-public suites
+        run: pnpm exec playwright test --config=e2e/playwright.config.ts --project=chromium --project=public-viewer
 
       - name: Upload Playwright report
         if: failure()
@@ -375,8 +406,59 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
+      # `--with-deps` runs apt-get, and the Azure apt mirror is sometimes
+      # extremely slow (2026-11-06: 9 font packages / 21.9 MB took over 10 min,
+      # while the same step took 22 s an hour earlier). apt's download cache is
+      # pointed at a directory we cache (keyed by the runner image and the
+      # lockfile, which pins the Playwright version), so a warm run downloads
+      # no .deb at all. The cache is saved even when the step fails or times
+      # out, so the .deb files that did arrive are not fetched again.
+      # ImageOS / ImageVersion are the runner's shell variables, not the
+      # workflow `env` context (`env.ImageOS` is empty in an expression).
+      - name: Read runner image version
+        id: image
+        run: |
+          echo "os=${ImageOS}" >> "$GITHUB_OUTPUT"
+          echo "id=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore apt package cache (Playwright deps)
+        id: apt-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/apt-archives
+          key: playwright-apt-${{ steps.image.outputs.id }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
+          restore-keys: |
+            playwright-apt-${{ steps.image.outputs.id }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            playwright-apt-${{ steps.image.outputs.os }}-
+
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 20
+        run: |
+          mkdir -p ~/apt-archives/partial
+          ls ~/apt-archives/*.deb 2>/dev/null | sort > "$RUNNER_TEMP/apt-before" || true
+          printf 'Dir::Cache::Archives "%s";\nAcquire::Retries "3";\nAPT::Keep-Downloaded-Packages "true";\n' "$HOME/apt-archives" \
+            | sudo tee /etc/apt/apt.conf.d/99banto-ci-cache
+          pnpm exec playwright install --with-deps chromium
+
+      # apt leaves root-only files that the save step (runner user) cannot read.
+      - name: Prepare apt package cache for saving
+        id: apt-prepare
+        if: always() && steps.apt-cache.outcome == 'success'
+        run: |
+          sudo rm -rf ~/apt-archives/lock ~/apt-archives/partial
+          sudo chown -R "$USER" ~/apt-archives || true
+          # Save a new entry only when .deb files were added (keys are immutable,
+          # so a partial cache from a timed-out run gets topped up this way).
+          if [ "$(ls ~/apt-archives/*.deb 2>/dev/null | sort)" != "$(cat "$RUNNER_TEMP/apt-before" 2>/dev/null)" ]; then
+            echo changed=true >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save apt package cache (Playwright deps)
+        if: always() && steps.apt-cache.outcome == 'success' && steps.apt-prepare.outputs.changed == 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/apt-archives
+          key: playwright-apt-${{ steps.image.outputs.id }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       # Baselines under e2e/visual/**/*-snapshots are committed pre-generated
       # on Linux, so this ubuntu-latest runner diffs against them directly -
