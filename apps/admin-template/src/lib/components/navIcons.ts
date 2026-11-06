@@ -7,13 +7,17 @@
 import type { Component } from 'svelte';
 import { LayoutDashboard, Package, Users, ScrollText, Settings } from '@lucide/svelte';
 import { Palette } from '@lucide/svelte';
-import type { DemoNavIconKey, NavIconKey } from '#lib/navigation.js';
+import { Building, FolderKanban, TrendingUp } from '@lucide/svelte';
+import type { CostNavIconKey, DemoNavIconKey, NavIconKey } from '#lib/navigation.js';
 
-export const NAV_ICONS: Record<NavIconKey | DemoNavIconKey, Component> = {
+export const NAV_ICONS: Record<NavIconKey | CostNavIconKey | DemoNavIconKey, Component> = {
 	dashboard: LayoutDashboard,
 	items: Package,
 	users: Users,
 	'audit-log': ScrollText,
 	settings: Settings,
-	'ui-demo': Palette
+	'ui-demo': Palette,
+	pipeline: TrendingUp,
+	projects: FolderKanban,
+	customers: Building
 };

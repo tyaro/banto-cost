@@ -22,6 +22,11 @@ export type NavIconKey = 'dashboard' | 'items' | 'users' | 'audit-log' | 'settin
 export type NavLabelKey =
 	'nav.dashboard' | 'nav.items' | 'nav.users' | 'nav.auditLog' | 'nav.settings';
 
+/** banto-cost business screens (P3a). A separate union rather than more members in
+ *  the two above: scaffold's removers edit those by exact text (scripts/scaffold.mjs). */
+export type CostNavIconKey = 'pipeline' | 'projects' | 'customers';
+export type CostNavLabelKey = 'nav.pipeline' | 'nav.projects' | 'nav.customers';
+
 /** Keys of the demo-only catalog entry (`NavItem.demoOnly`). Kept out of the unions above on purpose:
  *  scaffold's removers edit those unions by exact text (scripts/scaffold.mjs). */
 export type DemoNavIconKey = 'ui-demo';
@@ -29,8 +34,8 @@ export type DemoNavLabelKey = 'nav.uiDemo';
 
 export interface NavItem {
 	path: AppPath;
-	labelKey: NavLabelKey | DemoNavLabelKey;
-	icon: NavIconKey | DemoNavIconKey;
+	labelKey: NavLabelKey | CostNavLabelKey | DemoNavLabelKey;
+	icon: NavIconKey | CostNavIconKey | DemoNavIconKey;
 	/** Resource whose current localized label is passed to route-specific titles. */
 	pageTitleResource?: string;
 	/** Exact route IDs keep static child pages distinct from record-edit routes. */
@@ -70,6 +75,30 @@ export { isPathActive, resolveAppPath, type AppPath } from '#lib/appPath.js';
 
 const allNavItems: NavItem[] = [
 	{ path: '/dashboard', labelKey: 'nav.dashboard', icon: 'dashboard', publicViewer: true },
+	// banto-cost P3a. Not `publicViewer`: amounts and project scope are capability-gated.
+	{ path: '/pipeline', labelKey: 'nav.pipeline', icon: 'pipeline' },
+	{
+		path: '/projects',
+		labelKey: 'nav.projects',
+		icon: 'projects',
+		badgeResource: 'projects',
+		pageTitleResource: 'projects',
+		pageTitles: {
+			'/(app)/projects/new': (resource) => m['projects.createTitle']({ resource }),
+			'/(app)/projects/[id]': (resource) => m['projects.editTitle']({ resource })
+		}
+	},
+	{
+		path: '/customers',
+		labelKey: 'nav.customers',
+		icon: 'customers',
+		badgeResource: 'customers',
+		pageTitleResource: 'customers',
+		pageTitles: {
+			'/(app)/customers/new': (resource) => m['customers.createTitle']({ resource }),
+			'/(app)/customers/[id]': (resource) => m['customers.editTitle']({ resource })
+		}
+	},
 	// [scaffold:items] begin
 	{
 		path: '/items',
