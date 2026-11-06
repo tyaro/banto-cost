@@ -6,6 +6,7 @@
 	 * the update carries it back; a stale one is a `rowVersion` field error
 	 * that no field owns, listed above the form.
 	 *
+	 * The calc basis of the project (P4a, design 10.6) is CalcBasisSection.svelte.
 	 * Order conversion and ordered revenue (P3b) are OrderSection.svelte; it
 	 * asks this page to reload after a conversion (status and rowVersion change).
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
@@ -32,6 +33,7 @@
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import PipelineSection from './PipelineSection.svelte';
 	import OrderSection from './OrderSection.svelte';
+	import CalcBasisSection from './CalcBasisSection.svelte';
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -57,9 +59,11 @@
 	let pipelineBusy = $state(false);
 	let ordersDirty = $state(false);
 	let ordersBusy = $state(false);
+	let calcDirty = $state(false);
+	let calcBusy = $state(false);
 	const guard = guardUnsavedChanges({
-		isDirty: () => (store?.isDirty ?? false) || pipelineDirty || ordersDirty,
-		isSaving: () => (formResource?.saving ?? false) || pipelineBusy || ordersBusy
+		isDirty: () => (store?.isDirty ?? false) || pipelineDirty || ordersDirty || calcDirty,
+		isSaving: () => (formResource?.saving ?? false) || pipelineBusy || ordersBusy || calcBusy
 	});
 
 	async function loadForm() {
@@ -204,6 +208,14 @@
 			onPendingChange={(pending) => {
 				pipelineDirty = pending.dirty;
 				pipelineBusy = pending.busy;
+			}}
+		/>
+		<CalcBasisSection
+			projectId={parsedId}
+			{canWrite}
+			onPendingChange={(pending) => {
+				calcDirty = pending.dirty;
+				calcBusy = pending.busy;
 			}}
 		/>
 	{/if}
