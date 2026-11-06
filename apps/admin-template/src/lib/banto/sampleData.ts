@@ -1,111 +1,103 @@
 /**
- * Deterministic sample data for the items resource (spec §4, §8.1 items
- * page). 10,000 rows generated from a seeded PRNG so the dataset is stable
- * across reloads/tests without shipping a static 10k-row fixture.
+ * Demo-mode seed for the in-memory DataProvider (no backend: `vite dev` /
+ * `vite preview` / a `VITE_BANTO_DEMO=1` build, conventions §10). Replaces
+ * the template's 10,000-row `items` demo (removed in banto-cost, 2026-11).
  *
- * Moved here from the old routes/(app)/items/data.ts stub in M2: the rows
- * now seed an InMemoryDataProvider (src/lib/banto/setup.ts) instead of being
- * imported directly by the items pages.
+ * Every name here is fictional (banto-cost CLAUDE.md: no real customers,
+ * people or amounts). The rows are deterministic - fixed arrays and a pure
+ * generator, no clock or random source - so the visual regression snapshots
+ * that run in demo mode stay stable.
  *
- * D1-d note (display-preset-plan.md, Issue #190 prep): this whole file is
- * the items demo dataset - already listed as a whole-file `removeFile`
- * target in display-preset-plan.md §3.2, so no internal `cutRegion` markers
- * are added here.
+ * Only the `customers` / `projects` ledgers exist in demo mode. Pipeline
+ * versions, orders and the outlook are server aggregates with no in-memory
+ * counterpart (pipelineAdmin.ts rejects with `DEMO_MODE_MESSAGE`).
  */
-export interface Item {
-	id: number;
-	name: string;
-	price: number;
-	stock: number;
-	updatedAt: string;
-	// Index signature so `Item[]` satisfies @banto/admin-core's
-	// `InMemorySeed.rows: Record<string, unknown>[]`.
-	[key: string]: unknown;
+import type { Customer } from './resources/customers';
+import type { Project } from './resources/projects';
+
+const UPDATED_AT = '2026-10-01';
+
+const CUSTOMER_NAMES = [
+	'見本工業',
+	'試作電機',
+	'例示精機',
+	'架空システム',
+	'模擬製作所',
+	'仮設商事',
+	'雛形エンジニアリング',
+	'参考テクノ'
+];
+
+/** Fictional customers; the last one is inactive so the grid shows both states. */
+export const sampleCustomers: (Customer & Record<string, unknown>)[] = CUSTOMER_NAMES.map(
+	(name, index) => ({
+		id: index + 1,
+		name,
+		active: index !== CUSTOMER_NAMES.length - 1,
+		note: null,
+		rowVersion: 1,
+		updatedAt: UPDATED_AT
+	})
+);
+
+const PROJECT_SUBJECTS = [
+	'生産ライン監視画面',
+	'設備データ収集',
+	'検査装置ソフト改修',
+	'保守契約',
+	'帳票出力の追加',
+	'在庫連携',
+	'稼働率集計',
+	'制御盤更新'
+];
+
+const STATUSES = [
+	'lead',
+	'quoting',
+	'negotiating',
+	'ordered',
+	'in_progress',
+	'work_done',
+	'settled',
+	'lost',
+	'on_hold'
+];
+
+const MANAGERS = ['担当 一郎', '担当 花子', '担当 次郎'];
+
+/** Two-digit month string for the fiscal year 第13期 (2026-06 .. 2027-05). */
+function fiscalMonth(offset: number): string {
+	const monthIndex = 5 + (offset % 12); // 0-based from January; 5 = June
+	const year = 2026 + Math.floor(monthIndex / 12);
+	const month = (monthIndex % 12) + 1;
+	return `${year}-${String(month).padStart(2, '0')}`;
 }
 
-const ROW_COUNT = 10_000;
-const SEED = 0x8a17c05; // fixed seed: deterministic output across reloads/tests
-
-/** mulberry32: small, fast, deterministic PRNG (no runtime dependency). */
-function mulberry32(seed: number): () => number {
-	let state = seed;
-	return function next() {
-		state |= 0;
-		state = (state + 0x6d2b79f5) | 0;
-		let t = Math.imul(state ^ (state >>> 15), 1 | state);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
-
-const PRODUCT_BASES = [
-	'緑茶',
-	'ほうじ茶',
-	'麦茶',
-	'烏龍茶',
-	'紅茶',
-	'コーヒー',
-	'抹茶ラテ',
-	'レモネード',
-	'炭酸水',
-	'スポーツドリンク',
-	'オレンジジュース',
-	'アップルジュース'
-] as const;
-
-const PRODUCT_SIZES = ['280ml', '350ml', '500ml', '600ml', '1L', '2L'] as const;
-
-const BASE_UNIT_PRICE: Record<(typeof PRODUCT_BASES)[number], number> = {
-	緑茶: 140,
-	ほうじ茶: 140,
-	麦茶: 120,
-	烏龍茶: 150,
-	紅茶: 160,
-	コーヒー: 130,
-	抹茶ラテ: 220,
-	レモネード: 180,
-	炭酸水: 110,
-	スポーツドリンク: 170,
-	オレンジジュース: 190,
-	アップルジュース: 190
-};
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-// Fixed "today" for deterministic output regardless of when the app runs.
-const UPDATED_AT_END = Date.UTC(2026, 6, 2); // 2026-07-02
-const UPDATED_AT_SPAN_DAYS = 900; // ~2.5 years of history
-
-function toIsoDate(timeMs: number): string {
-	return new Date(timeMs).toISOString().slice(0, 10);
-}
-
-/** Generate `count` deterministic sample items. */
-export function generateSampleItems(count: number = ROW_COUNT): Item[] {
-	const random = mulberry32(SEED);
-	const rows: Item[] = [];
-
-	for (let i = 0; i < count; i++) {
-		const id = i + 1;
-		const base = PRODUCT_BASES[Math.floor(random() * PRODUCT_BASES.length)];
-		const size = PRODUCT_SIZES[Math.floor(random() * PRODUCT_SIZES.length)];
-		// Occasional lot suffix so names aren't just `base size` repeated verbatim.
-		const lot = random();
-		const name = lot < 0.15 ? `${base} ${size} 数量限定` : `${base} ${size}`;
-
-		const unitPrice = BASE_UNIT_PRICE[base];
-		const priceJitter = Math.round((random() * 40 - 20) / 10) * 10; // -20..+20, rounded to 10
-		const price = Math.max(50, unitPrice + priceJitter);
-
-		const stock = Math.floor(random() * 500);
-
-		const daysAgo = Math.floor(random() * UPDATED_AT_SPAN_DAYS);
-		const updatedAt = toIsoDate(UPDATED_AT_END - daysAgo * DAY_MS);
-
-		rows.push({ id, name, price, stock, updatedAt });
+/** 24 fictional projects spread over the customers, statuses and the fiscal year. */
+export const sampleProjects: (Project & Record<string, unknown>)[] = Array.from(
+	{ length: 24 },
+	(_, index) => {
+		const customer = sampleCustomers[index % sampleCustomers.length];
+		const status = STATUSES[index % STATUSES.length];
+		const start = fiscalMonth(index % 12);
+		const end = fiscalMonth((index % 12) + 2);
+		const ordered = ['ordered', 'in_progress', 'work_done', 'settled'].includes(status);
+		return {
+			id: index + 1,
+			code: `P13-${String(index + 1).padStart(3, '0')}`,
+			name: `${customer.name} ${PROJECT_SUBJECTS[index % PROJECT_SUBJECTS.length]}`,
+			customerId: customer.id,
+			customerName: customer.name,
+			managerUserId: (index % MANAGERS.length) + 1,
+			managerName: MANAGERS[index % MANAGERS.length],
+			status,
+			plannedStart: `${start}-01`,
+			plannedEnd: `${end}-28`,
+			orderNo: ordered ? `PO-${String(1000 + index)}` : null,
+			department: index % 2 === 0 ? 'システム課' : '制御課',
+			note: null,
+			rowVersion: 1,
+			updatedAt: UPDATED_AT
+		};
 	}
-
-	return rows;
-}
-
-/** Pre-generated dataset used to seed the InMemoryDataProvider. */
-export const sampleItems: Item[] = generateSampleItems();
+);

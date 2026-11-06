@@ -30,48 +30,9 @@ import * as m from '#lib/paraglide/messages.js';
 // stores the title in whatever locale was active then. That is invisible for a
 // single-locale (ja) install, but a future language switch (B3) should key the
 // layout on panel id and resolve titles at render, not persist them.
+// banto-cost: the template's chart panels (monthly / priceBuckets / spc /
+// trend) aggregated the removed `items` demo data, so only the メモ remains.
 export const PANEL_DEFS: FloatingWindowDef[] = [
-	{
-		id: 'monthly',
-		get title() {
-			return m['panels.monthly']();
-		},
-		icon: '📈',
-		width: 420,
-		height: 320
-	},
-	{
-		id: 'priceBuckets',
-		get title() {
-			return m['panels.priceBuckets']();
-		},
-		icon: '🥧',
-		width: 360,
-		height: 320
-	},
-	// M13 (roadmap.md): SPC panel (histogram + Pareto + box plot, one SVG
-	// export button) and a streaming trend panel (zoom/pan, bands, markers,
-	// second y-axis). Not in `defaultLayout()`'s docked split - they only
-	// appear once toggled from the toolbar, so an existing saved layout
-	// (seeded before M13) is never disturbed (spec: 既存パネルのレイアウトを壊さない).
-	{
-		id: 'spc',
-		get title() {
-			return m['panels.spc']();
-		},
-		icon: '📊',
-		width: 460,
-		height: 640
-	},
-	{
-		id: 'trend',
-		get title() {
-			return m['panels.trend']();
-		},
-		icon: '📉',
-		width: 640,
-		height: 360
-	},
 	{
 		id: 'memo',
 		get title() {

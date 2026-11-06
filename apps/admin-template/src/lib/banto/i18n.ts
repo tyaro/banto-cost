@@ -30,7 +30,7 @@ export function gridMessages(): Partial<GridMessages> {
 		inlineEditInvalid: () => m['grid.inlineEditInvalid'](),
 		inlineEditErrorLabel: (header) => m['grid.inlineEditErrorLabel']({ header }),
 		inlineEditErrorHint: () => m['grid.inlineEditErrorHint'](),
-		emptyState: () => m['items.list.empty'](),
+		emptyState: () => m['grid.emptyState'](),
 		groupCountSuffix: (count) => m['grid.groupCountSuffix']({ count }),
 		columnsMenuButton: () => m['grid.columnsMenuButton'](),
 		columnsMenuTitle: () => m['grid.columnsMenuTitle'](),

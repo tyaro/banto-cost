@@ -5,14 +5,13 @@
  * key; the actual icon component is resolved here, in the display layer.
  */
 import type { Component } from 'svelte';
-import { LayoutDashboard, Package, Users, ScrollText, Settings } from '@lucide/svelte';
+import { LayoutDashboard, Users, ScrollText, Settings } from '@lucide/svelte';
 import { Palette } from '@lucide/svelte';
 import { Building, CalendarRange, FolderKanban, TrendingUp } from '@lucide/svelte';
 import type { CostNavIconKey, DemoNavIconKey, NavIconKey } from '#lib/navigation.js';
 
 export const NAV_ICONS: Record<NavIconKey | CostNavIconKey | DemoNavIconKey, Component> = {
 	dashboard: LayoutDashboard,
-	items: Package,
 	users: Users,
 	'audit-log': ScrollText,
 	settings: Settings,
