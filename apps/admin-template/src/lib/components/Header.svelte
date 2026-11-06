@@ -149,7 +149,7 @@
 			</span>
 			<!-- "Banto" is the product brand (owner-fixed): a component constant,
 			     never keyed - same as Sidebar.svelte. -->
-			<span class="brand-name">Banto</span>
+			<span class="brand-name">Banto Cost</span>
 		</div>
 	{:else}
 		{#if narrowViewport.current}

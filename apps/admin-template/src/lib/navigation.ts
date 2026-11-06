@@ -129,7 +129,7 @@ export function navSections(session: { publicViewer: boolean; role: Role }): {
 
 // "Banto" is the product brand (owner-fixed): kept as a component constant,
 // never entered into the dictionary (PR-B2 scope rule).
-const BRAND = 'Banto';
+const BRAND = 'Banto Cost';
 
 export function pageTitle(pathname: string, routeId?: RouteId | null): string {
 	// Over every entry, not just the visible ones: a `demoOnly` page keeps its title when opened by URL.

@@ -42,7 +42,7 @@ describe.each(['', '/banto'])('base=%j', (base) => {
 	it('pageTitle resolves the entry title from a base-carrying pathname', () => {
 		expect(pageTitle(at(first.path))).toBe(m[first.labelKey]());
 		expect(pageTitle(at(`${first.path}/3`))).toBe(m[first.labelKey]());
-		expect(pageTitle(at('/nowhere'))).toBe('Banto');
+		expect(pageTitle(at('/nowhere'))).toBe('Banto Cost');
 	});
 
 	it('uses exact route titles and preserves entry and unknown-route fallbacks', () => {
@@ -57,7 +57,7 @@ describe.each(['', '/banto'])('base=%j', (base) => {
 				expect(pageTitle(at(`${path}/`), routeId)).toBe(title(label ?? m[entry.labelKey]()));
 				expect(pageTitle(at(path))).toBe(m[entry.labelKey]());
 				expect(pageTitle(at(path), null)).toBe(m[entry.labelKey]());
-				expect(pageTitle(at('/nowhere'), routeId)).toBe('Banto');
+				expect(pageTitle(at('/nowhere'), routeId)).toBe('Banto Cost');
 				// Keep the route group, but choose an unconfigured static sibling.
 				const reportRoute = route.replace(/\/[^/]+$/, '/report') as RouteId;
 				expect(pageTitle(at(`${entry.path}/report`), reportRoute)).toBe(m[entry.labelKey]());

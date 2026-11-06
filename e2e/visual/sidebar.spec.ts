@@ -40,7 +40,7 @@ test.describe('sidebar toggle', () => {
 		await expect.poll(async () => (await aside.boundingBox())!.width).toBeLessThan(wide);
 		// Folded: only the button stays in the top row (logo hidden), in the same place,
 		// and it keeps focus.
-		await expect(aside.getByText('Banto', { exact: true })).toBeHidden();
+		await expect(aside.getByText('Banto Cost', { exact: true })).toBeHidden();
 		await expect(expand).toBeFocused();
 		await expect.poll(async () => await expand.boundingBox()).toEqual(spot);
 
@@ -50,7 +50,7 @@ test.describe('sidebar toggle', () => {
 			'true'
 		);
 		await expect.poll(async () => (await aside.boundingBox())!.width).toBe(wide);
-		await expect(aside.getByText('Banto', { exact: true })).toBeVisible();
+		await expect(aside.getByText('Banto Cost', { exact: true })).toBeVisible();
 
 		// The logo is not a control: pressing it changes nothing.
 		await aside.locator('.brand-mark').click({ force: true });

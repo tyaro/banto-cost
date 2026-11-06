@@ -16,7 +16,6 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 		['/items', copy['nav.items'], resource],
 		['/items/new', copy['items.createTitle'].replace('{resource}', resource)],
 		['/items/1', copy['items.editTitle'].replace('{resource}', resource)],
-		['/tree', copy['nav.tree']],
 		['/users', copy['nav.users']],
 		['/audit-log', copy['nav.auditLog']],
 		['/ui-demo', copy['nav.uiDemo']],

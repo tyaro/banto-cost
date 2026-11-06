@@ -45,7 +45,7 @@ test.describe('dock layout (primed)', () => {
 	}) => {
 		await gotoDashboard(page);
 		await expect(page.locator('aside')).toHaveCount(0);
-		await expect(page.locator('header').getByText('Banto', { exact: true })).toBeVisible();
+		await expect(page.locator('header').getByText('Banto Cost', { exact: true })).toBeVisible();
 		await expect(page.getByRole('button', { name: 'サイドバーを開く' })).toHaveCount(0);
 		await expect(page.locator('html')).toHaveAttribute('data-banto-shell-nav', 'launcher');
 		// Admin session in demo mode: both groups.
