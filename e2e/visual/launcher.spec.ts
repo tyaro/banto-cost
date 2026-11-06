@@ -59,9 +59,9 @@ test.describe('dock layout (primed)', () => {
 			'aria-current',
 			'page'
 		);
-		await nav.getByRole('link', { name: '商品' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-		await expect(nav.getByRole('link', { name: '商品' })).toHaveAttribute('aria-current', 'page');
+		await nav.getByRole('link', { name: '顧客' }).click();
+		await expect(page).toHaveURL(/\/customers$/);
+		await expect(nav.getByRole('link', { name: '顧客' })).toHaveAttribute('aria-current', 'page');
 		await expect(nav.getByRole('link', { name: 'ダッシュボード' })).not.toHaveAttribute(
 			'aria-current',
 			'page'
@@ -72,7 +72,7 @@ test.describe('dock layout (primed)', () => {
 		page
 	}) => {
 		await gotoDashboard(page);
-		const item = launcherItem(page, '/items');
+		const item = launcherItem(page, '/customers');
 		const tooltip = tooltipOf(item);
 		await item.hover();
 		await expect(tooltip).toBeVisible();
@@ -91,8 +91,8 @@ test.describe('dock layout (primed)', () => {
 	test('Esc hides a hovered tooltip while focus stays in a page input; a small move does not bring it back', async ({
 		page
 	}) => {
-		await page.goto('/items/new');
-		const name = page.getByLabel('商品名');
+		await page.goto('/customers/new');
+		const name = page.getByLabel('顧客名');
 		await expect(name).toBeVisible();
 		await name.fill('ドックのテスト');
 		await expect(name).toBeFocused();
@@ -117,7 +117,7 @@ test.describe('dock layout (primed)', () => {
 		page
 	}) => {
 		await gotoDashboard(page);
-		const item = launcherItem(page, '/items');
+		const item = launcherItem(page, '/customers');
 		await item.hover();
 		await expect(tooltipOf(item)).toBeVisible();
 

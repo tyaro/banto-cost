@@ -807,7 +807,7 @@
 	}
 
 	.dock-wrapper {
-		height: 360px;
+		height: 300px;
 	}
 
 	.dock-panel {

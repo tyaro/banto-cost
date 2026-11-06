@@ -15,7 +15,7 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 	}) => {
 		await primeThemeAndAuth(page, DIAGONAL_MATRIX[index]);
 		await page.addInitScript((locale) => localStorage.setItem('banto.locale', locale), locale);
-		await page.goto('/items');
+		await page.goto('/projects');
 		const trigger = page.locator('.columns-menu .trigger');
 		await trigger.focus();
 		await trigger.press('Enter');

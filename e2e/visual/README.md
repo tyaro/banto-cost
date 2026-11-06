@@ -13,9 +13,9 @@ never runs together with smoke.
   `sessionStorage` via `addInitScript` before first paint (same keys
   `app.html`'s FOUC script and `setup.ts`'s demo `AuthProvider` read).
 - `visual.spec.ts` - `expect(page).toHaveScreenshot()` baselines for login,
-  dashboard, items, users, settings, and the command palette.
+  dashboard, customers, projects, users, settings, and the command palette.
 - `a11y.spec.ts` - `@axe-core/playwright` scans (`wcag2a`/`wcag2aa`) of
-  dashboard, items, settings, and login.
+  dashboard, customers, settings, and login.
 - `settings-controls.spec.ts` - checks fixed upper labels against selected and typed
   values, empty/error states, and a narrow English layout.
 - `ui-overlays.spec.ts` - `@banto/ui` Modal / Drawer on `/ui-demo`: the Esc /

@@ -11,20 +11,21 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 			'utf8'
 		)
 	);
-	test(`item schema form keeps labels, errors and numeric styles (${locale})`, async ({ page }) => {
+	test(`customer schema form keeps labels, errors and field styles (${locale})`, async ({
+		page
+	}) => {
 		await primeThemeAndAuth(page, DIAGONAL_MATRIX[index]);
 		await page.addInitScript((locale) => localStorage.setItem('banto.locale', locale), locale);
-		await page.goto('/items/new');
+		await page.goto('/customers/new');
 		const form = page.locator('form');
-		const name = form.getByLabel(copy['items.fieldName']);
-		const price = form.getByRole('spinbutton', { name: copy['items.fieldPrice'] });
+		const name = form.getByLabel(copy['customers.fieldName']);
+		const note = form.getByLabel(copy['customers.fieldNote']);
 		await expect(name).toBeVisible();
 		await expect(name).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 		await name.hover();
 		await expect(name).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-		await expect(form.locator('.banto-field-control')).toHaveCount(4);
-		await expect(price).toHaveCSS('border-bottom-width', '2px');
-		await expect(price).toHaveCSS('font-variant-numeric', 'tabular-nums');
+		await expect(form.locator('.banto-field-control')).toHaveCount(3);
+		await expect(name).toHaveCSS('border-bottom-width', '2px');
 		await form.getByRole('button', { name: copy['common.save'], exact: true }).click();
 		await expect(name).toHaveAttribute('aria-invalid', 'true');
 		const errorId = await name.getAttribute('aria-describedby');
@@ -35,9 +36,8 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 		await name.fill('Example');
 		await expect(name).not.toHaveAttribute('aria-describedby');
 		await expect(error).toHaveCount(0);
-		await price.fill('12');
-		await form.getByRole('spinbutton', { name: copy['items.fieldStock'] }).fill('2');
-		const date = form.getByLabel(copy['items.fieldUpdatedAt']);
+		await note.fill('Example note');
+		const date = form.getByLabel(copy['customers.fieldUpdatedAt']);
 		await expect(date).toHaveJSProperty('readOnly', true);
 		await expect(date).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 		await expect(date).toBeEnabled();
@@ -63,8 +63,8 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 			expect(fits).toEqual({ width: true, height: true });
 		}
 		await page.emulateMedia({ forcedColors: 'active' });
-		await price.focus();
-		await expect(price).toHaveCSS('outline-style', 'solid');
+		await note.focus();
+		await expect(note).toHaveCSS('outline-style', 'solid');
 		await page.emulateMedia({ forcedColors: 'none' });
 		const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
 		expect(results.violations).toEqual([]);

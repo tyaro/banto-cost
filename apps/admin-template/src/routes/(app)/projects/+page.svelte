@@ -9,7 +9,13 @@
 	 */
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { BantoGrid, columnsFromSchema, type GridColumn } from '@banto/grid-svelte';
+	import {
+		BantoGrid,
+		ColumnsMenu,
+		GridState,
+		columnsFromSchema,
+		type GridColumn
+	} from '@banto/grid-svelte';
 	import type { FormSchema } from '@banto/forms';
 	import { createListResource, getResource } from '@banto/admin-core';
 	import { Plus } from '@lucide/svelte';
@@ -89,12 +95,17 @@
 		}
 	];
 
+	// The ledger has many columns: the column chooser (ColumnsMenu) hides the
+	// ones not needed right now. Page-local state, not saved.
+	const gridState = new GridState<Project>(columns);
+
 	const forbidden = $derived(isForbiddenError(list.error));
 </script>
 
 <div class="page">
 	<PageHeader hideTitle title={resource.label} description={m['projects.description']()}>
 		{#snippet actions()}
+			<ColumnsMenu state={gridState} messages={gridMessages()} />
 			{#if canWrite}
 				<button
 					type="button"
@@ -128,7 +139,13 @@
 		<EmptyState title={m['projects.emptyTitle']()} description={m['projects.emptyDesc']()} />
 	{:else}
 		<div class="grid-wrap">
-			<BantoGrid rows={list.rows} {columns} messages={gridMessages()} getRowId={(row) => row.id} />
+			<BantoGrid
+				rows={list.rows}
+				{columns}
+				state={gridState}
+				messages={gridMessages()}
+				getRowId={(row) => row.id}
+			/>
 		</div>
 	{/if}
 </div>

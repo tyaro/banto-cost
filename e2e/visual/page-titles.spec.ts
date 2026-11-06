@@ -10,12 +10,12 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 			'utf8'
 		)
 	);
-	const resource = copy['items.resourceLabel'];
+	const resource = copy['customers.resourceLabel'];
 	const pages = [
 		['/dashboard', copy['nav.dashboard']],
-		['/items', copy['nav.items'], resource],
-		['/items/new', copy['items.createTitle'].replace('{resource}', resource)],
-		['/items/1', copy['items.editTitle'].replace('{resource}', resource)],
+		['/customers', copy['nav.customers'], resource],
+		['/customers/new', copy['customers.createTitle'].replace('{resource}', resource)],
+		['/customers/1', copy['customers.editTitle'].replace('{resource}', resource)],
 		['/users', copy['nav.users']],
 		['/audit-log', copy['nav.auditLog']],
 		['/ui-demo', copy['nav.uiDemo']],
@@ -42,13 +42,13 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 			}
 		}
 		await expect(page.getByLabel(copy['settings.currentPassword'])).toBeVisible();
-		await page.goto('/items');
+		await page.goto('/customers');
 		await expect(
-			page.getByRole('button', { name: copy['items.create'], exact: true })
+			page.getByRole('button', { name: copy['customers.create'], exact: true })
 		).toBeVisible();
-		await page.goto('/items/new');
+		await page.goto('/customers/new');
 		await expect(page.getByRole('main').locator('.page-header')).toHaveCount(0);
-		await expect(page.getByLabel(copy['items.fieldName'])).toBeVisible();
+		await expect(page.getByLabel(copy['customers.fieldName'])).toBeVisible();
 		await primeKiosk(page);
 		await page.goto('/dashboard');
 		await expect(page.locator('.page-title')).toBeVisible();

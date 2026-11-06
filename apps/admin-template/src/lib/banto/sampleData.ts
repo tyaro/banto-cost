@@ -65,9 +65,9 @@ const STATUSES = [
 
 const MANAGERS = ['担当 一郎', '担当 花子', '担当 次郎'];
 
-/** Two-digit month string for the fiscal year 第13期 (2026-06 .. 2027-05). */
+/** `YYYY-MM`, `offset` months after the start of 第13期 (2026-06). */
 function fiscalMonth(offset: number): string {
-	const monthIndex = 5 + (offset % 12); // 0-based from January; 5 = June
+	const monthIndex = 5 + offset; // 0-based from January 2026; 5 = June
 	const year = 2026 + Math.floor(monthIndex / 12);
 	const month = (monthIndex % 12) + 1;
 	return `${year}-${String(month).padStart(2, '0')}`;
@@ -85,7 +85,7 @@ export const sampleProjects: (Project & Record<string, unknown>)[] = Array.from(
 		return {
 			id: index + 1,
 			code: `P13-${String(index + 1).padStart(3, '0')}`,
-			name: `${customer.name} ${PROJECT_SUBJECTS[index % PROJECT_SUBJECTS.length]}`,
+			name: `${customer.name} ${PROJECT_SUBJECTS[(index + Math.floor(index / PROJECT_SUBJECTS.length)) % PROJECT_SUBJECTS.length]}`,
 			customerId: customer.id,
 			customerName: customer.name,
 			managerUserId: (index % MANAGERS.length) + 1,

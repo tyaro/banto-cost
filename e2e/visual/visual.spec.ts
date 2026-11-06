@@ -66,7 +66,7 @@ test.describe('dashboard', () => {
 				// Charts/KPIs render once the 10k-row seeded dataset finishes
 				// loading (createListResource) - wait for a chart's <svg> instead
 				// of a network signal (demo mode has no network round trip at all).
-				await expect(page.locator('svg').first()).toBeVisible();
+				await expect(page.locator('[data-tile]').first()).toBeVisible();
 				await page.waitForTimeout(SETTLE_MS);
 				await expect(page).toHaveScreenshot(
 					`dashboard-${comboLabel(combo)}-${viewport.width}x${viewport.height}.png`,
@@ -89,7 +89,7 @@ test.describe('kiosk shell', () => {
 		await primeKiosk(page);
 		await page.goto('/dashboard');
 		await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
-		await expect(page.locator('svg').first()).toBeVisible();
+		await expect(page.locator('[data-tile]').first()).toBeVisible();
 		await page.waitForTimeout(SETTLE_MS);
 		await expect(page).toHaveScreenshot('dashboard-kiosk-light-standard-1440x900.png', {
 			fullPage: true
@@ -125,7 +125,7 @@ test.describe('dock layout', () => {
 			await primeLauncher(page, position);
 			await page.goto('/dashboard');
 			await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
-			await expect(page.locator('svg').first()).toBeVisible();
+			await expect(page.locator('[data-tile]').first()).toBeVisible();
 			await expect(page.locator('.launcher')).toBeVisible();
 			// Viewport shot scrolled to the end, not fullPage: a full-page capture
 			// draws the fixed bar at the first viewport's bottom - mid-page - so it
@@ -138,7 +138,13 @@ test.describe('dock layout', () => {
 			await page.waitForTimeout(SETTLE_MS);
 			if (position !== 'top') {
 				await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-				await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+				// banto-cost's dashboard can fit the viewport (no scroll then).
+				const scrollable = await page.evaluate(
+					() => document.documentElement.scrollHeight > window.innerHeight
+				);
+				if (scrollable) {
+					await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+				}
 				await page.waitForTimeout(SETTLE_MS);
 			}
 			await expect(page).toHaveScreenshot(
@@ -158,7 +164,8 @@ interface DiagonalPage {
 // shoots the diagonal (light/standard, dark/glass) at the one baseline
 // viewport (1440x900).
 const DIAGONAL_PAGES: DiagonalPage[] = [
-	{ name: 'items', path: '/items', heading: '商品' },
+	{ name: 'customers', path: '/customers', heading: '顧客' },
+	{ name: 'projects', path: '/projects', heading: '案件' },
 	{ name: 'users', path: '/users', heading: 'ユーザー管理' },
 	// settings-routes step 2 (choiapp-feedback-2026-09 §3.2): each category
 	// is now its own route, so no single settings screenshot shows all of
