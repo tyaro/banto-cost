@@ -1,0 +1,259 @@
+{
+  "description": "Contract table of the request owner (shared-primitives-upstream-plan §3.1, D1; Issue #436). admin-core's createRequestOwner and every package-internal copy of the same contract (forms, image assets) run these cases with their own runner. Ops: begin{id,key?}, hold{id,resource}, adopt{id,resource,returns}, finish{id,returns}, invalidate{key?}, dispose, apply{id,value} (consumer writes model only if current), fail{id,error} (consumer writes error only if current), expect{current?,aborted?,busy?,released?,model?,error?,disposed?}. A missing key is the default key \"\"; busy is keyed by key. released is the full ordered list of release calls so far (so exactly-once is checked). model and error start as null.",
+  "cases": [
+    {
+      "name": "a later request that finishes first wins; the older result is discarded",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "begin", "id": "b" },
+        {
+          "op": "expect",
+          "current": { "a": false, "b": true },
+          "aborted": { "a": true, "b": false }
+        },
+        { "op": "apply", "id": "b", "value": "B" },
+        { "op": "finish", "id": "b", "returns": true },
+        { "op": "apply", "id": "a", "value": "A" },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "expect", "model": "B", "busy": { "": false } }
+      ]
+    },
+    {
+      "name": "the older request's finally does not clear the newer request's busy",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "expect", "busy": { "": true } },
+        { "op": "begin", "id": "b" },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "expect", "busy": { "": true } },
+        { "op": "finish", "id": "b", "returns": true },
+        { "op": "expect", "busy": { "": false } }
+      ]
+    },
+    {
+      "name": "a stale failure does not overwrite the current error or model",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "begin", "id": "b" },
+        { "op": "apply", "id": "b", "value": "B" },
+        { "op": "finish", "id": "b", "returns": true },
+        { "op": "fail", "id": "a", "error": "EA" },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "expect", "model": "B", "error": null }
+      ]
+    },
+    {
+      "name": "a current failure is reported",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "fail", "id": "a", "error": "E" },
+        { "op": "finish", "id": "a", "returns": true },
+        { "op": "expect", "error": "E", "model": null, "busy": { "": false } }
+      ]
+    },
+    {
+      "name": "invalidate (target changed) makes the request stale, aborts it and ends busy",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "invalidate" },
+        {
+          "op": "expect",
+          "current": { "a": false },
+          "aborted": { "a": true },
+          "busy": { "": false }
+        },
+        { "op": "apply", "id": "a", "value": "A" },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "expect", "model": null }
+      ]
+    },
+    {
+      "name": "the consumer chooses the key: invalidating one key leaves other keys alone",
+      "steps": [
+        { "op": "begin", "id": "a", "key": "crop" },
+        { "op": "begin", "id": "b", "key": "position" },
+        { "op": "invalidate", "key": "crop" },
+        {
+          "op": "expect",
+          "current": { "a": false, "b": true },
+          "aborted": { "a": true, "b": false },
+          "busy": { "crop": false, "position": true, "": false }
+        }
+      ]
+    },
+    {
+      "name": "a new request supersedes only its own key",
+      "steps": [
+        { "op": "begin", "id": "a", "key": "image" },
+        { "op": "begin", "id": "b", "key": "project" },
+        { "op": "begin", "id": "c", "key": "image" },
+        { "op": "expect", "current": { "a": false, "b": true, "c": true } }
+      ]
+    },
+    {
+      "name": "invalidate without a pending request is a no-op",
+      "steps": [
+        { "op": "invalidate" },
+        { "op": "begin", "id": "a" },
+        { "op": "expect", "current": { "a": true }, "busy": { "": true } }
+      ]
+    },
+    {
+      "name": "finishing keeps the request current; only staleness changes it",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "finish", "id": "a", "returns": true },
+        {
+          "op": "expect",
+          "current": { "a": true },
+          "aborted": { "a": false },
+          "busy": { "": false }
+        }
+      ]
+    },
+    {
+      "name": "finish twice: the second call does nothing",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "finish", "id": "a", "returns": true },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "expect", "released": ["r1"] }
+      ]
+    },
+    {
+      "name": "success: an adopted resource is not released, the rest is released once",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "hold", "id": "a", "resource": "r2" },
+        { "op": "adopt", "id": "a", "resource": "r1", "returns": true },
+        { "op": "apply", "id": "a", "value": "A" },
+        { "op": "expect", "released": [] },
+        { "op": "finish", "id": "a", "returns": true },
+        { "op": "expect", "released": ["r2"], "model": "A" }
+      ]
+    },
+    {
+      "name": "failure: held resources are released once at finish",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "fail", "id": "a", "error": "E" },
+        { "op": "finish", "id": "a", "returns": true },
+        { "op": "expect", "released": ["r1"], "error": "E" }
+      ]
+    },
+    {
+      "name": "stale: adopt is refused and the resource is released once at finish, not earlier",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "begin", "id": "b" },
+        { "op": "expect", "released": [] },
+        { "op": "adopt", "id": "a", "resource": "r1", "returns": false },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "expect", "released": ["r1"] }
+      ]
+    },
+    {
+      "name": "invalidate does not release early; finish does",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "invalidate" },
+        { "op": "expect", "released": [] },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "expect", "released": ["r1"] }
+      ]
+    },
+    {
+      "name": "adopt after finish is refused",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "finish", "id": "a", "returns": true },
+        { "op": "adopt", "id": "a", "resource": "r1", "returns": false },
+        { "op": "expect", "released": ["r1"] }
+      ]
+    },
+    {
+      "name": "hold after finish releases immediately",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "finish", "id": "a", "returns": true },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "expect", "released": ["r1"] }
+      ]
+    },
+    {
+      "name": "dispose (unmount): every request goes stale and unadopted resources are released now, once",
+      "steps": [
+        { "op": "begin", "id": "a", "key": "image" },
+        { "op": "begin", "id": "b", "key": "project" },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "hold", "id": "b", "resource": "r2" },
+        { "op": "adopt", "id": "b", "resource": "r2", "returns": true },
+        { "op": "dispose" },
+        {
+          "op": "expect",
+          "disposed": true,
+          "current": { "a": false, "b": false },
+          "aborted": { "a": true, "b": true },
+          "busy": { "image": false, "project": false },
+          "released": ["r1"]
+        },
+        { "op": "apply", "id": "a", "value": "A" },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "finish", "id": "b", "returns": false },
+        { "op": "hold", "id": "a", "resource": "r3" },
+        { "op": "expect", "released": ["r1", "r3"], "model": null }
+      ]
+    },
+    {
+      "name": "dispose also expires a finished handle the caller still holds (PR #441 review)",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "finish", "id": "a", "returns": true },
+        {
+          "op": "expect",
+          "current": { "a": true },
+          "aborted": { "a": false },
+          "busy": { "": false }
+        },
+        { "op": "dispose" },
+        { "op": "expect", "current": { "a": false }, "aborted": { "a": true }, "disposed": true },
+        { "op": "apply", "id": "a", "value": "late" },
+        { "op": "expect", "model": null }
+      ]
+    },
+    {
+      "name": "dispose twice is a no-op",
+      "steps": [
+        { "op": "begin", "id": "a" },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "dispose" },
+        { "op": "dispose" },
+        { "op": "expect", "released": ["r1"], "disposed": true }
+      ]
+    },
+    {
+      "name": "begin after dispose returns an already-stale handle",
+      "steps": [
+        { "op": "dispose" },
+        { "op": "begin", "id": "a" },
+        {
+          "op": "expect",
+          "current": { "a": false },
+          "aborted": { "a": true },
+          "busy": { "": false }
+        },
+        { "op": "hold", "id": "a", "resource": "r1" },
+        { "op": "expect", "released": ["r1"] },
+        { "op": "adopt", "id": "a", "resource": "r1", "returns": false },
+        { "op": "finish", "id": "a", "returns": false },
+        { "op": "expect", "released": ["r1"] }
+      ]
+    }
+  ]
+}

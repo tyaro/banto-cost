@@ -1,0 +1,75 @@
+[package]
+name = "banto-admin-services"
+description = "Banto admin services: domain-agnostic service layer (RBAC role vocabulary, settings, audit log) shared by template adopters (docs/template-scope.md §7, theme C PR-C1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# PostgreSQL backend (V2 "PostgreSQL アプリ全体対応"). Off by default so the
+# crate stays SQLite-only in ordinary builds; enabling it forwards to
+# `banto-storage`'s Postgres backend and links sqlx's Postgres driver so the
+# `SettingsService`/`AuditLogService` enum-dispatch code's Postgres arms
+# compile. Same bridging shape as `banto-attachments`'s `postgres` feature.
+postgres = ["banto-storage/postgres", "sqlx/postgres"]
+# CPU/memory metrics (ADR-0013, Issue #185). Off by default so ordinary
+# builds of this crate stay dependency-free of `sysinfo`; the template app
+# crates (`admin-template-core`, `src-tauri`) turn it on by default (ADR-0013:
+# the template is the wiring sample, and a feature nothing enables in the
+# template would be dead code there). `SystemMetrics` itself (the wire type)
+# always compiles regardless of this feature - only `SystemMetricsSampler`
+# (the `sysinfo`-backed stateful sampler) is gated.
+system-metrics = ["dep:sysinfo"]
+
+[dependencies]
+banto-core = { workspace = true }
+# The services hold a backend-agnostic `banto_storage::Db` handle (theme A
+# enum), not a concrete `SqlitePool`. `banto-storage` is a lower-level
+# workspace crate (it depends only on `banto-core`), so this is a normal
+# downward dependency - this crate is meant to be depended ON by
+# `admin-template-core`, never the reverse (conventions §"逆依存禁止").
+banto-storage = { workspace = true, features = ["sqlite"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "macros"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `users::UsersService` stores argon2id password hashes (spec §8.2). Moved
+# here with `users` in theme C PR-C2 (docs/template-scope.md §7 移行順 ②);
+# both were already `admin-template-core` workspace deps, so this adds no new
+# external crate to the workspace (ADR-0002). `password-hash`'s `getrandom`
+# feature is what makes `OsRng` available for salt generation.
+argon2 = { workspace = true }
+password-hash = { workspace = true }
+# `backup::BackupService` (theme C PR-C3, spec M17) does its file I/O
+# (`VACUUM INTO` targets, staging/swapping the pending-restore file, reading
+# `backups/`) through `tokio::fs`. Only the `fs` feature is needed here - the
+# async runtime itself is supplied by the caller (`admin-template-core`'s
+# server / `src-tauri`). Already a workspace dependency (ADR-0002: no new
+# external crate).
+#
+# `time` (the audit write timeout) and `sync` (one spool flush at a time) are
+# for `audit`'s spool (ADR-0019, tyaro/banto-industrial#437); both are
+# features of the same workspace dependency, not a new crate.
+tokio = { workspace = true, features = ["fs", "rt", "time", "sync"] }
+# `audit`'s spool (ADR-0019) names every spooled entry by a UUIDv4
+# (`pending_id`, also the spool file name). Already a workspace dependency
+# (`banto-server`'s session tokens); adds no new external crate (ADR-0002).
+uuid = { workspace = true }
+# `system_metrics::SystemMetricsSampler` (ADR-0013, Issue #185), optional
+# behind the `system-metrics` feature above - see the workspace `Cargo.toml`'s
+# comment on this dependency for the ADR-0002 exception reasoning.
+sysinfo = { workspace = true, optional = true }
+
+[dev-dependencies]
+# `test-util` lets the spool tests pause the clock (`start_paused`) and
+# assert the INSERT timeout without Windows file-sync time in the
+# measurement (#399). A feature of this existing dev-dependency, not a
+# new crate (ADR-0002).
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "test-util"] }
+# `backup`'s tests need real on-disk SQLite files (a `VACUUM INTO` against an
+# in-memory pool silently writes nothing - see `backup`'s test module), so they
+# stage tempdirs. Already a workspace dev-dep (`admin-template-core` used it for
+# the same backup tests before theme C PR-C3 moved them here); adds no new
+# external crate to the workspace (ADR-0002).
+tempfile = { workspace = true }

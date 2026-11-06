@@ -1,0 +1,12 @@
+{
+  "extends": "$app/tsconfig",
+  "compilerOptions": {
+    "sourceMap": true,
+    "strict": true
+  },
+  "include": ["src", "vite.config.ts"],
+  // Paraglide's generated server middleware (`paraglideMiddleware`, uses
+  // node:async_hooks) is never imported by this SPA, and the app has no
+  // `@types/node` (conventions §3).
+  "exclude": ["src/lib/paraglide/server.js"]
+}

@@ -1,0 +1,103 @@
+/*
+ * Banto "glass" theme preset (spec M12): translucent shell surfaces +
+ * backdrop blur + a subtle page background gradient, as pure CSS-variable
+ * overrides on top of banto.css. Selected via data-banto-preset="glass" on
+ * <html> (applyPreset() from @banto/theme); combines orthogonally with the
+ * light/dark axis (data-theme).
+ *
+ * Scope note (roadmap M12 completion criteria): only SHELL surfaces pick up
+ * the blur - components opt in with `backdrop-filter: var(--banto-backdrop)`.
+ * The data grid must stay fully opaque (10k-row virtual scroll repaint
+ * performance), so the .banto-grid subtree gets its surface variables pinned
+ * back to the standard opaque values below.
+ */
+
+/* --- light x glass ------------------------------------------------------ */
+:root[data-banto-preset='glass'] {
+	--banto-surface: rgb(255 255 255 / 0.62);
+	--banto-surface-raised: rgb(255 255 255 / 0.55);
+	--banto-border: rgb(148 158 172 / 0.45);
+
+	--banto-backdrop: blur(14px) saturate(1.5);
+	/* The <=900px launcher tab bar mixes this at >= 85% (banto.css): an opaque
+     base keeps that floor real under glass (same literals as the standard
+     surfaces - keep in sync). */
+	--banto-shell-launcher-tabbar-base: #ffffff;
+
+	/* Subtle, dignified gradient so the translucency reads even in a plain
+     browser window (no OS acrylic behind it). Painted by the app shell via
+     `background-image: var(--banto-bg-image)` (background-attachment: fixed). */
+	--banto-bg-image:
+		radial-gradient(1100px 750px at 8% -10%, rgb(37 99 235 / 0.16), transparent 60%),
+		radial-gradient(950px 700px at 102% 0%, rgb(124 58 237 / 0.14), transparent 55%),
+		radial-gradient(900px 900px at 50% 112%, rgb(22 163 74 / 0.1), transparent 60%);
+}
+
+/* --- dark x glass ------------------------------------------------------- */
+:root[data-theme='dark'][data-banto-preset='glass'] {
+	--banto-shell-launcher-tabbar-base: #262a31;
+	--banto-surface: rgb(30 33 39 / 0.55);
+	--banto-surface-raised: rgb(38 42 49 / 0.5);
+	--banto-border: rgb(255 255 255 / 0.14);
+
+	--banto-bg-image:
+		radial-gradient(1100px 750px at 8% -10%, rgb(59 130 246 / 0.22), transparent 60%),
+		radial-gradient(950px 700px at 102% 0%, rgb(139 92 246 / 0.18), transparent 55%),
+		radial-gradient(900px 900px at 50% 112%, rgb(45 212 191 / 0.1), transparent 60%);
+}
+
+/*
+ * Grid opt-out (roadmap M12: cells/rows stay opaque for 10k-row virtual
+ * scroll performance). Pins the surface variables inside the grid subtree
+ * back to banto.css's standard opaque values, so header/cells/editors never
+ * become translucent and the sticky header never lets rows shine through.
+ * The literals intentionally mirror banto.css's :root / [data-theme="dark"]
+ * values - keep in sync when those change.
+ */
+[data-banto-preset='glass'] .banto-grid {
+	--banto-surface: #ffffff;
+	--banto-surface-raised: #ffffff;
+	--banto-border: #d9dde3;
+}
+
+[data-theme='dark'][data-banto-preset='glass'] .banto-grid {
+	--banto-surface: #1e2127;
+	--banto-surface-raised: #262a31;
+	--banto-border: #363b44;
+}
+
+/*
+ * Fallbacks: with no usable backdrop-filter (old engines) or when the user
+ * asks for reduced transparency, glass degrades to the standard opaque
+ * surfaces (same literals as banto.css) and no blur. The bg gradient stays -
+ * it is opaque page decoration, not transparency.
+ */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+	:root[data-banto-preset='glass'] {
+		--banto-surface: #ffffff;
+		--banto-surface-raised: #ffffff;
+		--banto-border: #d9dde3;
+		--banto-backdrop: none;
+	}
+
+	:root[data-theme='dark'][data-banto-preset='glass'] {
+		--banto-surface: #1e2127;
+		--banto-surface-raised: #262a31;
+		--banto-border: #363b44;
+	}
+}
+
+@media (prefers-reduced-transparency: reduce) {
+	:root[data-banto-preset='glass'] {
+		--banto-surface: #ffffff;
+		--banto-surface-raised: #ffffff;
+		--banto-border: #d9dde3;
+		--banto-backdrop: none;
+	}
+
+	:root[data-theme='dark'][data-banto-preset='glass'] {
+		--banto-surface: #1e2127;
+		--banto-surface-raised: #262a31;
+		--banto-border: #363b44;
+	}
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@banto/admin-core",
+  "version": "6.10.0",
+  "description": "Banto refine-like headless framework core: resources, providers, Runes composables (spec §3)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tyaro/banto-cost.git",
+    "directory": "packages/admin-core"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "svelte": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.7",
+    "typescript": "^6.0.0",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

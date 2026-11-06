@@ -1,0 +1,455 @@
+name: CI
+
+# セキュリティ: サードパーティ Action はコミット SHA でピン留めする
+# （タグは可変 = サプライチェーンリスク。improvement-plan P3-6）。
+# 追従は Dependabot（.github/dependabot.yml）が担う。例外:
+# dtolnay/rust-toolchain@stable は git ref がツールチェーンのチャンネル
+# 選択を兼ねる仕様（@stable = Rust stable を追う）ため、SHA 固定すると
+# ツールチェーンが凍結してしまう。意図的にタグ参照のまま残す。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Rust のデバッグ情報は行番号だけにする（CI 限定。ルートの Cargo.toml は
+# 変えないので手元のデバッグには影響しない）。dev/test プロファイルは既定で
+# 完全なデバッグ情報（Windows では PDB）を出し、そのリンクと rust-cache の
+# 保存・復元が重い（計測: Windows の rust ジョブ約 7 分のうち Cargo test
+# 202s・Post Setup Rust cache 40s）。panic のバックトレースの行番号は残る。
+# test は dev を継承する。注意: Swatinem/rust-cache は `CARGO_` で始まる環境
+# 変数をキャッシュのキーに含めるため、この追加のあと一度だけキャッシュが外れる。
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  frontend:
+    name: Frontend (check / test / build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # fetch-depth: 0 = 履歴とタグも取る。verify:migrations が「HEAD から辿れる
+      # 最新の v* タグ」と比べるため（既定の浅い clone ではタグが見えず、
+      # スクリプトは素通りさせずに失敗する）。
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # Version is intentionally omitted: pnpm/action-setup resolves it from
+      # the "packageManager" field in the root package.json (pnpm@10.33.0).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (ESLint)
+        run: pnpm lint
+
+      # docs/conventions.md のうち機械検査可能な不変条件（サービス層の
+      # transport 非依存・パッケージ間 import ゼロ・{@html}/生色値の
+      # 許可リスト等）を強制する（improvement-plan P3-5）。
+      - name: Verify architecture invariants
+        run: pnpm verify:architecture
+
+      # リリース済み migration は追記のみ（#312 の P1 の再発防止）。SQLx は本文を
+      # コメント込みで checksum して DB に記録するため、最新の v* タグに含まれる
+      # migrations*/ のファイルが 1 バイトでも変わると、その版以前に作った DB が
+      # VersionMismatch で起動しなくなる。スクリプト自身のテストも同じ場所で回す。
+      - name: Verify released migrations are unchanged
+        run: |
+          node --test scripts/verify-migrations-frozen.test.mjs
+          pnpm verify:migrations
+
+      # マニフェスト間の version 一致を強制する（CR-7 通常CI。タグ名一致は
+      # リリース/タグワークフローで `node scripts/check-versions.mjs --tag <name>`
+      # として別途検査する）。ルート package.json は private=0.0.0 で例外。
+      - name: Verify version consistency
+        run: pnpm check:versions
+
+      - name: Format check (Prettier)
+        run: pnpm format:check
+
+      - name: Type check (svelte-check + tsc)
+        run: pnpm check
+
+      - name: Test
+        run: pnpm --recursive --if-present test
+
+      - name: Build
+        run: pnpm build
+
+  # i18n サプライチェーン/再現性ガード（テンプレート実用性レビュー §2）。
+  # inlang プラグインは以前 jsdelivr の CDN URL で参照されており、毎ビルド
+  # CDN 取得＝`--frozen-lockfile` の再現性の外だった。取得失敗時 paraglide-js は
+  # WARN 後 exit 0 で空カタログを吐く（fail-open）ため、CI は常に緑・被害は
+  # 閉域網の端末で発生していた。プラグインをローカル devDependency に移した
+  # うえで、このジョブは「依存 install 後に CDN を遮断してから compile」して
+  # (1) CDN に一切依存しないこと (2) fail-closed ガード
+  # (scripts/check-i18n-nonempty.mjs) が非空カタログを保証すること、を検証する。
+  i18n-offline:
+    name: i18n (CDN-blocked reproducibility)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # jsdelivr（および一般的な npm ミラー CDN）をブラックホール化する。
+      # ローカル参照が正しければ compile はこれで一切影響を受けない。もし
+      # 何かが CDN 取得に退行したら 127.0.0.1 への接続が失敗し、空カタログ
+      # → fail-closed ガードが非0終了してこのジョブが赤になる。
+      - name: Block CDN egress (jsdelivr)
+        run: |
+          echo "127.0.0.1 cdn.jsdelivr.net" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 unpkg.com" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 esm.sh" | sudo tee -a /etc/hosts
+
+      # ローカルプラグインから compile が成功し、ガードが非空カタログを
+      # 通すことを確認する（CDN 遮断下でも緑になるのが正しい状態）。
+      - name: Compile i18n from local plugins (offline)
+        run: pnpm --filter admin-template paraglide:compile
+
+  rust:
+    name: Rust (fmt / clippy / check / test)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      # rustfmt only parses/reformats - no compilation, so unlike the steps
+      # below it can safely cover every workspace member (including
+      # `admin-template`/src-tauri) without needing its native system deps.
+      - name: Format check (rustfmt)
+        run: cargo fmt --all -- --check
+
+      # Scope: only the Tauri-independent crates are checked/linted/tested
+      # here. `admin-template` (apps/admin-template/src-tauri) pulls in
+      # WebView2 on Windows and webkit2gtk/libsoup/etc. on Linux, which
+      # requires heavy system dependency installation. It is intentionally
+      # excluded from this v1 CI to keep the pipeline fast and
+      # dependency-free; it can be added back later with the appropriate
+      # `tauri-apps/tauri-action` / apt setup once native builds are needed
+      # in CI.
+      # (clippy for it runs in tauri-check.yml, which has the system deps.)
+      - name: Cargo check
+        run: cargo check -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p banto-attachments -p admin-template-core -p admin-template-fw-elev
+
+      - name: Clippy
+        run: cargo clippy -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p banto-attachments -p admin-template-core -p admin-template-fw-elev --all-targets -- -D warnings
+
+      - name: Cargo test
+        run: cargo test -p banto-core -p banto-storage -p banto-admin-services -p banto-server -p banto-attachments -p admin-template-core -p admin-template-fw-elev
+
+  # banto-storage の PostgreSQL 接続ヘルパ（feature `postgres`）向け統合テスト。
+  # 上の `rust` ジョブは default feature（sqlite のみ）でビルドしているため
+  # ここに切り出す。実 PostgreSQL への接続が要る唯一のテスト
+  # (postgres::tests::connect_gives_a_usable_pool) は BANTO_TEST_PG_URL が
+  # 未設定だと早期 return で skip する仕様（ローカル `cargo test` は
+  # PostgreSQL 無しで通る）ので、CI 側でこの env を設定して実接続を検証する。
+  storage-postgres:
+    name: banto-storage (PostgreSQL integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: banto_storage_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      # `--no-default-features --features postgres`: banto-storage の default
+      # feature は sqlite なので、postgres feature 単独でもビルドできる
+      # ことをここで確認する（sqlite feature を混ぜても良いが、Postgres
+      # 専用ビルドが成立することの検証を優先）。
+      - name: Cargo test (banto-storage, postgres feature)
+        env:
+          BANTO_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/banto_storage_test
+        run: cargo test -p banto-storage --no-default-features --features postgres
+
+  # app 層（admin-template-core）を feature `postgres` でビルドし、実
+  # `postgres:16` に対して migrations-postgres 適用 + 決定的シード + 主要
+  # CRUD（items/users/settings/audit の代表操作）が通ることを検証する
+  # (V2 "PostgreSQL アプリ全体対応", PR3)。上の `storage-postgres` が接続
+  # ヘルパ単体を見るのに対し、こちらはサービス層の Postgres アームを
+  # 実際に exercise する初めてのジョブ。スモークの本体は統合テスト
+  # `tests/pg_smoke.rs`（`BANTO_TEST_PG_URL` 未設定なら早期 return で skip、
+  # ローカルの PostgreSQL 無し環境では通る仕様）。
+  app-postgres:
+    name: admin-template-core (PostgreSQL smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: banto_app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      # `--features postgres` keeps the default `sqlite` on too (the app crate
+      # always links SQLite for the desktop path), so this exercises the
+      # both-backends build that `init_db_from_target` selects at runtime.
+      # `pg_attachments` (Issue #208) creates and drops its own databases/role
+      # on the same server (the `postgres` superuser has CREATEDB/CREATEROLE)
+      # to check that attachments stay per-database and survive a password
+      # change.
+      - name: Cargo test (admin-template-core, postgres smoke)
+        env:
+          BANTO_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/banto_app_test
+        run: cargo test -p admin-template-core --features postgres --test pg_smoke --test pg_attachments
+
+      # Issue #277: 初回セットアップの並行実行で admin が1件だけ作られること
+      # （LOCK TABLE + 条件付き INSERT）。専用スキーマを作るので public には触れない。
+      - name: Cargo test (banto-admin-services, postgres setup race)
+        env:
+          BANTO_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/banto_app_test
+        run: cargo test -p banto-admin-services --features postgres pg_concurrent_setup
+
+      # ADR-0019（tyaro/banto-industrial#437）: DB に書けない監査の保留ファイル。
+      # 失敗（表の改名）と応答なし（別トランザクションの排他ロック）の両方で、
+      # 保留 → 流し込みが 1 行だけになること。専用スキーマを作るので public には触れない。
+      - name: Cargo test (banto-admin-services, postgres audit spool)
+        env:
+          BANTO_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/banto_app_test
+        run: cargo test -p banto-admin-services --features postgres pg_audit_spool
+
+  e2e:
+    name: E2E (Playwright smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Produces apps/admin-template/build - the static SvelteKit output
+      # `--features embed-ui` (below) embeds into the server binary
+      # (apps/admin-template/core/src/assets.rs).
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      # e2e/playwright.config.ts's webServer launches this binary directly
+      # (not `cargo run`) - it must already exist before `pnpm e2e` below.
+      - name: Build banto-serve (embed-ui)
+        run: cargo build -p admin-template-core --bin banto-serve --features embed-ui
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run E2E smoke suite
+        run: pnpm e2e
+
+      # Viewer-public mode (Issue #189): second banto-serve started with
+      # BANTO_VIEWER_PUBLIC=1 by the same playwright config.
+      - name: Run E2E viewer-public suite
+        run: pnpm e2e:public-viewer
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
+
+      # Diff/actual/expected images for failed toHaveScreenshot() comparisons
+      # land here (not in playwright-report/), so surface them separately -
+      # short retention since this is only useful for the PR that produced it.
+      - name: Upload Playwright test results (diffs)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-test-results
+          path: e2e/test-results/
+          retention-days: 3
+
+  e2e-visual:
+    name: E2E (visual + axe-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Produces apps/admin-template/build, which `vite preview` serves.
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Baselines under e2e/visual/**/*-snapshots are committed pre-generated
+      # on Linux, so this ubuntu-latest runner diffs against them directly -
+      # no --update-snapshots step needed here. Only the `vite preview`
+      # webServer is needed (BANTO_E2E_SERVERS=visual, playwright.config.ts),
+      # so this job builds no Rust and runs parallel to `e2e`.
+      - name: Run visual regression + axe-core suite
+        env:
+          BANTO_E2E_SERVERS: visual
+        run: pnpm e2e:visual
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-visual
+          path: e2e/playwright-report/
+          retention-days: 7
+
+      # Diff/actual/expected images for failed toHaveScreenshot() comparisons
+      # land here (not in playwright-report/), so surface them separately -
+      # short retention since this is only useful for the PR that produced it.
+      - name: Upload Playwright test results (diffs)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-test-results-visual
+          path: e2e/test-results/
+          retention-days: 3
+
+  audit:
+    name: Dependency audit (pnpm audit / cargo audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `--prod`: this is a template repo, and devDependencies (build
+      # tooling, linters, Playwright, ...) are never shipped to end users
+      # and turn over far more often than runtime deps. Gating CI on their
+      # advisories would turn every template user's CI red on every new
+      # devDependency-only advisory, with nothing actionable for them to
+      # do about a package that never reaches production. Scoping to
+      # `--prod` keeps this job meaningful: it only fails for advisories in
+      # code that actually ships in the built frontend.
+      - name: pnpm audit (prod dependencies only)
+        run: pnpm audit --prod --audit-level high
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      # Matches this workflow's existing convention (see the `rust` job)
+      # of using dtolnay for the toolchain itself; taiki-e/install-action
+      # is used here specifically because it installs prebuilt `cargo-audit`
+      # binaries instead of compiling from source, which would otherwise
+      # add several minutes to this job.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit

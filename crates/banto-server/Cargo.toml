@@ -1,0 +1,40 @@
+[package]
+name = "banto-server"
+description = "Banto server: embedded axum server for LAN browser access (M6)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+banto-core = { workspace = true }
+# Theme C PR-C4 (docs/template-scope.md §7 移行順 ④): the domain-agnostic REST
+# routers (`routes::{audit,auth,backups,users,ui_settings}`) wire these
+# services into axum `Router`s. `banto-admin-services` is a lower-level
+# workspace crate (it depends only on `banto-core`/`banto-storage` and
+# deliberately knows nothing about `axum`/`tauri` - verified by
+# `scripts/verify-architecture.mjs` rule 1), so this is a normal downward
+# dependency with no cycle: `admin-template-core → banto-server →
+# banto-admin-services → banto-storage → banto-core`. Adds no new external
+# crate to the workspace (ADR-0002).
+banto-admin-services = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "net",
+  "sync",
+  "time",
+  "signal",
+  "io-util",
+] }
+tower = { workspace = true, features = ["util"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+if-addrs = { workspace = true }
+futures-util = { workspace = true }
+async-stream = { workspace = true }
+
+[dev-dependencies]
+http-body-util = "0.1"

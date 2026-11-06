@@ -1,0 +1,165 @@
+/**
+ * Report / print stylesheet (docs/design/report-plan.md §3.4), scoped entirely by
+ * the `.report-body` wrapper class `core/html.ts` always emits. Imported
+ * once by the app via `import '@banto/report/print.css'`.
+ *
+ * DELIBERATE EXCEPTION to the app-wide "no raw color literals, --banto-*
+ * tokens only" rule: a printed report must render the same regardless of
+ * the active theme (light/dark/glass) - a dark-mode invoice is not what
+ * anyone wants out of a printer or a "Save as PDF" dialog. `.report-body`
+ * therefore fixes white background / black text unconditionally (report-plan
+ * §3.4/§7 "帳票面の配色... テーマ非依存"). Every color value below is a
+ * plain literal for that reason - this is the one file in the app where
+ * that is correct, not an oversight.
+ */
+
+.report-body {
+	/* system-ui stack only - no serif/明朝 (spec: "明朝は使わない"), so the
+	   report reads the same register as the rest of the UI, not a formal
+	   printed-form typeface. Japanese gothic faces listed explicitly so CJK
+	   text doesn't silently fall back to a serif system font. */
+	font-family:
+		system-ui,
+		-apple-system,
+		'Segoe UI',
+		'Hiragino Kaku Gothic ProN',
+		'Yu Gothic',
+		sans-serif;
+	font-size: 11pt;
+	line-height: 1.7;
+	color: #1a1a1a;
+	background: #ffffff;
+	/* Approximates the `@page { margin: 12mm }` ReportView sets for actual
+	   printing (see ReportView.svelte), so the on-screen preview already
+	   shows text sitting where it will land on paper. */
+	padding: 12mm;
+	box-sizing: border-box;
+}
+
+.report-body * {
+	box-sizing: border-box;
+}
+
+.report-body h1,
+.report-body h2,
+.report-body h3 {
+	margin: 1.1em 0 0.5em;
+	font-weight: 600;
+	line-height: 1.4;
+}
+
+.report-body h1 {
+	font-size: 1.6em;
+	margin-top: 0;
+}
+
+.report-body h2 {
+	font-size: 1.25em;
+}
+
+.report-body h3 {
+	font-size: 1.05em;
+}
+
+.report-body p {
+	margin: 0.6em 0;
+}
+
+.report-body ul {
+	margin: 0.6em 0;
+	padding-left: 1.4em;
+}
+
+.report-body li {
+	margin: 0.2em 0;
+}
+
+.report-body strong {
+	font-weight: 700;
+}
+
+.report-body em {
+	font-style: italic;
+}
+
+.report-body img {
+	max-width: 100%;
+	height: auto;
+}
+
+.report-body table {
+	width: 100%;
+	border-collapse: collapse;
+	margin: 0.75em 0 1.1em;
+	font-size: 0.95em;
+}
+
+.report-body th,
+.report-body td {
+	border: 1px solid #999999;
+	padding: 0.4em 0.65em;
+	text-align: left;
+	vertical-align: top;
+}
+
+.report-body thead th {
+	background: #eeeeee;
+	font-weight: 600;
+}
+
+.report-body .report-align-right {
+	text-align: right;
+}
+
+.report-body .report-align-center {
+	text-align: center;
+}
+
+/* On-screen only: `---` renders as a page-break marker (`<hr
+   class="report-page-break">`, core/html.ts). There is no "page" concept in
+   a scrolling browser view, so it's visualized instead as a light divider
+   with a "改ページ" label - the actual pagination behavior only kicks in
+   under @media print below. */
+.report-body .report-page-break {
+	margin: 1.75em 0;
+	border: none;
+	border-top: 1px dashed #bbbbbb;
+	height: 0;
+	position: relative;
+}
+
+.report-body .report-page-break::after {
+	content: '改ページ';
+	position: absolute;
+	top: -0.7em;
+	left: 50%;
+	transform: translateX(-50%);
+	background: #ffffff;
+	padding: 0 0.6em;
+	font-size: 0.7em;
+	color: #999999;
+}
+
+@media print {
+	/* `---` = "start a new page here" (report-plan §3.4: MD's `---` reads as the
+	   paper-and-pencil "ここで改ページ" convention). The on-screen divider
+	   label above has no meaning once actually paginating, so it's removed
+	   here rather than also printed. */
+	.report-body .report-page-break {
+		break-after: page;
+		border-top: none;
+		margin: 0;
+	}
+
+	.report-body .report-page-break::after {
+		content: none;
+	}
+
+	/* A table row must never split across a page boundary (report-plan §3.4: "行の
+	   途中改ページ禁止"). `thead` repeating on every printed page is left to
+	   the browser's standard table-in-print behavior - no CSS needed for
+	   that part. */
+	.report-body tr {
+		break-inside: avoid;
+	}
+}

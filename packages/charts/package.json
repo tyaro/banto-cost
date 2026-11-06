@@ -1,0 +1,38 @@
+{
+  "name": "@banto/charts",
+  "version": "6.10.0",
+  "description": "Banto charts: dependency-free SVG charts (Svelte 5 Runes UI + pure TS core), spec §6",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tyaro/banto-cost.git",
+    "directory": "packages/charts"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "svelte": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "bench": "vitest bench --run --reporter=verbose",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.7",
+    "typescript": "^6.0.0",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

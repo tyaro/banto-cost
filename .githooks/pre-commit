@@ -1,0 +1,23 @@
+#!/bin/sh
+# Opt-in pre-commit hook. Not installed automatically — enable with:
+#   git config core.hooksPath .githooks
+# (see README.md "開発" section). CI already gates `pnpm format:check` /
+# `pnpm lint` on every PR, so this hook is a convenience for catching the
+# same failures locally before you push, not a hard requirement.
+#
+# No husky / lint-staged here on purpose (docs/history/improvements.md §5.3):
+# this repo avoids adding dependencies for tooling that a plain POSIX sh
+# script already covers.
+#
+# Skip this hook for a single commit with `git commit --no-verify`
+# (CI still enforces the same checks on the PR either way).
+
+if pnpm format:check && pnpm lint; then
+	exit 0
+fi
+
+echo "" >&2
+echo "pre-commit: pnpm format:check / pnpm lint に失敗しました。" >&2
+echo "  pnpm format で自動修正できます（lint の指摘は個別修正が必要な場合があります）。" >&2
+echo "  このフックをスキップするには 'git commit --no-verify' を使用してください（CIのチェックは引き続き有効です）。" >&2
+exit 1

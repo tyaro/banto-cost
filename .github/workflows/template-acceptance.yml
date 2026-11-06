@@ -1,0 +1,260 @@
+# Template acceptance (AD-5 / maintainability-review-2026-07.md §7 追補).
+#
+# 第三者オンボーディングを機械で保証する: 「clone → rename → 動くアプリ」の
+# 経路が壊れていないことを、テンプレートを実際にコピー・リネームしてから
+# 型検査・cargo check まで通して確認する。ChatGPT/採用レビューが独立に指摘した
+# 「最初の業務リソース追加から急に難しくなる」弱点の第一防波堤。
+#
+# 2段構え:
+#   1) rename の統合テスト（`node --test scripts/rename.test.mjs`、軽量・毎回）。
+#   2) end-to-end: リポジトリを一時ディレクトリへコピー→ `rename.mjs` 実行→
+#      `pnpm install` / `pnpm check` / `cargo check`（コアクレート）。リネーム後の
+#      テンプレートが型検査・ビルドを通ることを保証する。
+#
+# トリガは tauri-check.yml と同じ発想（毎PRは重いので回さない）:
+#   - schedule（週次）で環境ドリフトを検出、
+#   - scripts/ を触る PR / main push でリネーム変更を検出、
+#   - workflow_dispatch で手動実行。
+#
+# サードパーティ Action は ci.yml のポリシーどおりコミット SHA 固定。
+name: Template acceptance
+
+on:
+  schedule:
+    # Weekly, Sunday 19:00 UTC = Monday 04:00 JST（tauri-check の1時間後）。
+    - cron: '0 19 * * 0'
+  # paths には scripts 本体に加えて **scaffold がアンカーを張る編集対象**も含める。
+  # scripts だけをトリガにすると、アプリ側 PR がアンカー行を変えても本 WF が走らず
+  # 破壊が週次スケジュールまで潜伏する（#122 と 8730373 で実際に2回再発。
+  # maintenance-review-2026-08 H-2）。
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/rename.mjs'
+      - 'scripts/rename.test.mjs'
+      - 'scripts/scaffold.test.mjs'
+      - 'scripts/scaffold.mjs'
+      - 'scripts/lib/template-edit.mjs'
+      - 'scripts/lib/templates/**'
+      - '.github/workflows/template-acceptance.yml'
+      # scaffold のアンカー対象（remover が編集するファイル群）
+      - 'apps/admin-template/src/routes/**'
+      - 'apps/admin-template/src/lib/**'
+      - 'apps/admin-template/src/app.css'
+      - 'apps/admin-template/src/app.html'
+      - 'apps/admin-template/messages/*.json'
+      - 'apps/admin-template/package.json'
+      - 'apps/admin-template/vite.config.ts'
+      - 'apps/admin-template/core/src/**'
+      - 'apps/admin-template/core/Cargo.toml'
+      - 'apps/admin-template/src-tauri/src/lib.rs'
+      - 'apps/admin-template/src-tauri/Cargo.toml'
+      - 'apps/admin-template/src-tauri/tauri.conf.json'
+      - 'apps/admin-template/src-tauri/tauri.fw-elev.conf.json'
+      - 'apps/admin-template/src-tauri/windows/**'
+      - 'apps/admin-template/elev/**'
+      - 'packages/theme/**'
+      - 'scripts/verify-architecture.mjs'
+      - 'Cargo.toml'
+      # display プリセットのアンカー対象（e2e / CI 定義も書き換える）
+      - 'e2e/**'
+      - 'package.json'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'scripts/rename.mjs'
+      - 'scripts/rename.test.mjs'
+      - 'scripts/scaffold.test.mjs'
+      - 'scripts/scaffold.mjs'
+      - 'scripts/lib/template-edit.mjs'
+      - 'scripts/lib/templates/**'
+      - '.github/workflows/template-acceptance.yml'
+      # scaffold のアンカー対象（push 側と同一に保つ）
+      - 'apps/admin-template/src/routes/**'
+      - 'apps/admin-template/src/lib/**'
+      - 'apps/admin-template/src/app.css'
+      - 'apps/admin-template/src/app.html'
+      - 'apps/admin-template/messages/*.json'
+      - 'apps/admin-template/package.json'
+      - 'apps/admin-template/vite.config.ts'
+      - 'apps/admin-template/core/src/**'
+      - 'apps/admin-template/core/Cargo.toml'
+      - 'apps/admin-template/src-tauri/src/lib.rs'
+      - 'apps/admin-template/src-tauri/Cargo.toml'
+      - 'apps/admin-template/src-tauri/tauri.conf.json'
+      - 'apps/admin-template/src-tauri/tauri.fw-elev.conf.json'
+      - 'apps/admin-template/src-tauri/windows/**'
+      - 'apps/admin-template/elev/**'
+      - 'packages/theme/**'
+      - 'scripts/verify-architecture.mjs'
+      - 'Cargo.toml'
+      # display プリセットのアンカー対象（e2e / CI 定義も書き換える）
+      - 'e2e/**'
+      - 'package.json'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: template-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    name: Copy → rename → check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # 軽量ガード: rename/scaffold が約束どおりの書き換えを行い、--dry-run が無変更なこと。
+      - name: rename / scaffold integration tests
+        run: node --test scripts/rename.test.mjs scripts/scaffold.test.mjs
+
+      # end-to-end: 実際にコピー＆リネームして、リネーム後のテンプレートが
+      # 型検査・cargo check を通ることを確認する（第三者導線の証明）。
+      # コピーは重い/生成物ディレクトリを除外する。
+      - name: Copy repo to a scratch dir and rename
+        run: |
+          set -euo pipefail
+          DEST="${RUNNER_TEMP}/renamed"
+          rsync -a \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude 'target' \
+            --exclude '.svelte-kit' \
+            --exclude 'build' \
+            --exclude 'dist' \
+            ./ "${DEST}/"
+          cd "${DEST}"
+          node scripts/rename.mjs \
+            --name widget-admin \
+            --title "Widget Admin" \
+            --identifier com.example.widget \
+            --repo https://github.com/example/widget-admin
+          echo "DEST=${DEST}" >> "${GITHUB_ENV}"
+
+      - name: Install deps in the renamed copy
+        working-directory: ${{ env.DEST }}
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Type-check the renamed copy
+        working-directory: ${{ env.DEST }}
+        run: pnpm check
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ${{ env.DEST }}
+
+      # コアクレート（Tauri 非依存）が renamed copy でも通ること。src-tauri は
+      # tauri-check.yml の担当なのでここでは対象外。
+      - name: Cargo check the renamed copy (core crates)
+        working-directory: ${{ env.DEST }}
+        run: cargo check -p banto-core -p banto-storage -p banto-server -p banto-attachments -p admin-template-core
+
+      # ファイアウォールの helper（#219 段階 2、ADR-0021 決定 5）は identifier をビルド時の
+      # 定数で持つ。リネームが tauri.conf.json と helper の両方を書き換えたことを、helper の
+      # テスト（identifier_matches_tauri_conf ほか、名前・インストーラの設定の照合）で確かめる。
+      - name: Test the fw-elev helper in the renamed copy
+        working-directory: ${{ env.DEST }}
+        run: cargo test -p admin-template-fw-elev
+
+  # プリセット受け入れ（P4-9 / docs/design/scaffold-presets-plan.md §6）: 各プリセットで
+  # `scaffold.mjs` を適用したクリーンコピーが「ビルド緑」であることを機械で保証する。
+  # これは scaffold のハード要件 — 削除でツリーが壊れるプリセットを出荷しないための
+  # 唯一の防波堤。上の rename と同じコピー/セットアップ様式を踏襲する。
+  #
+  # cargo test は presetによって banto-attachments を含む/含まないため、常に成立する
+  # クレート集合（admin-template-core は banto-attachments を推移的に含むので full でも
+  # 検査される）を明示指定する。src-tauri は非対象（tauri-check.yml の担当）。
+  #
+  # `display`（docs/design/display-preset-plan.md、Issue #190）も同じ工程で検査する。
+  # display は items デモ・users/audit-log 画面・ダッシュボードを外したうえで
+  # `/monitor` と初回起動シードを**足す**唯一のプリセットなので、
+  # 「引いた後もビルド緑」に加えて「足した後も型検査/テスト緑」がここで担保される。
+  # e2e（display 用の1シナリオ・スモーク）はここでは走らせない — banto-serve の
+  # ビルドと Playwright ブラウザの用意が要り、このジョブの目的（コピーが壊れて
+  # いないこと）に対して重すぎるため。ci.yml の e2e ジョブがテンプレート本体で
+  # 同じ結線（閲覧公開 + 合成 viewer）を毎 PR で検証している。
+  presets:
+    name: Scaffold ${{ matrix.preset }} → check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [minimal, standard, full, display]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Copy repo to a scratch dir and scaffold the preset
+        run: |
+          set -euo pipefail
+          DEST="${RUNNER_TEMP}/preset-${{ matrix.preset }}"
+          rsync -a \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude 'target' \
+            --exclude '.svelte-kit' \
+            --exclude 'build' \
+            --exclude 'dist' \
+            ./ "${DEST}/"
+          cd "${DEST}"
+          # --strict: pristine コピーでは全アンカーが必ず在るはずなので、
+          # 「見つからない＝適用済み扱い」の無音スキップをアンカードリフトとして
+          # 失敗にする（template-edit.mjs の strict 契約）。
+          node scripts/scaffold.mjs --preset ${{ matrix.preset }} --strict
+          echo "DEST=${DEST}" >> "${GITHUB_ENV}"
+
+      - name: Install deps in the scaffolded copy
+        working-directory: ${{ env.DEST }}
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Architecture invariants still hold
+        working-directory: ${{ env.DEST }}
+        run: pnpm verify:architecture
+
+      - name: Type-check the scaffolded copy
+        working-directory: ${{ env.DEST }}
+        run: pnpm --filter admin-template check
+
+      - name: Build the scaffolded copy
+        working-directory: ${{ env.DEST }}
+        run: pnpm --filter admin-template build
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ${{ env.DEST }}
+
+      # プリセットで banto-attachments が消える（minimal/standard）ため、常に成立する
+      # クレート集合を指定（full は admin-template-core 経由で attachments も検査される）。
+      # `cargo test`（`check` ではなく）で、削除後も各プリセットのテストが
+      # コンパイル・パスすること＝「cargo test 緑」を機械で保証する。
+      - name: Cargo test the scaffolded copy (core crates)
+        working-directory: ${{ env.DEST }}
+        run: cargo test -p banto-core -p banto-storage -p banto-server -p admin-template-core

@@ -1,0 +1,651 @@
+/*
+ * settings/ 配下の共有スタイル（choiapp-feedback-2026-09 §3 のカテゴリ分け +
+ * settings-split refactor、§3.2 のルート化で更新）。プレーン CSS として
+ * `+layout.svelte` から `import './settings.css';` する - Svelte の
+ * per-component scoping はコンポーネントを跨いでは効かない（5つの section
+ * コンポーネント + 5つのカテゴリルートの `+page.svelte` に分かれた
+ * カード markup が、このファイルを import する +layout.svelte 自身の
+ * <style> スコープには入らない）ため、代わりに全セレクタを
+ * `.settings-page`（+layout.svelte のルート div が持つ、settings/ 配下の
+ * どのページでも変わらないクラス）祖先で名前空間化する。`.note`/`.status`/
+ * `.error`/`.field`/裸の `form`/`h4` のような汎用的なセレクタが他ルートへ
+ * 漏れるのを防ぐため（他ルートも同じ汎用クラス名を独立して使っている -
+ * 生の Svelte scoped <style> のままなら起きなかった衝突）。トークンのみ・
+ * 生値は理由コメント付きの意図的例外のみ（conventions §9）。
+ *
+ * カテゴリナビの markup と経路判定は +layout.svelte が所有し、入力とナビの
+ * 共通スタイルは @banto/theme/css にある（ADR-0023）。
+ */
+
+.settings-page {
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+}
+
+.settings-page .settings-section {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+}
+
+.settings-page .section-heading {
+	margin: 0.5rem 0 0;
+	font-size: 0.8rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--banto-text-muted);
+}
+
+.settings-page .settings-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+	align-items: start;
+	gap: 1rem;
+}
+
+.settings-page .surface-card {
+	min-width: 0;
+	padding: min(var(--banto-space-5), 5%);
+	overflow-wrap: anywhere;
+}
+
+.settings-page .banto-btn {
+	height: auto;
+	min-height: var(--banto-control-height);
+	max-width: 100%;
+	padding-block: var(--banto-space-1);
+	white-space: normal;
+	overflow-wrap: anywhere;
+	line-height: 1.5;
+	justify-content: center;
+}
+
+.settings-page .card-head > svg,
+.settings-page .banto-btn > svg {
+	flex-shrink: 0;
+}
+
+.settings-page .card-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.65rem;
+	margin-bottom: 0.25rem;
+	color: var(--banto-text-muted);
+}
+
+.settings-page .card-head h3 {
+	margin: 0;
+	font-size: 1rem;
+	color: var(--banto-text);
+}
+
+.settings-page .card-head p {
+	margin: 0.2rem 0 0;
+	font-size: 0.8rem;
+	color: var(--banto-text-muted);
+}
+
+.settings-page .card-head--danger {
+	color: var(--banto-danger);
+}
+
+.settings-page h4 {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	margin: 1rem 0 0.5rem;
+	font-size: 0.875rem;
+	color: var(--banto-text-muted);
+}
+
+.settings-page .options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.settings-page .theme-option {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.3rem 0.4rem;
+	padding: 0.5rem 0.7rem;
+	border: 1px solid var(--banto-border);
+	border-radius: var(--banto-radius-md);
+	cursor: pointer;
+	font-size: 0.8rem;
+}
+
+.settings-page .theme-option.selected {
+	border-color: var(--banto-primary);
+	/* axe-core wcag2aa color-contrast (visual-refresh-plan.md §7.1): same
+	   fix as Sidebar.svelte's .nav-item.active - plain --banto-primary text
+	   on this tint background falls short of 4.5:1 (light theme). */
+	color: var(--banto-primary-hover);
+	background: color-mix(in srgb, var(--banto-primary) 10%, transparent);
+}
+
+.settings-page .theme-option input {
+	position: absolute;
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* Preset previews use live tokens: glass
+   vs standard is orthogonal to light/dark, so showing the CURRENT theme's
+   real surface/accent tokens with a fixed illustrative blur is enough to
+   convey the difference without hardcoding colors. */
+.settings-page .preset-preview {
+	flex-basis: 100%;
+	position: relative;
+	width: 80px;
+	height: 48px;
+	overflow: hidden;
+	border: 1px solid var(--banto-border);
+	border-radius: var(--banto-radius-sm);
+	background: var(--banto-accent-gradient);
+}
+
+.settings-page .preset-preview::after {
+	content: '';
+	position: absolute;
+	inset: 8px;
+	border-radius: var(--banto-radius-sm);
+	background: var(--banto-surface);
+}
+
+.settings-page .preset-preview[data-preset='glass']::after {
+	background: color-mix(in srgb, var(--banto-surface) 55%, transparent);
+	backdrop-filter: blur(3px);
+	-webkit-backdrop-filter: blur(3px);
+}
+
+/* Navigation layout previews (nav-launcher-plan.md §3): live tokens only,
+   like the preset previews - a sidebar column or a small bar at the bottom
+   over the current theme's surface. Sizes match the preset previews. */
+.settings-page .nav-layout-preview {
+	flex-basis: 100%;
+	position: relative;
+	display: flex;
+	width: 80px;
+	height: 48px;
+	overflow: hidden;
+	border: 1px solid var(--banto-border);
+	border-radius: var(--banto-radius-sm);
+	background: var(--banto-surface-subtle);
+}
+
+.settings-page .nav-layout-preview .preview-nav {
+	background: var(--banto-surface);
+	border: 0 solid var(--banto-border);
+}
+
+.settings-page .nav-layout-preview[data-nav-layout='sidebar'] .preview-nav {
+	width: 30%;
+	border-right-width: 1px;
+}
+
+.settings-page .nav-layout-preview[data-nav-layout='launcher'] .preview-nav {
+	position: absolute;
+	border-color: var(--banto-border-strong);
+	left: 25%;
+	right: 25%;
+	bottom: 4px;
+	height: 8px;
+	border-width: 1px;
+	border-radius: var(--banto-radius-sm);
+}
+
+/* Dock opacity slider + its D7 preview: striped "content" under a sample
+   bar whose background is the theme's own formula with the token
+   overridden on .launcher-preview (inline style from the slider). Token
+   colours only. */
+.settings-page .launcher-opacity {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 1rem;
+	margin-top: 0.75rem;
+}
+
+.settings-page .launcher-opacity .field {
+	flex: 1 1 200px;
+	max-width: 320px;
+}
+
+.settings-page .launcher-opacity-label {
+	display: flex;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.settings-page .launcher-opacity-value {
+	color: var(--banto-text);
+	font-variant-numeric: tabular-nums;
+}
+
+.settings-page .launcher-preview {
+	position: relative;
+	display: flex;
+	align-items: flex-end;
+	justify-content: center;
+	width: 120px;
+	height: 64px;
+	padding-bottom: 6px;
+	overflow: hidden;
+	border: 1px solid var(--banto-border);
+	border-radius: var(--banto-radius-sm);
+	background: repeating-linear-gradient(
+		135deg,
+		var(--banto-surface) 0 6px,
+		color-mix(in srgb, var(--banto-primary) 45%, var(--banto-surface)) 6px 12px
+	);
+}
+
+.settings-page .launcher-preview-bar {
+	display: flex;
+	gap: 4px;
+	padding: 4px;
+	border: 1px solid var(--banto-border);
+	border-radius: var(--banto-radius-md);
+	background: color-mix(
+		in srgb,
+		var(--banto-surface-overlay) var(--banto-shell-launcher-opacity),
+		transparent
+	);
+	box-shadow: var(--banto-shadow-md);
+}
+
+.settings-page .launcher-preview-bar span {
+	width: 14px;
+	height: 14px;
+	border-radius: var(--banto-radius-sm);
+	background: var(--banto-text-muted);
+}
+
+.settings-page .launcher-opaque-note {
+	display: none;
+}
+
+/* Same fallback as the real bar (banto.css): opaque, and say why. */
+@media (prefers-reduced-transparency: reduce) {
+	.settings-page .launcher-preview-bar {
+		background: var(--banto-surface-overlay);
+	}
+
+	.settings-page .launcher-opaque-note {
+		display: block;
+	}
+}
+
+/* Switch controls and label rows use @banto/theme/css (ADR-0026). */
+
+.settings-page .server-fields {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+	margin: 0.75rem 0;
+}
+
+.settings-page .server-fields > .banto-field {
+	min-width: min(100%, 12rem);
+}
+
+/* Save button + "discard" + unsaved marker (issue #214). */
+.settings-page .save-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.settings-page .note + .save-row {
+	margin-top: 0.5rem;
+}
+
+.settings-page form {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	max-width: 320px;
+}
+
+.settings-page .field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+	font-size: 0.8rem;
+	color: var(--banto-text-muted);
+}
+
+/* Native field styles are shared by @banto/theme/css (ADR-0023).
+   Only page layout and the range label above remain local. */
+
+.settings-page .backup-toolbar {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.settings-page .pending-restore {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+	margin: 0.75rem 0 0;
+	padding: 0.6rem 0.8rem;
+	border: 1px solid var(--banto-primary);
+	border-radius: var(--banto-radius-md);
+	background: color-mix(in srgb, var(--banto-primary) 10%, transparent);
+	font-size: 0.85rem;
+}
+
+.settings-page .backup-list {
+	list-style: none;
+	margin: 0.75rem 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+}
+
+.settings-page .backup-list li {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	flex-wrap: wrap;
+	padding: 0.5rem 0.7rem;
+	border: 1px solid var(--banto-border);
+	border-radius: var(--banto-radius-md);
+}
+
+.settings-page .backup-info {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	min-width: 0;
+}
+
+.settings-page .backup-info .file-name {
+	font-size: 0.85rem;
+	font-weight: 600;
+	word-break: break-all;
+}
+
+.settings-page .backup-info .meta {
+	font-size: 0.75rem;
+	color: var(--banto-text-muted);
+}
+
+.settings-page .backup-actions {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.settings-page .restore-upload {
+	margin-top: 0.75rem;
+}
+
+/* Visually hidden but still focusable/clickable via
+   restoreFileInput?.click() - same approach as the items page's CSVイン
+   ポート file input (spec M15). */
+.settings-page .file-input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.settings-page .status {
+	margin: 0.75rem 0 0;
+	font-size: 0.875rem;
+}
+
+.settings-page .urls {
+	margin: 0.4rem 0 0;
+	padding-left: 1.2rem;
+	font-size: 0.8rem;
+}
+
+.settings-page .urls a {
+	color: var(--banto-primary);
+}
+
+.settings-page .qr {
+	margin-top: 0.75rem;
+	width: fit-content;
+	box-sizing: border-box;
+	max-width: 100%;
+	/* Fixed white, not a --banto-* surface var: a QR code must stay
+	   black-on-white to stay scannable in dark mode too. */
+	background: #fff;
+	padding: 0.5rem;
+	border-radius: var(--banto-radius-md);
+}
+
+.settings-page .qr svg {
+	display: block;
+	max-width: 100%;
+	height: auto;
+}
+
+.settings-page .error,
+.settings-page .caution {
+	margin: 0.5rem 0 0;
+	color: var(--banto-danger);
+	font-size: 0.8rem;
+}
+
+/* Issue #479: a state that is not wrong but needs a look (the rule is as
+   expected, yet Windows does not enforce it). Laid out like `.error`
+   (shared above), only the colour is the warning one. */
+.settings-page .caution {
+	color: var(--banto-warning-tint-text);
+}
+
+.settings-page .note {
+	margin: 0.75rem 0 0;
+	color: var(--banto-text-muted);
+	font-size: 0.8rem;
+}
+
+.settings-page .note.warning {
+	color: var(--banto-danger);
+}
+
+/* Issue #219: the firewall information under the LAN status
+   (FirewallInfoPanel.svelte). */
+.settings-page .firewall-info {
+	margin-top: 1rem;
+	padding-top: 0.75rem;
+	border-top: 1px solid var(--banto-border);
+}
+
+.settings-page .firewall-info h4 {
+	margin: 0.75rem 0 0;
+	font-size: 0.875rem;
+}
+
+.settings-page .firewall-info h4:first-child {
+	margin-top: 0;
+}
+
+.settings-page .firewall-values {
+	margin: 0.5rem 0 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+	font-size: 0.8rem;
+}
+
+.settings-page .firewall-row {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+	gap: 0.75rem;
+	align-items: center;
+}
+
+.settings-page .firewall-row dt {
+	color: var(--banto-text-muted);
+}
+
+.settings-page .firewall-row dd {
+	margin: 0;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem;
+	min-width: 0;
+}
+
+.settings-page .firewall-info code {
+	overflow-wrap: anywhere;
+}
+
+.settings-page .firewall-command {
+	margin-top: 0.5rem;
+}
+
+.settings-page .firewall-command-title {
+	margin: 0;
+	font-size: 0.8rem;
+}
+
+.settings-page .firewall-command pre {
+	margin: 0.4rem 0;
+	padding: 0.5rem 0.75rem;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 0.75rem;
+	background: var(--banto-bg);
+	border: 1px solid var(--banto-border);
+	border-radius: var(--banto-radius-md);
+}
+
+.settings-page .firewall-copy {
+	font-size: 0.75rem;
+}
+
+/* Issue #219 PR-B: the Windows Firewall status (FirewallRuleStatusPanel.svelte). */
+.settings-page .firewall-rule-status {
+	margin-top: 0.5rem;
+	font-size: 0.8rem;
+}
+
+.settings-page .firewall-rule-status p {
+	margin: 0.25rem 0 0;
+}
+
+.settings-page .firewall-rule-status ul {
+	margin: 0.25rem 0 0;
+	padding-left: 1.25rem;
+}
+
+.settings-page .firewall-status > .firewall-copy {
+	margin-top: 0.5rem;
+}
+
+/* Issue #219 stage 2 (ADR-0021 E3): allow / remove through the elevated
+   helper (FirewallRuleStatusPanel.svelte), under the status. */
+.settings-page .firewall-change {
+	margin-top: var(--banto-space-3);
+	font-size: var(--banto-font-size-sm);
+}
+
+.settings-page .firewall-change p {
+	margin: var(--banto-space-1) 0 0;
+}
+
+.settings-page .firewall-change-actions {
+	margin-top: var(--banto-space-2);
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--banto-space-2);
+}
+
+.settings-page .firewall-change-result {
+	margin-top: var(--banto-space-2);
+}
+
+.settings-page .firewall-change-success {
+	color: var(--banto-success);
+	font-weight: 600;
+}
+
+/* Issue #219 PR-C3: the connection check from another device
+   (LanReachCheckPanel.svelte) - its own block below the firewall ones. */
+.settings-page .reach-check {
+	margin-top: var(--banto-space-4);
+	padding-top: var(--banto-space-3);
+	border-top: var(--banto-border-width) solid var(--banto-border);
+}
+
+.settings-page .reach-check h4 {
+	margin: 0;
+	font-size: var(--banto-font-size-md);
+}
+
+.settings-page .reach-state {
+	margin-top: var(--banto-space-2);
+	font-size: var(--banto-font-size-sm);
+}
+
+.settings-page .reach-state p {
+	margin: var(--banto-space-1) 0 0;
+}
+
+.settings-page .reach-verified {
+	color: var(--banto-success);
+	font-weight: 600;
+}
+
+.settings-page .reach-dim {
+	opacity: 0.7;
+}
+
+.settings-page .reach-url {
+	margin-top: var(--banto-space-2);
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--banto-space-2);
+}
+
+.settings-page .reach-url code {
+	overflow-wrap: anywhere;
+}
+
+.settings-page .reach-record code {
+	overflow-wrap: anywhere;
+}
+
+.settings-page .reach-hints {
+	margin: var(--banto-space-1) 0 0;
+	padding-left: var(--banto-space-5);
+}
+
+.settings-page .reach-issue {
+	margin-top: var(--banto-space-3);
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: var(--banto-space-2);
+}
+
+/* High-impact cards (successor of plan Phase 5's danger zone; the choi-app
+   feedback 2026-09 recategorization moved its cards into their own
+   categories - backup/restore under data, auth disable under security).
+   Only styling; every action inside keeps its original handler/confirm
+   dialog. */
+.settings-page .danger-card .surface-card {
+	border-color: var(--banto-danger);
+}

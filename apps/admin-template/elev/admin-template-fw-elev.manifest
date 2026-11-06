@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  ADR-0021 decision 7: the application manifest of the UAC-elevated firewall
+  helper `admin-template-fw-elev.exe` only.
+
+  `requestedExecutionLevel level="requireAdministrator"` makes Windows ask for
+  elevation (UAC) as soon as the exe is started - the helper has no code that
+  elevates itself. The main app is never given this manifest (build.rs links
+  it to the `admin-template-fw-elev` bin only).
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+      version="1.0.0.0"
+      processorArchitecture="*"
+      name="Banto.AdminTemplate.FwElev"
+      type="win32"/>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>
