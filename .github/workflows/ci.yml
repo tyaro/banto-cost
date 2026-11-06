@@ -269,6 +269,13 @@ jobs:
           BANTO_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/banto_app_test
         run: cargo test -p banto-admin-services --features postgres pg_concurrent_setup
 
+      # PR #8 レビュー: 同じ利用者の能力の置き換えを並行に実行しても、どの要求にも
+      # 無い和集合にならないこと（利用者行の FOR UPDATE）。専用スキーマを作るので public には触れない。
+      - name: Cargo test (banto-admin-services, postgres capability race)
+        env:
+          BANTO_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/banto_app_test
+        run: cargo test -p banto-admin-services --features postgres pg_concurrent_set_capabilities
+
       # ADR-0019（tyaro/banto-industrial#437）: DB に書けない監査の保留ファイル。
       # 失敗（表の改名）と応答なし（別トランザクションの排他ロック）の両方で、
       # 保留 → 流し込みが 1 行だけになること。専用スキーマを作るので public には触れない。
