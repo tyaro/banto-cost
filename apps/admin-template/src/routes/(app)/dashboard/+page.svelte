@@ -71,7 +71,9 @@
 	// --- 案件と売上の要約 ------------------------------------------------------
 
 	const available = isPipelineAvailable();
-	const months = currentAndNextMonth(new Date());
+	// Re-read on every load, so a dashboard left open across a month end shows
+	// the new month after 再読み込み (the tiles read it together with the outlook).
+	let months = $state(currentAndNextMonth(new Date()));
 
 	type Source<T> =
 		{ state: 'loading' } | { state: 'ok'; value: T } | { state: 'error'; error: unknown };
@@ -83,13 +85,15 @@
 	async function load(): Promise<void> {
 		if (!available) return;
 		const token = ++loadToken;
+		const range = currentAndNextMonth(new Date());
 		overview = { state: 'loading' };
 		outlook = { state: 'loading' };
 		const [o, l] = await Promise.allSettled([
 			getPipelineOverview(),
-			getOutlook({ from: months.current, to: months.next })
+			getOutlook({ from: range.current, to: range.next })
 		]);
 		if (token !== loadToken) return;
+		months = range;
 		overview =
 			o.status === 'fulfilled'
 				? { state: 'ok', value: o.value }
@@ -610,13 +614,13 @@
 	.page {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.note {
 		margin: 0;
 		color: var(--banto-text-muted);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 	}
 
 	/* KPI tiles (design.md §10): icon + label + tabular-nums value. Tile-only
@@ -625,18 +629,18 @@
 	.stat-row {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.stat-tile {
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
-		padding: 1rem 1.25rem;
+		padding: var(--banto-space-4) var(--banto-space-5);
 		display: flex;
 		align-items: center;
-		gap: 0.85rem;
+		gap: var(--banto-space-3);
 	}
 
 	.stat-icon {
@@ -654,17 +658,17 @@
 	.stat-body {
 		display: flex;
 		flex-direction: column;
-		gap: 0.3rem;
+		gap: var(--banto-space-1);
 		min-width: 0;
 	}
 
 	.stat-label {
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.stat-value {
-		font-size: 1.6rem;
+		font-size: var(--banto-font-size-xl);
 		font-weight: 650;
 		color: var(--banto-text);
 		font-variant-numeric: tabular-nums;
@@ -672,13 +676,13 @@
 
 	.stat-note {
 		color: var(--banto-text-muted);
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-xs);
 		text-wrap: pretty;
 	}
 
 	.section-heading {
-		margin: 0.25rem 0 0;
-		font-size: 1rem;
+		margin: var(--banto-space-1) 0 0;
+		font-size: var(--banto-font-size-lg);
 		color: var(--banto-text-muted);
 	}
 
@@ -688,18 +692,18 @@
 		padding: 0;
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.link-card {
 		display: flex;
 		align-items: center;
-		gap: 0.85rem;
+		gap: var(--banto-space-3);
 		height: 100%;
 		box-sizing: border-box;
-		padding: 0.9rem 1.1rem;
+		padding: var(--banto-space-3) var(--banto-space-4);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
 		color: var(--banto-text);
@@ -718,7 +722,7 @@
 	.link-body {
 		display: flex;
 		flex-direction: column;
-		gap: 0.2rem;
+		gap: var(--banto-space-1);
 		min-width: 0;
 	}
 
@@ -728,7 +732,7 @@
 
 	.link-note {
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		text-wrap: pretty;
 	}
 
@@ -737,42 +741,42 @@
 	.workspace {
 		background: var(--banto-surface-subtle);
 		border-radius: var(--banto-radius-lg);
-		padding: 1.25rem;
+		padding: var(--banto-space-5);
 	}
 
 	.workspace-heading {
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
-		margin: 0 0 0.5rem;
-		font-size: 1rem;
+		gap: var(--banto-space-1);
+		margin: 0 0 var(--banto-space-2);
+		font-size: var(--banto-font-size-lg);
 		font-feature-settings: 'palt';
 	}
 
 	.workspace-caption {
 		margin: 0;
 		color: var(--banto-text-muted);
-		font-size: 0.875rem;
+		font-size: var(--banto-font-size-md);
 		text-wrap: pretty;
 	}
 
 	.dock-toolbar {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.5rem;
-		margin: 0.75rem 0;
+		gap: var(--banto-space-2);
+		margin: var(--banto-space-3) 0;
 	}
 
 	.dock-toggle {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
-		border: 1px solid var(--banto-border);
+		gap: var(--banto-space-1);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: 999px;
 		background: var(--banto-surface);
 		color: var(--banto-text-muted);
-		padding: 0.35rem 0.9rem;
-		font-size: 0.8rem;
+		padding: var(--banto-space-1) var(--banto-space-3);
+		font-size: var(--banto-font-size-sm);
 		cursor: pointer;
 	}
 
@@ -792,12 +796,12 @@
 	}
 
 	.dock-reset {
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: 999px;
 		background: var(--banto-surface);
 		color: var(--banto-text);
-		padding: 0.35rem 0.9rem;
-		font-size: 0.8rem;
+		padding: var(--banto-space-1) var(--banto-space-3);
+		font-size: var(--banto-font-size-sm);
 		cursor: pointer;
 		margin-left: auto;
 	}
@@ -813,6 +817,6 @@
 	.dock-panel {
 		height: 100%;
 		box-sizing: border-box;
-		padding: 0.75rem;
+		padding: var(--banto-space-3);
 	}
 </style>
