@@ -278,7 +278,7 @@
 		flex-direction: column;
 		gap: var(--banto-space-3);
 		padding: var(--banto-space-3);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 	}
 
@@ -346,7 +346,7 @@
 		gap: var(--banto-space-2);
 		padding: var(--banto-space-3);
 		background: var(--banto-surface-subtle);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 	}
 

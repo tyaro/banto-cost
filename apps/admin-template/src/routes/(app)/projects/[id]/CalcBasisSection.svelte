@@ -43,8 +43,13 @@
 	let editing = $state<'override' | 'revert' | null>(null);
 	const selected = $derived(basis?.items.find((row) => row.item.key === selectedKey) ?? null);
 
+	const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+	/** A cleared or half-typed date is not requested (PR #13 review). */
+	const onValid = $derived(DATE_RE.test(on));
+	let formPending = { dirty: false, busy: false };
+
 	async function load() {
-		if (!available) return;
+		if (!available || !DATE_RE.test(on)) return;
 		const token = ++loadToken;
 		loadError = null;
 		try {
@@ -65,7 +70,22 @@
 
 	function close() {
 		editing = null;
-		onPendingChange?.({ dirty: false, busy: false });
+		formPending = { dirty: false, busy: false };
+		onPendingChange?.(formPending);
+	}
+
+	/** Switching items or modes drops the open form: ask first when it has input (PR #13 review). */
+	function canLeaveForm(): boolean {
+		if (!editing) return true;
+		if (formPending.busy) return false;
+		return !formPending.dirty || window.confirm(m['calcBasis.discardConfirm']());
+	}
+
+	function select(key: string, mode: 'override' | 'revert' | null) {
+		if (!canLeaveForm()) return;
+		close();
+		selectedKey = key;
+		editing = mode;
 	}
 
 	function sourceLabel(source: string): string {
@@ -77,6 +97,14 @@
 
 <section class="calc-basis" aria-labelledby="calc-basis-heading">
 	<h2 id="calc-basis-heading">{m['calcBasis.projectSectionTitle']()}</h2>
+
+	{#if available && !forbidden}
+		<label class="field on">
+			<span>{m['calcBasis.fieldOn']()}</span>
+			<input class="banto-input" type="date" bind:value={on} aria-invalid={!onValid} />
+			{#if !onValid}<span class="error">{m['calcBasis.errorDate']()}</span>{/if}
+		</label>
+	{/if}
 
 	{#if !available}
 		<p class="note">{m['calcBasis.demoUnavailable']()}</p>
@@ -93,10 +121,6 @@
 		<LoadingState label={m['common.loading']()} />
 	{:else}
 		<p class="note">{m['calcBasis.projectDesc']()}</p>
-		<label class="field on">
-			<span>{m['calcBasis.fieldOn']()}</span>
-			<input class="banto-input" type="date" bind:value={on} />
-		</label>
 		<div class="table-wrap">
 			<table>
 				<caption class="sr-only">{m['calcBasis.projectSectionTitle']()}</caption>
@@ -137,10 +161,7 @@
 										<button
 											type="button"
 											class="banto-btn banto-btn--ghost"
-											onclick={() => {
-												selectedKey = row.item.key;
-												close();
-											}}
+											onclick={() => select(row.item.key, null)}
 										>
 											{m['calcBasis.showHistory']()}
 										</button>
@@ -149,10 +170,7 @@
 										<button
 											type="button"
 											class="banto-btn banto-btn--secondary"
-											onclick={() => {
-												selectedKey = row.item.key;
-												editing = 'override';
-											}}
+											onclick={() => select(row.item.key, 'override')}
 										>
 											{m['calcBasis.override']()}
 										</button>
@@ -160,10 +178,7 @@
 											<button
 												type="button"
 												class="banto-btn banto-btn--ghost"
-												onclick={() => {
-													selectedKey = row.item.key;
-													editing = 'revert';
-												}}
+												onclick={() => select(row.item.key, 'revert')}
 											>
 												{m['calcBasis.revertToCompany']()}
 											</button>
@@ -223,7 +238,10 @@
 							void load();
 						}}
 						onCancel={close}
-						{onPendingChange}
+						onPendingChange={(pending) => {
+							formPending = pending;
+							onPendingChange?.(pending);
+						}}
 					/>
 				{/key}
 			{/if}
@@ -237,7 +255,7 @@
 		flex-direction: column;
 		gap: var(--banto-space-3);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
 		padding: min(var(--banto-space-5), 3%);
@@ -295,7 +313,7 @@
 	th,
 	td {
 		padding: var(--banto-space-2);
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		text-align: left;
 		vertical-align: top;
 		white-space: nowrap;

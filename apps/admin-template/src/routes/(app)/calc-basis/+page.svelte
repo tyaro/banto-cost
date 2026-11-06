@@ -48,8 +48,12 @@
 
 	const selected = $derived(basis?.items.find((row) => row.item.key === selectedKey) ?? null);
 
+	const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+	/** A cleared or half-typed date is not requested (PR #13 review). */
+	const onValid = $derived(DATE_RE.test(on));
+
 	async function load() {
-		if (!available) return;
+		if (!available || !DATE_RE.test(on)) return;
 		const token = ++loadToken;
 		loadError = null;
 		try {
@@ -69,6 +73,9 @@
 	});
 
 	function open(key: string, edit: boolean) {
+		if (editing && formPending.busy) return;
+		// Switching items or modes drops the open form: ask first when it has input (PR #13 review).
+		if (editing && formPending.dirty && !window.confirm(m['calcBasis.discardConfirm']())) return;
 		selectedKey = key;
 		editing = edit;
 		formPending = { dirty: false, busy: false };
@@ -77,6 +84,18 @@
 
 <div class="page">
 	<PageHeader hideTitle title={m['nav.calcBasis']()} description={m['calcBasis.description']()} />
+
+	{#if available && !forbidden}
+		<div class="toolbar">
+			<label class="field">
+				<span>{m['calcBasis.fieldOn']()}</span>
+				<input class="banto-input" type="date" bind:value={on} aria-invalid={!onValid} />
+			</label>
+			<p class="note" class:error={!onValid}>
+				{onValid ? m['calcBasis.onNote']() : m['calcBasis.errorDate']()}
+			</p>
+		</div>
+	{/if}
 
 	{#if !available}
 		<EmptyState title={m['calcBasis.demoUnavailable']()} />
@@ -97,13 +116,6 @@
 		<LoadingState label={m['common.loading']()} />
 	{:else}
 		<section class="panel">
-			<div class="toolbar">
-				<label class="field">
-					<span>{m['calcBasis.fieldOn']()}</span>
-					<input class="banto-input" type="date" bind:value={on} />
-				</label>
-				<p class="note">{m['calcBasis.onNote']()}</p>
-			</div>
 			<div class="table-wrap">
 				<table>
 					<caption class="sr-only">{m['nav.calcBasis']()}</caption>
@@ -251,7 +263,7 @@
 	.page {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 		max-width: 1200px;
 	}
 
@@ -260,7 +272,7 @@
 		flex-direction: column;
 		gap: var(--banto-space-3);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
 		padding: min(var(--banto-space-5), 3%);
@@ -290,6 +302,10 @@
 		color: var(--banto-text);
 	}
 
+	.note.error {
+		color: var(--banto-danger);
+	}
+
 	.note,
 	.sub {
 		margin: 0;
@@ -310,7 +326,7 @@
 	th,
 	td {
 		padding: var(--banto-space-2);
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		text-align: left;
 		vertical-align: top;
 		white-space: nowrap;

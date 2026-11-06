@@ -975,5 +975,6 @@
   "calcBasis.override": "上書き",
   "calcBasis.overrideHistoryTitle": "{item} の上書きの履歴",
   "calcBasis.noOverrides": "この案件では上書きしていません",
-  "calcBasis.revertedEntry": "会社基準に戻す"
+  "calcBasis.revertedEntry": "会社基準に戻す",
+  "calcBasis.discardConfirm": "入力中の内容は保存されていません。破棄して切り替えますか？"
 }

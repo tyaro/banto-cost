@@ -975,5 +975,6 @@
   "calcBasis.override": "Override",
   "calcBasis.overrideHistoryTitle": "Overrides of {item}",
   "calcBasis.noOverrides": "This project does not override it",
-  "calcBasis.revertedEntry": "Back to company basis"
+  "calcBasis.revertedEntry": "Back to company basis",
+  "calcBasis.discardConfirm": "The form has unsaved input. Discard it and switch?"
 }
