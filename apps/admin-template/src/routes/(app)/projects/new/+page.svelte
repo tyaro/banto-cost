@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * 案件の新規登録 (banto-cost P3a, spec §5.1; same shape as items/new).
+	 * 案件の新規登録 (banto-cost P3a, spec §5.1; same shape as customers/new).
 	 * The form waits for the customer / manager choices (projectPickers.ts)
 	 * before it is built, so the schema and its store are created once. Only
 	 * the pre-order statuses and 失注・中止・保留 can be chosen

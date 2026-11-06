@@ -6,18 +6,9 @@
  * alike.
  */
 import type { ResourceDefinition } from '@banto/admin-core';
-// [scaffold:items] begin
-import { itemsResource } from './items';
-// [scaffold:items] end
 import { customersResource } from './customers';
 import { projectsResource } from './projects';
 
-// D1-d note (display-preset-plan.md, Issue #190 prep): the future `items`
-// remover needs a `swapText` here, not a `cutRegion` delete - `resources`
-// must still be a valid (possibly empty) array afterwards:
-//   `[itemsResource]` -> `[]`
-export const resources: ResourceDefinition[] = [itemsResource];
-
-// banto-cost P3a: 顧客・案件台帳. Appended as a separate statement so the
-// template line above stays byte-identical for scaffold's exact-text swap.
-resources.push(customersResource, projectsResource);
+// banto-cost P3a: 顧客・案件台帳. The template's `items` demo resource was
+// removed (2026-11).
+export const resources: ResourceDefinition[] = [customersResource, projectsResource];

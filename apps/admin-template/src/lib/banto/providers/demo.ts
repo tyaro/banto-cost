@@ -28,8 +28,8 @@ const AUTH_KEY = 'banto.auth.demo';
  * Spec M10 RBAC: the demo provider's one fixed account is always full
  * 'admin' - this is the only environment where usersAdmin.ts is
  * unconditionally unavailable anyway (see isUsersAdminAvailable()), so this
- * only matters for permissions.ts-gated UI elsewhere (nav, items page,
- * settings page), which should behave exactly as if a real admin were
+ * only matters for permissions.ts-gated UI elsewhere (nav, customer /
+ * project pages, settings page), which should behave exactly as if a real admin were
  * logged in.
  */
 const DEMO_IDENTITY = { id: 'admin', name: '管理者', role: 'admin' } as const;

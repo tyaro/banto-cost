@@ -3,8 +3,8 @@
 	 * 監査ログ閲覧画面（spec M14）。`admin` のみ到達（+page.ts が非adminを
 	 * ダッシュボードへリダイレクト）。
 	 *
-	 * 一覧は BantoGrid の「サーバーモード」（items 一覧ページの
-	 * ItemsServerGrid.svelte と同じ発想）: ソート/フィルタ/ページングは
+	 * 一覧は BantoGrid の「サーバーモード」（テンプレートの items 一覧
+	 * （削除済み）のサーバーモードと同じ発想）: ソート/フィルタ/ページングは
 	 * すべて `listAuditLog()`（Rust側 `ListParams` -> SQL）が行い、
 	 * ブロック単位でスクロールに応じて遅延取得する。
 	 *

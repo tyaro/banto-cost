@@ -14,18 +14,18 @@
  *   1. an unauthenticated LAN browser lands on the dashboard as the synthetic
  *      `viewer` (no login screen, header shows "ログイン" instead of the user
  *      menu, role chip says 閲覧者);
- *   2. the screen allowlist (`NavItem.publicViewer`) holds - `/items` is
- *      visible but read-only, `/users` bounces back to the dashboard;
+ *   2. the screen allowlist (`NavItem.publicViewer`) holds - banto-cost
+ *      lists only the dashboard (the template's `/items` demo was removed);
+ *      `/customers`, `/users` and `/settings` bounce back to it;
  *   2a. a public screen opened while the server is unreachable shows the
  *      startup splash with 再接続, then enters as the viewer (Issue #321);
- *   3. the write surface stays closed - `POST /api/items` with the public
+ *   3. the write surface stays closed - `POST /api/customers` with the public
  *      token is 403;
  *   4. "ログイン" leads to the normal login/setup screen and a real account
  *      gets the normal UI back; logging out again offers "閲覧のみで続ける",
  *      which re-enters the synthetic session;
- *   5. a session that ends while a list is open moves to the synthetic
- *      viewer without carrying its search/sort/highlighted row over
- *      (Issue #215/#255).
+ *   5. a session that ends moves to the synthetic viewer on the public
+ *      screen, without the account's menu or admin entries (Issue #215/#255).
  *
  * No `waitForTimeout`/`sleep`: every wait is a locator auto-retry.
  */
@@ -69,13 +69,11 @@ test.describe.serial('Banto viewer-public mode', () => {
 		await expect(page.getByRole('button', { name: 'ユーザーメニューを開く' })).toHaveCount(0);
 	});
 
-	test('2. items is visible read-only and the admin nav is hidden', async () => {
-		await page.goto('/items');
-		await expect(page).toHaveURL(/\/items$/);
-		// viewer role: the grid renders, the create button does not.
-		await expect(page.getByRole('grid')).toBeVisible();
-		await expect(page.getByRole('button', { name: '新規作成' })).toHaveCount(0);
-		// Allowlist: no admin nav, and settings is not public either.
+	test('2. only the dashboard is public; the admin nav and other screens are hidden', async () => {
+		await page.goto('/dashboard');
+		await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
+		// Allowlist: no business or admin nav, and settings is not public either.
+		await expect(page.getByRole('link', { name: '顧客', exact: true })).toHaveCount(0);
 		await expect(page.getByRole('link', { name: 'ユーザー管理' })).toHaveCount(0);
 		await expect(page.getByRole('link', { name: '設定' })).toHaveCount(0);
 
@@ -103,18 +101,18 @@ test.describe.serial('Banto viewer-public mode', () => {
 		try {
 			const serverDown = (route: Route) => route.abort('connectionrefused');
 			await monitor.route('**/api/**', serverDown);
-			await monitor.goto('/items');
+			await monitor.goto('/dashboard');
 			await expect(monitor.getByRole('status')).toHaveText('起動中…');
 			// 3 probes 1.5 s apart (STARTUP_AUTO_RETRIES) before the screen appears.
 			await expect(monitor.getByRole('alert')).toContainText('サーバーに接続できません', {
 				timeout: 15_000
 			});
-			await expect(monitor).toHaveURL(/\/items$/);
+			await expect(monitor).toHaveURL(/\/dashboard$/);
 			await monitor.unroute('**/api/**', serverDown);
 
 			await monitor.getByRole('alert').getByRole('button', { name: '再接続' }).click();
-			await expect(monitor).toHaveURL(/\/items$/);
-			await expect(monitor.getByRole('grid')).toBeVisible();
+			await expect(monitor).toHaveURL(/\/dashboard$/);
+			await expect(monitor.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
 			await expect(monitor.getByRole('banner').getByText('閲覧者')).toBeVisible();
 			await expect(loginButton(monitor)).toBeVisible();
 		} finally {
@@ -145,9 +143,8 @@ test.describe.serial('Banto viewer-public mode', () => {
 			await expect(monitor.locator('aside')).toHaveCount(0);
 
 			const nav = monitor.getByRole('navigation', { name: '主要ナビゲーション' });
-			await expect(nav.getByRole('link')).toHaveCount(2);
+			await expect(nav.getByRole('link')).toHaveCount(1);
 			await expect(nav.getByRole('link', { name: 'ダッシュボード' })).toBeVisible();
-			await expect(nav.getByRole('link', { name: '商品' })).toBeVisible();
 			await expect(monitor.getByRole('navigation', { name: '管理ナビゲーション' })).toHaveCount(0);
 			await expect(monitor.getByRole('link', { name: '設定' })).toHaveCount(0);
 		} finally {
@@ -156,13 +153,15 @@ test.describe.serial('Banto viewer-public mode', () => {
 	});
 
 	test('3. a non-public screen bounces back to the first public one', async () => {
+		await page.goto('/customers');
+		await expect(page).toHaveURL(/\/dashboard$/);
 		await page.goto('/users');
 		await expect(page).toHaveURL(/\/dashboard$/);
 		await page.goto('/settings');
 		await expect(page).toHaveURL(/\/dashboard$/);
 	});
 
-	test('4. the public token cannot write: POST /api/items is 403', async () => {
+	test('4. the public token cannot write: POST /api/customers is 403', async () => {
 		const mint = await page.request.post('/api/auth/grant/publicViewer', {
 			headers: CLIENT_HEADER
 		});
@@ -180,9 +179,9 @@ test.describe.serial('Banto viewer-public mode', () => {
 			kind: 'publicViewer'
 		});
 
-		const write = await page.request.post('/api/items', {
+		const write = await page.request.post('/api/customers', {
 			headers: { ...CLIENT_HEADER, Authorization: `Bearer ${token}` },
-			data: { name: 'should-not-exist', price: 1, stock: 1 }
+			data: { name: 'should-not-exist', active: true }
 		});
 		expect(write.status()).toBe(403);
 	});
@@ -281,16 +280,12 @@ test.describe.serial('Banto viewer-public mode', () => {
 	});
 
 	// Issue #215/#255 4th review (P2 2): with public viewing ON, a session
-	// that ends while /items is open is replaced by the synthetic viewer
-	// session in place - SvelteKit re-runs the loads but would keep the same
-	// page component, whose GridState still held the ended session's search
-	// and sort (and its highlighted row), and the viewer's next sort used to
-	// save that old search back. The page must be rebuilt for the new
-	// session: nothing of the old one on screen, and nothing of it restored
-	// after a round trip to another screen.
-	test('7. a session that ends on /items moves to the viewer without its search, sort or highlighted row', async () => {
+	// that ends is replaced by the synthetic viewer session. (The template
+	// checked that the items list's search/sort/highlighted row did not carry
+	// over; banto-cost's only public screen is the dashboard, so this checks
+	// the session swap itself.)
+	test('7. a session that ends moves to the viewer on the public screen', async () => {
 		test.setTimeout(120_000);
-		const SEARCH = '茶';
 		await page.goto('/dashboard');
 		await loginButton(page).click();
 		await expect(page).toHaveURL(/\/login$/);
@@ -299,37 +294,14 @@ test.describe.serial('Banto viewer-public mode', () => {
 		await page.getByRole('button', { name: 'ログイン', exact: true }).click();
 		await expect(page).toHaveURL(/\/dashboard$/);
 		await expect(page.getByRole('button', { name: 'ユーザーメニューを開く' })).toBeVisible();
-
-		const mainNav = page.getByRole('navigation', { name: '主要ナビゲーション' });
-		await mainNav.getByRole('link', { name: '商品' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-		await page.getByRole('button', { name: '商品名の絞り込み' }).click();
-		const nameFilter = page.getByRole('dialog', { name: '商品名の絞り込み' });
-		await nameFilter.getByPlaceholder('値を入力').fill(SEARCH);
-		await nameFilter.getByRole('button', { name: '適用' }).click();
-		const priceHeader = page.getByRole('grid').getByRole('columnheader', { name: '価格' });
-		await priceHeader.locator('.cell-body').click();
-		await expect(priceHeader).toHaveAttribute('aria-sort', 'ascending');
-		await page
-			.getByRole('row')
-			.filter({ hasText: SEARCH })
-			.first()
-			.getByRole('link', { name: '開く' })
-			.click();
-		await expect(page).toHaveURL(/\/items\/\d+$/);
-		// Wait for the detail page itself (it records the opened row when it is
-		// created) - the URL changes before it has rendered.
-		await expect(page.getByRole('heading', { name: '商品を編集' })).toBeVisible();
-		await page.goBack();
-		await expect(page).toHaveURL(/\/items$/);
-		await expect(page.locator('.items-row-last-opened')).toHaveCount(1);
+		await expect(page.getByRole('link', { name: 'ユーザー管理' })).toBeVisible();
 
 		// End this account's sessions from inside the session itself: a
 		// password reset (to the same value) bumps the account's auth epoch
-		// (Issue #204). The stream is closed at the server's next
-		// revalidation (15 s), its reconnect gets a 401, check() confirms, and
-		// the guard enters the synthetic viewer session - /items is public, so
-		// the tab stays on it.
+		// (Issue #204). On the next load the guard's identity check gets a 401,
+		// so it enters the synthetic viewer session on the public dashboard.
+		// (Not the event stream: it was opened by the earlier viewer session
+		// and the login does not reopen it, so its token is still valid.)
 		await page.evaluate(
 			async ({ username, password }) => {
 				const token =
@@ -351,42 +323,13 @@ test.describe.serial('Banto viewer-public mode', () => {
 			},
 			{ username: ADMIN_USERNAME, password: ADMIN_PASSWORD }
 		);
-		await expect(loginButton(page)).toBeVisible({ timeout: 40_000 });
+		await page.reload();
+		await expect(loginButton(page)).toBeVisible();
 		await expect(page.getByRole('banner').getByText('閲覧者')).toBeVisible();
-		await expect(page).toHaveURL(/\/items$/);
-
-		const expectNoOldSession = async () => {
-			await page.getByRole('button', { name: '商品名の絞り込み' }).click();
-			await expect(
-				page.getByRole('dialog', { name: '商品名の絞り込み' }).getByPlaceholder('値を入力')
-			).toHaveValue('');
-			await page.keyboard.press('Escape');
-			await expect(page.locator('.items-row-last-opened')).toHaveCount(0);
-			const saved = await page.evaluate(() =>
-				Object.keys(sessionStorage)
-					.filter((key) => key.startsWith('banto.listView.'))
-					.map((key) => sessionStorage.getItem(key))
-					.join('\n')
-			);
-			expect(saved, 'the ended session search term is not saved').not.toContain(SEARCH);
-		};
-
-		// The page on screen was rebuilt for the viewer session.
-		await expect(priceHeader).toHaveAttribute('aria-sort', 'none');
-		await expectNoOldSession();
-
-		// One sort as the viewer (the kept page used to save the old search
-		// along with it), then a round trip through another screen.
-		await priceHeader.locator('.cell-body').click();
-		await expect(priceHeader).toHaveAttribute('aria-sort', 'ascending');
-		await mainNav.getByRole('link', { name: 'ダッシュボード' }).click();
 		await expect(page).toHaveURL(/\/dashboard$/);
-		await mainNav.getByRole('link', { name: '商品' }).click();
-		await expect(page).toHaveURL(/\/items$/);
-
-		// The viewer's own sort is restored; nothing of the ended session is.
-		await expect(priceHeader).toHaveAttribute('aria-sort', 'ascending');
-		await expectNoOldSession();
+		await expect(page.getByRole('heading', { name: 'ダッシュボード' })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'ユーザーメニューを開く' })).toHaveCount(0);
+		await expect(page.getByRole('link', { name: 'ユーザー管理' })).toHaveCount(0);
 	});
 
 	// Issue #215/#255 5th review: the guard's identity request for the
@@ -397,7 +340,6 @@ test.describe.serial('Banto viewer-public mode', () => {
 	// session generation would hide the page), the admin's menu stays.
 	test('8. a late identity answer for the previous session does not replace the next login', async () => {
 		test.setTimeout(60_000);
-		const mainNav = page.getByRole('navigation', { name: '主要ナビゲーション' });
 		await page.goto('/dashboard');
 		await expect(loginButton(page)).toBeVisible();
 
@@ -414,8 +356,15 @@ test.describe.serial('Banto viewer-public mode', () => {
 		});
 		try {
 			// A public viewer's guard re-runs on every navigation; its identity
-			// answer is held, so the tab stays on the dashboard.
-			await mainNav.getByRole('link', { name: '商品' }).click();
+			// answer is held, so the tab stays on the dashboard. (A client-side
+			// move to a non-public screen: the only public one is the dashboard.)
+			await page.evaluate(() => {
+				const a = document.createElement('a');
+				a.href = '/customers';
+				document.body.appendChild(a);
+				a.click();
+				a.remove();
+			});
 			await expect.poll(() => held).toBe(1);
 			await loginButton(page).click();
 			await expect(page).toHaveURL(/\/login$/);

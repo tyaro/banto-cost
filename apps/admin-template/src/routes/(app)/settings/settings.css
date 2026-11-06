@@ -391,8 +391,8 @@
 }
 
 /* Visually hidden but still focusable/clickable via
-   restoreFileInput?.click() - same approach as the items page's CSVイン
-   ポート file input (spec M15). */
+   restoreFileInput?.click() - the template's
+   removed items page used the same approach for its CSV import input. */
 .settings-page .file-input {
 	position: absolute;
 	width: 1px;

@@ -14,13 +14,12 @@ import * as m from '#lib/paraglide/messages.js';
 /** Icon resolution key (visual-refresh-design.md §5.1). Resolved to an actual
  *  icon component only in the display layer (#lib/components/navIcons.ts) -
  *  this module stays UI-agnostic. */
-export type NavIconKey = 'dashboard' | 'items' | 'users' | 'audit-log' | 'settings';
+export type NavIconKey = 'dashboard' | 'users' | 'audit-log' | 'settings';
 
 /** Paraglide message key for a nav entry's visible label (i18n layer ②,
  *  ADR-0005). The label itself is resolved at render time via `m[labelKey]()`
  *  so it tracks the active locale — see `pageTitle` below and Sidebar.svelte. */
-export type NavLabelKey =
-	'nav.dashboard' | 'nav.items' | 'nav.users' | 'nav.auditLog' | 'nav.settings';
+export type NavLabelKey = 'nav.dashboard' | 'nav.users' | 'nav.auditLog' | 'nav.settings';
 
 /** banto-cost business screens (P3a). A separate union rather than more members in
  *  the two above: scaffold's removers edit those by exact text (scripts/scaffold.mjs). */
@@ -58,7 +57,8 @@ export interface NavItem {
 	 * entry. This narrows the SCREEN surface only - the actual data boundary
 	 * is RBAC's `viewer` role (ADR-0012 §帰結), so this flag must never be
 	 * treated as an authorization check. Undefined/false = hidden from a
-	 * public-viewer session. Template default: `/dashboard` and `/items`.
+	 * public-viewer session. banto-cost: `/dashboard` only (the template's
+	 * `/items` demo was removed).
 	 */
 	publicViewer?: boolean;
 
@@ -101,20 +101,6 @@ const allNavItems: NavItem[] = [
 			'/(app)/customers/[id]': (resource) => m['customers.editTitle']({ resource })
 		}
 	},
-	// [scaffold:items] begin
-	{
-		path: '/items',
-		labelKey: 'nav.items',
-		icon: 'items',
-		badgeResource: 'items',
-		pageTitleResource: 'items',
-		pageTitles: {
-			'/(app)/items/new': (resource) => m['items.createTitle']({ resource }),
-			'/(app)/items/[id]': (resource) => m['items.editTitle']({ resource })
-		},
-		publicViewer: true
-	},
-	// [scaffold:items] end
 	{ path: '/ui-demo', labelKey: 'nav.uiDemo', icon: 'ui-demo', demoOnly: true },
 	{ path: '/users', labelKey: 'nav.users', icon: 'users', adminOnly: true },
 	{ path: '/audit-log', labelKey: 'nav.auditLog', icon: 'audit-log', adminOnly: true },

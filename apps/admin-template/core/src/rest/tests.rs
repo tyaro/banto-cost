@@ -2,7 +2,7 @@ use super::*;
 use crate::db::migrate_memory;
 use axum::body::Body;
 use axum::http::Request as HttpRequest;
-use banto_core::{BantoError, FilterOp, FilterState, Pagination, SortDirection, SortState};
+use banto_core::BantoError;
 // Theme C PR-C4: `rest/mod.rs` no longer needs `Identity` itself (the helpers
 // that used it moved to `banto_server::routes`), so the test module imports it
 // directly rather than through `use super::*`.
@@ -61,7 +61,6 @@ fn demo_auth() -> AuthState {
 async fn router_with_role_tokens() -> (Router, String, String, String) {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
     let users = UsersService::new(pool.clone());
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
@@ -117,7 +116,6 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
         .await
         .expect("viewer login");
     let services = Services {
-        items,
         users,
         settings,
         audit,
@@ -141,7 +139,6 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
 async fn router_with_token() -> (Router, String) {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
     let users = UsersService::new(pool.clone());
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
@@ -158,7 +155,6 @@ async fn router_with_token() -> (Router, String) {
         .await
         .expect("login should succeed");
     let services = Services {
-        items,
         users,
         settings,
         audit,
@@ -180,553 +176,6 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
         .unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
-// [scaffold:items] begin
-//
-// D1-d (display-preset-plan.md, Issue #190 prep): every items-only REST
-// test in this file (CRUD/list/RBAC/CSV-import), grouped into one
-// contiguous region so a future `display` remover can delete it with a
-// single `cutRegion` on these markers instead of many separate `drop`
-// calls. Shared router helpers (`router_with_*`, `unused_*_service`,
-// `demo_auth`, `body_json`, and the small HTTP-request builders) stay
-// OUTSIDE this block - other resources' tests still need them. Tests
-// that exercise items only incidentally to verify a cross-cutting
-// concern (CSRF via `/api/auth/check`, the M14 audit-log coverage suite's
-// (a)/(b)/(c) steps, the M11/Issue #189 public-viewer suite's items-read
-// check) are classified by what they test, not by which route they call,
-// and are intentionally left where they were.
-
-#[tokio::test]
-async fn items_list_supports_sort_filter_and_pagination() {
-    let (router, token) = router_with_token().await;
-
-    // Seed a few rows through the same router (create is guarded too).
-    for (name, price, stock) in [("Alpha", 90, 1), ("Beta", 200, 2), ("Gamma", 300, 3)] {
-        let response = router
-            .clone()
-            .oneshot(
-                HttpRequest::post("/api/items")
-                    .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                    .header("Authorization", format!("Bearer {token}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({ "name": name, "price": price, "stock": stock }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    let params = ListParams {
-        sort: vec![SortState {
-            field: "price".to_string(),
-            direction: SortDirection::Asc,
-        }],
-        filters: vec![FilterState {
-            field: "price".to_string(),
-            op: FilterOp::Gte,
-            value: json!(0),
-        }],
-        pagination: Some(Pagination {
-            offset: 0,
-            limit: 1,
-        }),
-    };
-    let response = router
-        .oneshot(
-            HttpRequest::post("/api/items/list")
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("Authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_string(&params).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let json = body_json(response).await;
-    assert_eq!(json["rows"][0]["name"], "Alpha");
-    assert_eq!(json["rows"][0]["price"], 90);
-    assert_eq!(json["totalCount"], 3);
-}
-
-#[tokio::test]
-async fn items_get_missing_id_returns_404_not_found_shape() {
-    let (router, token) = router_with_token().await;
-    let response = router
-        .oneshot(
-            HttpRequest::get("/api/items/999")
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("Authorization", format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let json = body_json(response).await;
-    assert_eq!(json["kind"], "not_found");
-    assert_eq!(json["resource"], "items");
-    assert_eq!(json["id"], "999");
-}
-
-#[tokio::test]
-async fn items_create_validation_failure_is_422_with_field_errors() {
-    let (router, token) = router_with_token().await;
-    let response = router
-        .oneshot(
-            HttpRequest::post("/api/items")
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("Authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "name": "", "price": 1, "stock": 1 }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let json = body_json(response).await;
-    assert_eq!(json["kind"], "validation");
-    assert_eq!(json["field_errors"][0]["field"], "name");
-}
-
-#[tokio::test]
-async fn items_update_and_delete_round_trip() {
-    let (router, token) = router_with_token().await;
-    let create_response = router
-        .clone()
-        .oneshot(
-            HttpRequest::post("/api/items")
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("Authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "name": "Before", "price": 10, "stock": 1 }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let created = body_json(create_response).await;
-    let id = created["id"].as_i64().unwrap();
-
-    let update_response = router
-        .clone()
-        .oneshot(
-            HttpRequest::put(format!("/api/items/{id}"))
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("Authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "name": "After", "price": 20, "stock": 2 }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(update_response.status(), StatusCode::OK);
-    let updated = body_json(update_response).await;
-    assert_eq!(updated["name"], "After");
-
-    let delete_response = router
-        .oneshot(
-            HttpRequest::delete(format!("/api/items/{id}"))
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("Authorization", format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
-}
-
-#[tokio::test]
-async fn items_routes_are_guarded_without_token() {
-    let (router, _token) = router_with_token().await;
-    let response = router
-        .oneshot(
-            HttpRequest::post("/api/items/list")
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("content-type", "application/json")
-                .body(Body::from(json!(ListParams::default()).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    let json = body_json(response).await;
-    assert_eq!(json["kind"], "unauthorized");
-}
-
-#[tokio::test]
-async fn update_via_rest_is_observable_on_the_event_channel() {
-    let pool = migrate_memory().await.expect("migrate_memory");
-    let (tx, mut rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
-    let users = UsersService::new(pool.clone());
-    let settings = SettingsService::new(pool.clone());
-    let backup = unused_backup_service(pool.clone());
-    let system_info = SystemInfoService::new(pool.clone());
-    let authz = banto_admin_services::authz::AuthzService::new(pool.clone());
-    let customers = crate::customers::CustomersService::new(pool.clone());
-    let projects = crate::projects::ProjectsService::new(pool.clone());
-    let pipeline = crate::pipeline::PipelineService::new(pool.clone());
-    let orders = crate::orders::OrdersService::new(pool.clone());
-    let audit = AuditLogService::new(pool);
-    let auth = demo_auth();
-    let token = auth.login("admin", "admin").await.unwrap();
-    let services = Services {
-        items,
-        users,
-        settings,
-        audit,
-        backup,
-        system_info,
-        authz,
-        customers,
-        projects,
-        pipeline,
-        orders,
-        metrics: None,
-    };
-    let router = api_router(services, auth, tx, false);
-
-    let create_response = router
-        .clone()
-        .oneshot(
-            HttpRequest::post("/api/items")
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("Authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "name": "Before", "price": 10, "stock": 1 }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let created = body_json(create_response).await;
-    rx.try_recv().expect("create should emit an event");
-    let id = created["id"].as_i64().unwrap();
-
-    router
-        .oneshot(
-            HttpRequest::put(format!("/api/items/{id}"))
-                .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
-                .header("Authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "name": "After", "price": 20, "stock": 2 }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let event = rx.try_recv().expect("update should emit an event");
-    assert!(matches!(event, ServerEvent::ResourceChanged { resource } if resource == "items"));
-}
-
-#[tokio::test]
-async fn viewer_can_list_and_get_items() {
-    let (router, _admin, _editor, viewer) = router_with_role_tokens().await;
-
-    let list_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items/list",
-            &viewer,
-            json!(ListParams::default()),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(list_response.status(), StatusCode::OK);
-
-    let get_response = router
-        .oneshot(get_auth("/api/items/999", &viewer))
-        .await
-        .unwrap();
-    // Not the point of this test (no such item), but it proves the
-    // request got PAST the role guard and into the handler.
-    assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn viewer_cannot_create_items_forbidden_with_forbidden_kind() {
-    let (router, _admin, _editor, viewer) = router_with_role_tokens().await;
-
-    let response = router
-        .oneshot(post_json_auth(
-            "/api/items",
-            &viewer,
-            json!({ "name": "Nope", "price": 1, "stock": 1 }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let json = body_json(response).await;
-    assert_eq!(json["kind"], "forbidden");
-}
-
-#[tokio::test]
-async fn viewer_cannot_update_or_delete_items() {
-    let (router, admin, _editor, viewer) = router_with_role_tokens().await;
-
-    // Seed one item as admin so there is something to try updating.
-    let create_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items",
-            &admin,
-            json!({ "name": "Seed", "price": 10, "stock": 1 }),
-        ))
-        .await
-        .unwrap();
-    let id = body_json(create_response).await["id"].as_i64().unwrap();
-
-    let update_response = router
-        .clone()
-        .oneshot(put_json(
-            &format!("/api/items/{id}"),
-            &viewer,
-            json!({ "name": "Changed", "price": 20, "stock": 2 }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(update_response.status(), StatusCode::FORBIDDEN);
-
-    let delete_response = router
-        .oneshot(delete_auth(&format!("/api/items/{id}"), &viewer))
-        .await
-        .unwrap();
-    assert_eq!(delete_response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn editor_can_create_update_and_delete_items() {
-    let (router, _admin, editor, _viewer) = router_with_role_tokens().await;
-
-    let create_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items",
-            &editor,
-            json!({ "name": "Editable", "price": 10, "stock": 1 }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(create_response.status(), StatusCode::OK);
-    let id = body_json(create_response).await["id"].as_i64().unwrap();
-
-    let update_response = router
-        .clone()
-        .oneshot(put_json(
-            &format!("/api/items/{id}"),
-            &editor,
-            json!({ "name": "Edited", "price": 20, "stock": 2 }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(update_response.status(), StatusCode::OK);
-
-    let delete_response = router
-        .oneshot(delete_auth(&format!("/api/items/{id}"), &editor))
-        .await
-        .unwrap();
-    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
-}
-
-// --- M15: CSV import -----------------------------------------------------
-
-/// `editor` can import: a mixed create+update batch succeeds, and
-/// exactly ONE `action: "import"` audit entry is recorded (spec M15:
-/// "件数サマリ付き1件記録"), with a `{created,updated}` summary detail
-/// and no `entityId` (the entry represents the whole batch, not one
-/// row).
-#[tokio::test]
-async fn editor_can_import_items_and_it_is_recorded_as_one_audit_entry() {
-    let (router, _audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
-
-    let create_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items",
-            &admin,
-            json!({ "name": "Existing", "price": 10, "stock": 1 }),
-        ))
-        .await
-        .unwrap();
-    let existing_id = body_json(create_response).await["id"].as_i64().unwrap();
-
-    let import_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items/import",
-            &editor,
-            json!([
-                { "id": existing_id, "name": "Updated", "price": 20, "stock": 2 },
-                { "id": null, "name": "Brand New", "price": 30, "stock": 3 }
-            ]),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(import_response.status(), StatusCode::OK);
-    let body = body_json(import_response).await;
-    assert_eq!(body["created"], 1);
-    assert_eq!(body["updated"], 1);
-    assert_eq!(body["errors"], json!([]));
-
-    let list_response = router
-        .oneshot(post_json_auth(
-            "/api/audit-log/list",
-            &admin,
-            json!(ListParams::default()),
-        ))
-        .await
-        .unwrap();
-    let rows = body_json(list_response).await["rows"].clone();
-    let rows = rows.as_array().unwrap();
-    let import_entries: Vec<_> = rows.iter().filter(|r| r["action"] == "import").collect();
-    assert_eq!(
-        import_entries.len(),
-        1,
-        "expected exactly one import entry, got {rows:?}"
-    );
-    let entry = import_entries[0];
-    assert_eq!(entry["actorUsername"], "editor");
-    assert_eq!(entry["resource"], "items");
-    assert_eq!(entry["entityId"], serde_json::Value::Null);
-    assert_eq!(entry["origin"], "rest");
-    assert_eq!(entry["result"], "ok");
-    let detail: serde_json::Value =
-        serde_json::from_str(entry["detail"].as_str().expect("detail should be set")).unwrap();
-    assert_eq!(detail, json!({ "created": 1, "updated": 1 }));
-}
-
-/// `viewer` cannot import (spec M15: editor+ only, same `RoleGuard` as
-/// the other `items` write routes).
-#[tokio::test]
-async fn viewer_cannot_import_items_forbidden_with_forbidden_kind() {
-    let (router, _audit, _admin, _editor, viewer) = router_with_role_tokens_and_audit().await;
-
-    let response = router
-        .oneshot(post_json_auth(
-            "/api/items/import",
-            &viewer,
-            json!([{ "id": null, "name": "Nope", "price": 1, "stock": 1 }]),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let json = body_json(response).await;
-    assert_eq!(json["kind"], "forbidden");
-}
-
-/// A max-import-sized payload (`MAX_IMPORT_ROWS * 3` rows, each a valid
-/// 40-char name -> ~2.6MB, comfortably past axum's 2MB `DefaultBodyLimit`
-/// default but under `items_write_router`'s raised 10MiB cap) must reach
-/// `ItemsService::import`'s row-count check and come back as the intended
-/// `422` row-count `Validation` error, NOT axum's transport-level `413`
-/// (spec M-review 2026-08 M-14). Without the router's raised `DefaultBodyLimit`
-/// this body is rejected before the handler runs. Transport-layer twin of the
-/// attachments `413` boundary test; a genuine regression guard (413 before the
-/// fix, 422 after). The row-count check is `import`'s FIRST step, so the
-/// oversized-COUNT body never runs per-row validation or any DB work.
-#[tokio::test]
-async fn oversized_import_payload_reaches_the_row_count_check_not_413() {
-    let (router, _admin, editor, _viewer) = router_with_role_tokens().await;
-
-    let row_count = crate::items::MAX_IMPORT_ROWS * 3;
-    let name = "a".repeat(40); // valid (<=40 chars); only the COUNT is over-limit
-    let rows: Vec<serde_json::Value> = (0..row_count)
-        .map(|_| json!({ "id": null, "name": name.as_str(), "price": 99999, "stock": 1 }))
-        .collect();
-
-    let response = router
-        .oneshot(post_json_auth(
-            "/api/items/import",
-            &editor,
-            serde_json::Value::Array(rows),
-        ))
-        .await
-        .unwrap();
-
-    assert_ne!(
-        response.status(),
-        StatusCode::PAYLOAD_TOO_LARGE,
-        "import payload was rejected by the transport body cap before reaching the service"
-    );
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let json = body_json(response).await;
-    assert_eq!(json["kind"], "validation");
-    assert_eq!(json["field_errors"][0]["field"], "rows");
-}
-
-/// A batch with a per-row validation error is rolled back entirely - the
-/// valid row in the same batch must NOT land in the DB either - and is
-/// recorded as a single `result: "failed"` audit entry summarizing the
-/// error count (spec M15).
-#[tokio::test]
-async fn items_import_validation_error_rolls_back_and_is_recorded_as_failed() {
-    let (router, _audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
-
-    let import_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items/import",
-            &editor,
-            json!([
-                { "id": null, "name": "Valid", "price": 10, "stock": 1 },
-                { "id": null, "name": "", "price": 1, "stock": 1 }
-            ]),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(import_response.status(), StatusCode::OK);
-    let body = body_json(import_response).await;
-    assert_eq!(body["created"], 0);
-    assert_eq!(body["updated"], 0);
-    assert_eq!(body["errors"][0]["row"], 1);
-
-    // Nothing from the batch was committed, including the otherwise
-    // valid first row (spec M15: all-or-nothing).
-    let list_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items/list",
-            &admin,
-            json!(ListParams::default()),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(body_json(list_response).await["totalCount"], 0);
-
-    let audit_response = router
-        .oneshot(post_json_auth(
-            "/api/audit-log/list",
-            &admin,
-            json!(ListParams::default()),
-        ))
-        .await
-        .unwrap();
-    let rows = body_json(audit_response).await["rows"].clone();
-    let rows = rows.as_array().unwrap();
-    let entry = rows
-        .iter()
-        .find(|r| r["action"] == "import")
-        .unwrap_or_else(|| panic!("expected an import entry, got {rows:?}"));
-    assert_eq!(entry["result"], "failed");
-    assert_eq!(entry["actorUsername"], "editor");
-    let detail: serde_json::Value =
-        serde_json::from_str(entry["detail"].as_str().expect("detail should be set")).unwrap();
-    assert_eq!(detail, json!({ "errorCount": 1 }));
-}
-
-// [scaffold:items] end
 
 #[tokio::test]
 async fn missing_csrf_header_is_forbidden_even_with_a_token() {
@@ -749,7 +198,7 @@ async fn missing_csrf_header_is_forbidden_even_with_a_token() {
 #[test]
 fn error_kind_used_in_tests_matches_banto_core() {
     let err = BantoError::NotFound {
-        resource: "items".to_string(),
+        resource: "projects".to_string(),
         id: "1".to_string(),
     };
     assert_eq!(
@@ -761,7 +210,6 @@ fn error_kind_used_in_tests_matches_banto_core() {
 async fn router_with_setup(allow_setup: bool) -> Router {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
     let users = UsersService::new(pool.clone());
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
@@ -774,7 +222,6 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
-        items,
         users,
         settings,
         audit,
@@ -870,19 +317,17 @@ async fn auth_setup_creates_account_and_the_token_works_for_guarded_routes() {
         .unwrap();
     assert_eq!(body_json(status_response).await["initialized"], true);
 
-    // [scaffold:items] begin (the guarded route this step asserts against is
-    // an items route; an app without `items` keeps the setup assertions above)
+    // And the freshly-issued token works on a guarded route (the template
+    // used `/api/items/list`; banto-cost removed items).
     let token = setup_json["token"].as_str().expect("token").to_string();
-    // And the freshly-issued token should work on a guarded route.
-    let list_request = HttpRequest::post("/api/items/list")
+    let list_request = HttpRequest::post("/api/projects/list")
         .header(CLIENT_HEADER.0, CLIENT_HEADER.1)
         .header("Authorization", format!("Bearer {token}"))
-        .header("content-type", "application/json")
-        .body(Body::from(json!(ListParams::default()).to_string()))
+        .header("Content-Type", "application/json")
+        .body(Body::from(json!({}).to_string()))
         .unwrap();
     let list_response = router.oneshot(list_request).await.unwrap();
     assert_eq!(list_response.status(), StatusCode::OK);
-    // [scaffold:items] end
 }
 
 #[tokio::test]
@@ -976,13 +421,12 @@ async fn auth_change_password_rejects_wrong_current_password() {
 /// `/api/auth/change-password` - mirrors how `banto-serve`/`src-tauri`
 /// wire things in production (unlike `router_with_setup` above, whose
 /// `demo_auth()` login verifier is intentionally independent, matching
-/// the other tests in this module that only care about items/CSRF
+/// the other tests in this module that only care about RBAC/CSRF
 /// behavior). Also returns the `AuditLogService` sharing the router's
 /// pool, so M14 tests can assert on what got recorded.
 async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
     let users = UsersService::new(pool.clone());
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
@@ -998,7 +442,6 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
         SessionValidation::lookup(banto_server::routes::user_session_lookup(users.clone())),
     );
     let services = Services {
-        items,
         users,
         settings,
         audit: audit.clone(),
@@ -1331,7 +774,6 @@ async fn ui_settings_routes_are_unauthorized_without_a_token() {
 async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String, String, String) {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
     let users = UsersService::new(pool.clone());
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
@@ -1376,7 +818,6 @@ async fn router_with_role_tokens_and_audit() -> (Router, AuditLogService, String
         .expect("viewer login");
 
     let services = Services {
-        items,
         users,
         settings,
         audit: audit.clone(),
@@ -1425,7 +866,6 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
     let db = banto_storage::Db::Sqlite(pool);
 
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(db.clone()).with_events(tx.clone());
     let users = UsersService::new(db.clone());
     let settings = SettingsService::new(db.clone());
     let backup = BackupService::new(db_path, db.clone());
@@ -1468,7 +908,6 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
         .expect("viewer login");
 
     let services = Services {
-        items,
         users,
         settings,
         audit,
@@ -1596,7 +1035,7 @@ async fn audit_log_list_as_of_id_pins_the_snapshot() {
                 actor_username: Some("admin"),
                 actor_role: Some("admin"),
                 action,
-                resource: "items",
+                resource: "projects",
                 entity_id: None,
                 detail: None,
                 origin: "rest",
@@ -1656,7 +1095,7 @@ async fn audit_log_list_with_as_of_id_does_not_prune() {
                 actor_username: Some("admin"),
                 actor_role: Some("admin"),
                 action: "create",
-                resource: "items",
+                resource: "projects",
                 entity_id: None,
                 detail: None,
                 origin: "rest",
@@ -1829,7 +1268,6 @@ async fn system_info_requires_a_token() {
 async fn system_info_reports_metrics_when_probe_is_present() {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
     let users = UsersService::new(pool.clone());
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
@@ -1859,7 +1297,6 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     });
 
     let services = Services {
-        items,
         users,
         settings,
         audit,
@@ -1973,126 +1410,6 @@ async fn audit_config_apply_persists_and_is_admin_only() {
     assert_eq!(denial["origin"], "rest");
     assert_eq!(denial["result"], "denied");
 }
-
-// [scaffold:items] begin (M14 coverage steps (b)/(c) use `items` as their
-// vehicle - an app without `items` keeps the (a) settings_change step and the
-// users/backups entries below, which cover the same recording contract)
-
-/// (b) A successful item creation is recorded.
-#[tokio::test]
-async fn item_create_is_recorded_in_the_audit_log() {
-    let (router, _audit, admin, _editor, _viewer) = router_with_role_tokens_and_audit().await;
-
-    let create_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items",
-            &admin,
-            json!({ "name": "Widget", "price": 10, "stock": 1 }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(create_response.status(), StatusCode::OK);
-    let id = body_json(create_response).await["id"].as_i64().unwrap();
-
-    let list_response = router
-        .oneshot(post_json_auth(
-            "/api/audit-log/list",
-            &admin,
-            json!(ListParams::default()),
-        ))
-        .await
-        .unwrap();
-    let rows = body_json(list_response).await["rows"].clone();
-    let rows = rows.as_array().unwrap();
-    let entry = rows
-        .iter()
-        .find(|r| r["action"] == "create" && r["resource"] == "items")
-        .unwrap_or_else(|| panic!("expected a create/items entry, got {rows:?}"));
-    assert_eq!(entry["actorUsername"], "admin");
-    assert_eq!(entry["actorRole"], "admin");
-    assert_eq!(entry["entityId"], id.to_string().as_str());
-    assert_eq!(entry["origin"], "rest");
-    assert_eq!(entry["result"], "ok");
-}
-
-/// A successful item delete is recorded too (not just create) - a quick
-/// sanity check that every mutation, not just the first one wired up, is
-/// covered.
-#[tokio::test]
-async fn item_delete_is_recorded_in_the_audit_log() {
-    let (router, _audit, admin, _editor, _viewer) = router_with_role_tokens_and_audit().await;
-
-    let create_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items",
-            &admin,
-            json!({ "name": "Doomed", "price": 1, "stock": 1 }),
-        ))
-        .await
-        .unwrap();
-    let id = body_json(create_response).await["id"].as_i64().unwrap();
-
-    router
-        .clone()
-        .oneshot(delete_auth(&format!("/api/items/{id}"), &admin))
-        .await
-        .unwrap();
-
-    let list_response = router
-        .oneshot(post_json_auth(
-            "/api/audit-log/list",
-            &admin,
-            json!(ListParams::default()),
-        ))
-        .await
-        .unwrap();
-    let rows = body_json(list_response).await["rows"].clone();
-    let rows = rows.as_array().unwrap();
-    assert!(
-        rows.iter().any(|r| r["action"] == "delete"
-            && r["resource"] == "items"
-            && r["entityId"] == id.to_string().as_str()),
-        "expected a delete/items entry, got {rows:?}"
-    );
-}
-
-/// (c) A viewer's rejected write is recorded as `denied`.
-#[tokio::test]
-async fn viewer_write_denial_is_recorded_as_denied() {
-    let (router, _audit, admin, _editor, viewer) = router_with_role_tokens_and_audit().await;
-
-    let response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items",
-            &viewer,
-            json!({ "name": "Nope", "price": 1, "stock": 1 }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-    let list_response = router
-        .oneshot(post_json_auth(
-            "/api/audit-log/list",
-            &admin,
-            json!(ListParams::default()),
-        ))
-        .await
-        .unwrap();
-    let rows = body_json(list_response).await["rows"].clone();
-    let rows = rows.as_array().unwrap();
-    let entry = rows
-        .iter()
-        .find(|r| r["action"] == "denied" && r["resource"] == "items")
-        .unwrap_or_else(|| panic!("expected a denied/items entry, got {rows:?}"));
-    assert_eq!(entry["actorUsername"], "viewer");
-    assert_eq!(entry["actorRole"], "viewer");
-    assert_eq!(entry["result"], "denied");
-}
-// [scaffold:items] end
 
 /// `users` create/reset-password entries must never leak the plaintext
 /// password into `detail` (spec M14's hard rule - see
@@ -2597,7 +1914,6 @@ async fn router_with_viewer_public(
 ) -> (Router, SettingsService, AuditLogService, UsersService) {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
     let users = UsersService::new(pool.clone());
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
@@ -2622,7 +1938,6 @@ async fn router_with_viewer_public(
         SessionValidation::lookup(banto_server::routes::user_session_lookup(users.clone())),
     );
     let services = Services {
-        items,
         users: users.clone(),
         settings: settings.clone(),
         audit: audit.clone(),
@@ -2796,57 +2111,6 @@ async fn public_viewer_token_identifies_as_the_public_viewer_kind_and_passes_che
     assert_eq!(check_response.status(), StatusCode::OK);
     assert_eq!(body_json(check_response).await, json!(true));
 }
-
-// [scaffold:items] begin (this scenario reads/writes `/api/items`; the other
-// 閲覧公開 scenarios around it are resource-independent and stay)
-#[tokio::test]
-async fn public_viewer_token_can_read_items_but_not_write_them() {
-    let (router, _settings, audit, _users) = router_with_viewer_public(true).await;
-    let token = public_viewer_token(&router).await;
-
-    // Reading is the whole point of 閲覧公開.
-    let list_response = router
-        .clone()
-        .oneshot(post_json_auth(
-            "/api/items/list",
-            &token,
-            json!(ListParams::default()),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(list_response.status(), StatusCode::OK);
-
-    // Writing goes through the SAME `RoleGuard` as any other viewer session.
-    let create_response = router
-        .oneshot(post_json_auth(
-            "/api/items",
-            &token,
-            json!({ "name": "Widget", "price": 10, "stock": 1 }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(create_response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(create_response).await["kind"], "forbidden");
-
-    // ...and the denial is audited with actor `public` (spec M14 / ADR-0012:
-    // issuance is not audited, but what a grant session TRIES to do is).
-    let rows = audit.list(ListParams::default()).await.unwrap().rows;
-    let denial = rows
-        .iter()
-        .find(|row| row.action == "denied" && row.resource == "items")
-        .unwrap_or_else(|| panic!("expected a denied/items entry, got {rows:?}"));
-    assert_eq!(denial.actor_username.as_deref(), Some("public"));
-    assert_eq!(denial.actor_role.as_deref(), Some("viewer"));
-    assert_eq!(denial.origin, "rest");
-    assert_eq!(denial.result, "denied");
-
-    // Issuance itself left no `login` entry behind.
-    assert!(
-        !rows.iter().any(|row| row.action == "login"),
-        "minting a grant session must not be audited, got {rows:?}"
-    );
-}
-// [scaffold:items] end
 
 #[tokio::test]
 async fn public_viewer_token_cannot_change_a_password_or_create_an_account() {
@@ -3326,7 +2590,6 @@ const REVOCATION_PASSWORD: &str = "password123";
 async fn router_with_user_sessions() -> (Router, UsersService) {
     let pool = migrate_memory().await.expect("migrate_memory");
     let (tx, _rx) = broadcast::channel(16);
-    let items = ItemsService::new(pool.clone()).with_events(tx.clone());
     let users = UsersService::new(pool.clone());
     let settings = SettingsService::new(pool.clone());
     let backup = unused_backup_service(pool.clone());
@@ -3353,7 +2616,6 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
 
     let auth = user_auth_state(users.clone(), audit.clone());
     let services = Services {
-        items,
         users: users.clone(),
         settings,
         audit,

@@ -45,10 +45,10 @@
 	// ordinary `refreshAll()` never rebuilds the page.
 	//
 	// Issue #290: the key also carries the route params. SvelteKit reuses the
-	// page component for a move between two URLs of the SAME route (items/1 ->
-	// items/2: only its `params` update), so a page that reads its id once at
-	// setup (the items detail page) would keep the previous record's form,
-	// attachments and save target under the new URL. A new param value is a
+	// page component for a move between two URLs of the SAME route (customers/1 ->
+	// customers/2: only its `params` update), so a page that reads its id once at
+	// setup (the customer / project detail pages) would keep the previous record's form,
+	// and save target under the new URL. A new param value is a
 	// new page. The params of different routes never coincide, and a move to
 	// another route already rebuilds the page, so this only adds the
 	// same-route/other-id case.

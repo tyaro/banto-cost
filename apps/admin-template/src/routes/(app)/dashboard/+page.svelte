@@ -1,25 +1,22 @@
 <script lang="ts">
 	/**
-	 * M4 dashboard (spec §6): real charts built from the `items` data, in
-	 * place of the M1-M3 placeholder cards. Same "load once, whole dataset"
-	 * pattern as the items page ($effect load/dispose around
-	 * createListResource) since the dashboard needs the full set to
-	 * aggregate, not a paginated window.
+	 * Dashboard = 案件と売上の要約 (banto-cost, 2026-11; replaces the template's
+	 * `items` chart demo). Four figures from the server, each in the caller's
+	 * project scope (capability checks, design 第2章):
+	 * - 未受注見込の総額 / 確度加重額: the pipeline overview (latest ADOPTED
+	 *   version per pre-order project, `/api/pipeline/overview`).
+	 * - 今月・来月の売上見通し: the monthly outlook total (計上済み＋受注済み予定＋
+	 *   確度加重見込, `/api/outlook?from&to`). Never added to order-month figures.
+	 * - 注意が必要な案件: projects with a pipeline or revenue-plan issue
+	 *   (dashboardSummary.ts `attentionProjectIds`).
+	 * A source the caller may not read shows 権限がありません for its tiles
+	 * instead of 0円 (unset is never 0, banto-cost CLAUDE.md). Demo mode has no
+	 * aggregates (pipelineAdmin.ts), so the tiles say so.
+	 *
+	 * Below: links to each business screen, and the メモ workspace.
 	 */
-	import {
-		BarChart,
-		ComboChart,
-		GanttChart,
-		Gauge,
-		Heatmap,
-		LineChart,
-		PieChart,
-		RadarChart,
-		ScatterChart,
-		Sparkline,
-		StackedAreaChart
-	} from '@banto/charts';
-	import { createListResource } from '@banto/admin-core';
+	import { resolveAppPath } from '#lib/appPath.js';
+	import type { Component } from 'svelte';
 	import {
 		DockHost,
 		clampWindowToHost,
@@ -28,23 +25,28 @@
 		type DockLayout,
 		type PanelContent
 	} from '@banto/dock-svelte';
-	import { LayoutGrid, JapaneseYen, Package, TriangleAlert, Warehouse } from '@lucide/svelte';
-	import * as m from '#lib/paraglide/messages.js';
-	import type { Item } from '#lib/banto/sampleData.js';
 	import {
-		byCategory,
-		categoryCountsTop,
-		categoryTrendByMonth,
-		computeStatTiles,
-		inventorySchedule,
-		monthlyWithMovingAvg,
-		priceBuckets,
-		scatterSample,
-		stockByCategoryPriceBand,
-		type MonthCategoryCount,
-		updatesByMonth,
-		weekdayMonthHeat
-	} from '#lib/banto/dashboard.js';
+		CalendarClock,
+		CalendarDays,
+		NotebookPen,
+		Percent,
+		TrendingUp,
+		TriangleAlert
+	} from '@lucide/svelte';
+	import * as m from '#lib/paraglide/messages.js';
+	import {
+		getPipelineOverview,
+		isPipelineAvailable,
+		type PipelineOverview
+	} from '#lib/banto/pipelineAdmin.js';
+	import { getOutlook, type OutlookView } from '#lib/banto/ordersAdmin.js';
+	import { formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
+	import {
+		attentionProjectIds,
+		currentAndNextMonth,
+		outlookMonthTotal
+	} from '#lib/banto/dashboardSummary.js';
+	import { NAV_ICONS } from '#lib/components/navIcons.js';
 	import { PANEL_DEFS } from '#lib/banto/panels.js';
 	import { getUiSettings, isTauri } from '#lib/banto/setup.js';
 	import { listenPanelClosed, openPanelWindow } from '#lib/banto/popout.js';
@@ -64,70 +66,175 @@
 	import type { DraftSettleResult } from '@banto/forms';
 	import DashboardMemoField from '#lib/components/DashboardMemoField.svelte';
 	import DraftSettleDialog from '#lib/components/DraftSettleDialog.svelte';
-	import { PageHeader, LoadingState } from '@banto/ui';
+	import { PageHeader } from '@banto/ui';
 
-	const STOCK_TARGET = 3_000_000;
+	// --- 案件と売上の要約 ------------------------------------------------------
 
-	const list = createListResource<Item>('items', {
-		initialParams: { pagination: { offset: 0, limit: 20_000 } }
-	});
+	const available = isPipelineAvailable();
+	// Re-read on every load, so a dashboard left open across a month end shows
+	// the new month after 再読み込み (the tiles read it together with the outlook).
+	let months = $state(currentAndNextMonth(new Date()));
 
-	$effect(() => {
-		void list.load();
-		return () => list.dispose();
-	});
+	type Source<T> =
+		{ state: 'loading' } | { state: 'ok'; value: T } | { state: 'error'; error: unknown };
 
-	const stats = $derived(computeStatTiles(list.rows));
-	const categoryStock = $derived(byCategory(list.rows));
-	const categoryPriceBand = $derived(stockByCategoryPriceBand(list.rows));
-	const buckets = $derived(priceBuckets(list.rows));
-	const monthCounts = $derived(updatesByMonth(list.rows));
-	const scatterRows = $derived(scatterSample(list.rows));
+	let overview = $state<Source<PipelineOverview>>({ state: 'loading' });
+	let outlook = $state<Source<OutlookView>>({ state: 'loading' });
+	let loadToken = 0;
 
-	// v2 chart types (spec §6.1): combo (bar+line), radar, heatmap, gauge.
-	const monthlyAvg = $derived(monthlyWithMovingAvg(list.rows));
-	const weekdayHeat = $derived(weekdayMonthHeat(list.rows));
-	const topCategories = $derived(categoryCountsTop(list.rows, 5));
+	async function load(): Promise<void> {
+		if (!available) return;
+		const token = ++loadToken;
+		const range = currentAndNextMonth(new Date());
+		overview = { state: 'loading' };
+		outlook = { state: 'loading' };
+		const [o, l] = await Promise.allSettled([
+			getPipelineOverview(),
+			getOutlook({ from: range.current, to: range.next })
+		]);
+		if (token !== loadToken) return;
+		months = range;
+		overview =
+			o.status === 'fulfilled'
+				? { state: 'ok', value: o.value }
+				: { state: 'error', error: o.reason };
+		outlook =
+			l.status === 'fulfilled'
+				? { state: 'ok', value: l.value }
+				: { state: 'error', error: l.reason };
+	}
 
-	// M24 chart types (spec §6.1, roadmap.md M24): stacked area (積立エリア), Gantt.
-	const categoryTrend = $derived(categoryTrendByMonth(list.rows));
-	const schedule = $derived(inventorySchedule(list.rows));
+	void load();
 
-	const yen = (n: number) => `¥${n.toLocaleString()}`;
-	const countLabel = (n: number) => m['dashboard.countUnit']({ count: n.toLocaleString() });
-	// UTC getters (not toLocaleDateString): the schedule's dates are UTC
-	// midnight `YYYY-MM-DD` instants (see dashboard.ts inventorySchedule), and
-	// a locale-dependent format would make the visual regression snapshot
-	// unstable across environments.
-	const formatGanttDate = (ms: number) => {
-		const d = new Date(ms);
-		return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
-	};
+	/** Tile text for a source that is not loaded: demo / loading / forbidden / failed. */
+	function pending<T>(source: Source<T>): string {
+		if (!available) return m['dashboard.unavailable']();
+		if (source.state === 'loading') return m['common.loading']();
+		if (source.state === 'error' && isForbiddenError(source.error))
+			return m['dashboard.forbidden']();
+		return m['dashboard.loadFailed']();
+	}
+
+	function value<T>(source: Source<T>, pick: (value: T) => string): string {
+		return source.state === 'ok' ? pick(source.value) : pending(source);
+	}
+
+	const overviewValue = $derived(overview.state === 'ok' ? overview.value : null);
+	const outlookValue = $derived(outlook.state === 'ok' ? outlook.value : null);
+
+	/** Counted only when both sources answered, so a forbidden half never reads as "0 projects". */
+	const attention = $derived(
+		overviewValue && outlookValue
+			? attentionProjectIds(overviewValue, outlookValue).length.toLocaleString()
+			: overview.state === 'error'
+				? pending(overview)
+				: pending(outlook)
+	);
+
+	interface Tile {
+		id: string;
+		icon: Component;
+		label: string;
+		value: string;
+		note: string;
+	}
+
+	const tiles = $derived<Tile[]>([
+		{
+			id: 'pipeline-total',
+			icon: TrendingUp,
+			label: m['dashboard.pipelineTotal'](),
+			value: value(overview, (o) => formatYen(o.totals.total)),
+			note: overviewValue
+				? m['dashboard.pipelineTotalNote']({
+						count: overviewValue.totals.activeCount.toLocaleString(),
+						missing: overviewValue.totals.missingAmount.length.toLocaleString()
+					})
+				: ''
+		},
+		{
+			id: 'pipeline-weighted',
+			icon: Percent,
+			label: m['dashboard.pipelineWeighted'](),
+			value: value(overview, (o) => formatYen(o.totals.weighted)),
+			note: overviewValue
+				? m['dashboard.pipelineWeightedNote']({
+						missing: overviewValue.totals.missingProbability.length.toLocaleString()
+					})
+				: ''
+		},
+		{
+			id: 'outlook-this-month',
+			icon: CalendarDays,
+			label: m['dashboard.outlookThisMonth'](),
+			value: value(outlook, (v) => formatYen(outlookMonthTotal(v, months.current))),
+			note: available ? m['dashboard.outlookMonthNote']({ month: months.current }) : ''
+		},
+		{
+			id: 'outlook-next-month',
+			icon: CalendarClock,
+			label: m['dashboard.outlookNextMonth'](),
+			value: value(outlook, (v) => formatYen(outlookMonthTotal(v, months.next))),
+			note: available ? m['dashboard.outlookMonthNote']({ month: months.next }) : ''
+		},
+		{
+			id: 'attention',
+			icon: TriangleAlert,
+			label: m['dashboard.attention'](),
+			value: attention,
+			note: m['dashboard.attentionNote']()
+		}
+	]);
+
+	const links = [
+		{
+			path: '/pipeline',
+			icon: NAV_ICONS.pipeline,
+			label: () => m['nav.pipeline'](),
+			note: () => m['dashboard.linkPipeline']()
+		},
+		{
+			path: '/outlook',
+			icon: NAV_ICONS.outlook,
+			label: () => m['nav.outlook'](),
+			note: () => m['dashboard.linkOutlook']()
+		},
+		{
+			path: '/projects',
+			icon: NAV_ICONS.projects,
+			label: () => m['nav.projects'](),
+			note: () => m['dashboard.linkProjects']()
+		},
+		{
+			path: '/customers',
+			icon: NAV_ICONS.customers,
+			label: () => m['nav.customers'](),
+			note: () => m['dashboard.linkCustomers']()
+		}
+	] as const;
+
+	// --- メモ workspace ---------------------------------------------------------
 
 	/**
-	 * M8 dock demo (spec §5, @banto/dock-svelte): the default layout docks the
-	 * two chart panels side by side (a row split) with the メモ panel
-	 * floating over them, so docked + floating coexist out of the box. Panels
-	 * can be dragged to re-split, tabbed (drop on a pane center), undocked
-	 * (drag a tab out to floating), and the split divider resizes live. The
-	 * whole layout auto-saves; a stored M7 (v1, floating-only) value migrates
-	 * cleanly via hydrate.
+	 * メモ workspace (spec §5, @banto/dock-svelte). banto-cost removed the
+	 * template's chart panels (they aggregated the `items` demo data), so the
+	 * default layout is the メモ as a floating window; it can be moved, resized,
+	 * docked into the host and (Tauri) popped out, and the layout auto-saves. The storage keys
+	 * carry `.v2` so a layout saved before the removal - which still names the
+	 * chart panels - is ignored instead of showing empty panes.
 	 */
-	const DOCK_STORAGE_KEY = 'banto.dock.dashboard';
+	const DOCK_STORAGE_KEY = 'banto.dock.dashboard.v2';
 
 	// Panel id/title/icon defs moved to #lib/banto/panels.ts (spec §5.3 v2):
 	// shared with the standalone routes/panel/[id] route a popped-out panel
 	// renders as, which has no access to this page's own locals.
-	const PANEL_META: Record<string, { title: string; icon: string }> = Object.fromEntries(
-		PANEL_DEFS.map((d) => [d.id, { title: d.title, icon: d.icon! }])
-	);
 
-	/** The seeded default: monthly | priceBuckets docked side by side, メモ floating. `hostW/H` clamp the floating window into view. */
+	/** The seeded default: the メモ as a floating window at the bottom right. `hostW/H` clamp it into view. */
 	function defaultLayout(hostW: number, hostH: number): DockLayout {
-		const memoDef = PANEL_DEFS.find((d) => d.id === 'memo')!;
+		const memoDef = PANEL_DEFS.find((d) => d.id === MEMO_PANEL_ID)!;
 		const memo = clampWindowToHost(
 			{
-				id: 'memo',
+				id: MEMO_PANEL_ID,
 				title: memoDef.title,
 				icon: memoDef.icon,
 				x: hostW - (memoDef.width ?? 320) - 24,
@@ -139,37 +246,14 @@
 			hostW,
 			hostH
 		);
-		return {
-			version: 2,
-			floating: [memo],
-			docked: {
-				type: 'split',
-				id: 'root',
-				direction: 'row',
-				children: [
-					{
-						type: 'panel',
-						id: 'monthly',
-						title: PANEL_META.monthly.title,
-						icon: PANEL_META.monthly.icon
-					},
-					{
-						type: 'panel',
-						id: 'priceBuckets',
-						title: PANEL_META.priceBuckets.title,
-						icon: PANEL_META.priceBuckets.icon
-					}
-				],
-				sizes: [0.5, 0.5]
-			}
-		};
+		return { version: 2, floating: [memo], docked: null };
 	}
 
 	// M12 (spec §12.1): the UiSettingsProvider key the layout is ALSO saved
 	// under (settings DB via Tauri/REST; localStorage in demo mode).
 	// localStorage (DOCK_STORAGE_KEY) stays the synchronous first-paint
 	// source; the provider copy is reconciled once after mount, below.
-	const DOCK_SETTING_KEY = 'dock.dashboard';
+	const DOCK_SETTING_KEY = 'dock.dashboard.v2';
 
 	function loadDockLayout(): string | undefined {
 		if (typeof localStorage === 'undefined') return undefined;
@@ -353,13 +437,6 @@
 		dock.layout = defaultLayout(dockHostW, dockHostH);
 	}
 
-	// Each docked pane / floating window body measures its own height so the
-	// chart fills it (charts ResizeObserver their own width). Keyed by panel id.
-	let panelHeights = $state<Record<string, number>>({});
-	function chartHeight(id: string): number {
-		return Math.max(140, (panelHeights[id] ?? 240) - 16);
-	}
-
 	function isDocked(id: string): boolean {
 		return collectPanelIds(dock.layout.docked).includes(id);
 	}
@@ -424,263 +501,92 @@
 </script>
 
 <div class="page">
-	<PageHeader
-		hideTitle
-		title={m['nav.dashboard']()}
-		description={m['dashboard.summary']({ count: list.totalCount.toLocaleString() })}
-	/>
+	<PageHeader hideTitle title={m['nav.dashboard']()} description={m['dashboard.summary']()}>
+		{#snippet actions()}
+			{#if available}
+				<button type="button" class="banto-btn banto-btn--secondary" onclick={() => void load()}>
+					{m['common.reload']()}
+				</button>
+			{/if}
+		{/snippet}
+	</PageHeader>
+
+	{#if !available}
+		<p class="note">{m['dashboard.demoNote']()}</p>
+	{/if}
 
 	<div class="stat-row">
-		<section class="stat-tile">
-			<span class="stat-icon" aria-hidden="true"><Package size={18} /></span>
-			<div class="stat-body">
-				<span class="stat-label">{m['dashboard.statCount']()}</span>
-				<span class="stat-value">{stats.count.toLocaleString()}</span>
-			</div>
-		</section>
-		<section class="stat-tile">
-			<span class="stat-icon" aria-hidden="true"><Warehouse size={18} /></span>
-			<div class="stat-body">
-				<span class="stat-label">{m['dashboard.statStockTotal']()}</span>
-				<div class="stat-value-row">
-					<span class="stat-value">{stats.stockTotal.toLocaleString()}</span>
-					<Sparkline values={monthCounts.map((mc) => mc.count)} width={72} height={24} />
+		{#each tiles as tile (tile.id)}
+			<section class="stat-tile" data-tile={tile.id}>
+				<span class="stat-icon" aria-hidden="true"><tile.icon size={18} /></span>
+				<div class="stat-body">
+					<span class="stat-label">{tile.label}</span>
+					<span class="stat-value">{tile.value}</span>
+					{#if tile.note}<span class="stat-note">{tile.note}</span>{/if}
 				</div>
-			</div>
-		</section>
-		<section class="stat-tile">
-			<span class="stat-icon" aria-hidden="true"><JapaneseYen size={18} /></span>
-			<div class="stat-body">
-				<span class="stat-label">{m['dashboard.statAvgPrice']()}</span>
-				<span class="stat-value">{yen(stats.avgPrice)}</span>
-			</div>
-		</section>
-		<section class="stat-tile">
-			<span class="stat-icon" aria-hidden="true"><TriangleAlert size={18} /></span>
-			<div class="stat-body">
-				<span class="stat-label">{m['dashboard.statLowStock']()}</span>
-				<span class="stat-value">{stats.lowStockCount.toLocaleString()}</span>
-			</div>
-		</section>
+			</section>
+		{/each}
 	</div>
 
-	<details class="about-demo">
-		<summary>{m['dashboard.aboutSummary']()}</summary>
-		<p class="note">{m['dashboard.aboutNote']({ count: list.totalCount.toLocaleString() })}</p>
-	</details>
+	<section aria-labelledby="dashboard-links">
+		<h2 id="dashboard-links" class="section-heading">{m['dashboard.linksHeading']()}</h2>
+		<ul class="link-grid">
+			{#each links as link (link.path)}
+				<li>
+					<a class="link-card" href={resolveAppPath(link.path)}>
+						<span class="stat-icon" aria-hidden="true"><link.icon size={18} /></span>
+						<span class="link-body">
+							<span class="link-label">{link.label()}</span>
+							<span class="link-note">{link.note()}</span>
+						</span>
+					</a>
+				</li>
+			{/each}
+		</ul>
+	</section>
 
-	{#if list.loading && list.rows.length === 0}
-		<LoadingState label={m['items.loadingData']()} />
-	{:else}
-		<div class="chart-grid">
-			<section class="card primary">
-				<h2>{m['dashboard.monthlyTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.monthlyCaption']()}</p>
-				<LineChart
-					data={monthCounts}
-					x={(row) => row.month}
-					series={[{ id: 'count', label: m['dashboard.seriesUpdates'](), y: (row) => row.count }]}
-					area
-					label={m['dashboard.monthlyAria']()}
-					height={280}
-					formatY={(n) => n.toLocaleString()}
-				/>
-			</section>
-
-			<section class="card secondary">
-				<h2>{m['dashboard.categoryStockTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.categoryStockCaption']()}</p>
-				<BarChart
-					data={categoryStock}
-					category={(row) => row.category}
-					series={[{ id: 'stock', label: m['dashboard.seriesStock'](), value: (row) => row.stock }]}
-					horizontal
-					label={m['dashboard.categoryStockAria']()}
-					height={280}
-					formatValue={(n) => n.toLocaleString()}
-				/>
-			</section>
-
-			<section class="card secondary">
-				<h2>{m['dashboard.stackedBarTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.stackedBarCaption']()}</p>
-				<BarChart
-					data={categoryPriceBand}
-					category={(row) => row.category}
-					series={[
-						{ id: 'low', label: m['dashboard.priceBandLow'](), value: (row) => row.low },
-						{ id: 'mid', label: m['dashboard.priceBandMid'](), value: (row) => row.mid },
-						{ id: 'high', label: m['dashboard.priceBandHigh'](), value: (row) => row.high }
-					]}
-					stacked
-					label={m['dashboard.stackedBarAria']()}
-					height={280}
-					formatValue={(n) => n.toLocaleString()}
-				/>
-			</section>
-
-			<section class="card secondary">
-				<h2>{m['dashboard.priceBucketTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.priceBucketCaption']()}</p>
-				<PieChart
-					data={buckets}
-					category={(row) => row.bucket}
-					value={(row) => row.count}
-					donut
-					label={m['dashboard.priceBucketAria']()}
-					height={280}
-					formatValue={countLabel}
-				/>
-			</section>
-
-			<section class="card secondary">
-				<h2>{m['dashboard.scatterTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.scatterCaption']()}</p>
-				<ScatterChart
-					data={scatterRows}
-					x={(row) => row.price}
-					y={(row) => row.stock}
-					pointLabel={(row) => row.name}
-					label={m['dashboard.scatterAria']()}
-					height={280}
-					formatX={(v) => yen(Number(v))}
-					formatY={(v) => countLabel(Number(v))}
-				/>
-			</section>
-		</div>
-
-		<h2 class="section-heading">{m['dashboard.chartsV2Heading']()}</h2>
-		<div class="chart-grid">
-			<section class="card primary">
-				<h2>{m['dashboard.comboTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.comboCaption']()}</p>
-				<ComboChart
-					data={monthlyAvg}
-					x={(row) => row.month}
-					bars={[{ id: 'count', label: m['dashboard.seriesUpdates'](), value: (row) => row.count }]}
-					lines={[{ id: 'avg3', label: m['dashboard.series3mAvg'](), y: (row) => row.avg3 }]}
-					label={m['dashboard.comboAria']()}
-					height={280}
-					formatY={(n) => n.toLocaleString()}
-				/>
-			</section>
-
-			<section class="card secondary">
-				<h2>{m['dashboard.heatmapTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.heatmapCaption']()}</p>
-				<Heatmap
-					data={weekdayHeat}
-					x={(row) => row.month}
-					y={(row) => row.weekday}
-					value={(row) => row.count}
-					label={m['dashboard.heatmapAria']()}
-					height={300}
-					formatValue={(n) => n.toLocaleString()}
-				/>
-			</section>
-
-			<section class="card secondary">
-				<h2>{m['dashboard.gaugeTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.gaugeCaption']({ target: yen(STOCK_TARGET) })}</p>
-				<Gauge
-					value={stats.stockTotal}
-					max={STOCK_TARGET}
-					label={m['dashboard.gaugeAria']()}
-					height={220}
-					formatValue={(n) => `${Math.round((n / STOCK_TARGET) * 100)}%`}
-				/>
-			</section>
-
-			<section class="card secondary">
-				<h2>{m['dashboard.radarTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.radarCaption']()}</p>
-				<RadarChart
-					data={topCategories}
-					axis={(row) => row.category}
-					series={[
-						{ id: 'count', label: m['dashboard.seriesProductCount'](), value: (row) => row.count }
-					]}
-					label={m['dashboard.radarAria']()}
-					height={280}
-					formatValue={(n) => n.toLocaleString()}
-				/>
-			</section>
-		</div>
-
-		<h2 class="section-heading">{m['dashboard.chartsM24Heading']()}</h2>
-		<div class="chart-grid">
-			<section class="card">
-				<h2>{m['dashboard.categoryTrendTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.categoryTrendCaption']()}</p>
-				<StackedAreaChart
-					data={categoryTrend.rows}
-					x={(row) => row.month}
-					series={categoryTrend.categories.map((c) => ({
-						id: c,
-						label: c,
-						y: (row: MonthCategoryCount) => row.values[c] ?? 0
-					}))}
-					label={m['dashboard.categoryTrendAria']()}
-					height={280}
-					formatY={(n) => n.toLocaleString()}
-				/>
-			</section>
-
-			<section class="card">
-				<h2>{m['dashboard.scheduleTitle']()}</h2>
-				<p class="card-caption">{m['dashboard.scheduleCaption']()}</p>
-				<GanttChart
-					tasks={schedule.tasks}
-					label={m['dashboard.scheduleAria']()}
-					today={schedule.today}
-					formatDate={formatGanttDate}
-				/>
-			</section>
-		</div>
-
-		<section class="workspace">
-			<h2 class="workspace-heading">
-				<LayoutGrid size={18} aria-hidden="true" />{m['dashboard.workspaceHeading']()}
-			</h2>
-			<p class="workspace-caption">{m['dashboard.workspaceCaption']()}</p>
-			<div class="dock-toolbar" role="toolbar" aria-label={m['dashboard.dockToolbarAria']()}>
-				{#each PANEL_DEFS as def (def.id)}
-					<button
-						type="button"
-						class="dock-toggle"
-						class:active={isPanelVisible(def.id)}
-						aria-pressed={isPanelVisible(def.id)}
-						disabled={isDocked(def.id)}
-						title={isDocked(def.id) ? m['dashboard.dockedAlwaysVisible']() : undefined}
-						onclick={() => togglePanel(def.id)}
-					>
-						{def.icon}
-						{def.title}
-					</button>
-				{/each}
-				<button type="button" class="dock-reset" onclick={resetDockLayout}
-					>{m['dashboard.reset']()}</button
+	<section class="workspace">
+		<h2 class="workspace-heading">
+			<NotebookPen size={18} aria-hidden="true" />{m['dashboard.workspaceHeading']()}
+		</h2>
+		<p class="workspace-caption">{m['dashboard.workspaceCaption']()}</p>
+		<div class="dock-toolbar" role="toolbar" aria-label={m['dashboard.dockToolbarAria']()}>
+			{#each PANEL_DEFS as def (def.id)}
+				<button
+					type="button"
+					class="dock-toggle"
+					class:active={isPanelVisible(def.id)}
+					aria-pressed={isPanelVisible(def.id)}
+					disabled={isDocked(def.id)}
+					title={isDocked(def.id) ? m['dashboard.dockedAlwaysVisible']() : undefined}
+					onclick={() => togglePanel(def.id)}
 				>
-			</div>
-			<div class="dock-wrapper" bind:clientWidth={dockHostW} bind:clientHeight={dockHostH}>
-				<DockHost
-					bind:this={dockHost}
-					{dock}
-					panel={dockPanel}
-					{onPopOut}
-					{beforePanelChange}
-					isEscapeBlocked={isDockEscapeBlocked}
-				/>
-			</div>
-			<DraftSettleDialog
-				prompt={memoPrompt}
-				title={m['dashboard.memoCloseTitle']()}
-				body={m['dashboard.memoCloseBody']()}
-				applyLabel={m['dashboard.memoCloseApply']()}
-				discardLabel={m['dashboard.memoCloseDiscard']()}
+					{def.icon}
+					{def.title}
+				</button>
+			{/each}
+			<button type="button" class="dock-reset" onclick={resetDockLayout}
+				>{m['dashboard.reset']()}</button
+			>
+		</div>
+		<div class="dock-wrapper" bind:clientWidth={dockHostW} bind:clientHeight={dockHostH}>
+			<DockHost
+				bind:this={dockHost}
+				{dock}
+				panel={dockPanel}
+				{onPopOut}
+				{beforePanelChange}
+				isEscapeBlocked={isDockEscapeBlocked}
 			/>
-		</section>
-	{/if}
+		</div>
+		<DraftSettleDialog
+			prompt={memoPrompt}
+			title={m['dashboard.memoCloseTitle']()}
+			body={m['dashboard.memoCloseBody']()}
+			applyLabel={m['dashboard.memoCloseApply']()}
+			discardLabel={m['dashboard.memoCloseDiscard']()}
+		/>
+	</section>
 </div>
 
 {#snippet dockPanel(content: PanelContent)}
@@ -688,10 +594,9 @@
 		Body extracted to DashboardPanel.svelte (spec §5.3 v2 pop-out): the
 		SAME component renders this panel's content standalone at
 		routes/panel/[id] once popped out into a real Tauri window, so the
-		markup can't depend on anything from this page beyond the measured
-		height below.
+		markup can't depend on anything from this page.
 	-->
-	<div class="dock-panel" bind:clientHeight={panelHeights[content.id]}>
+	<div class="dock-panel">
 		{#if content.id === MEMO_PANEL_ID}
 			<DashboardMemoField
 				draft={memo.draft}
@@ -700,7 +605,7 @@
 				status={memoStatus}
 			/>
 		{:else}
-			<DashboardPanel id={content.id} height={chartHeight(content.id)} />
+			<DashboardPanel id={content.id} />
 		{/if}
 	</div>
 {/snippet}
@@ -709,31 +614,13 @@
 	.page {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-	}
-
-	/* "About this demo" collapsible (design.md §10): the long technical note
-	   used to sit at the top of the page, ahead of the KPIs/charts it
-	   describes. Closed by default. */
-	.about-demo {
-		color: var(--banto-text-muted);
-		font-size: 0.8rem;
-	}
-
-	.about-demo summary {
-		cursor: pointer;
-		color: var(--banto-text);
-		font-weight: 600;
-		font-size: 0.85rem;
-	}
-
-	.about-demo summary:focus-visible {
-		outline: none;
-		box-shadow: var(--banto-focus-ring);
+		gap: var(--banto-space-4);
 	}
 
 	.note {
-		margin: 0.5rem 0 0;
+		margin: 0;
+		color: var(--banto-text-muted);
+		font-size: var(--banto-font-size-md);
 	}
 
 	/* KPI tiles (design.md §10): icon + label + tabular-nums value. Tile-only
@@ -742,18 +629,18 @@
 	.stat-row {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.stat-tile {
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
-		padding: 1rem 1.25rem;
+		padding: var(--banto-space-4) var(--banto-space-5);
 		display: flex;
 		align-items: center;
-		gap: 0.85rem;
+		gap: var(--banto-space-3);
 	}
 
 	.stat-icon {
@@ -771,73 +658,81 @@
 	.stat-body {
 		display: flex;
 		flex-direction: column;
-		gap: 0.3rem;
+		gap: var(--banto-space-1);
 		min-width: 0;
 	}
 
 	.stat-label {
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.stat-value {
-		font-size: 1.6rem;
+		font-size: var(--banto-font-size-xl);
 		font-weight: 650;
 		color: var(--banto-text);
 		font-variant-numeric: tabular-nums;
 	}
 
-	.stat-value-row {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
+	.stat-note {
+		color: var(--banto-text-muted);
+		font-size: var(--banto-font-size-xs);
+		text-wrap: pretty;
 	}
 
 	.section-heading {
-		margin: 0.25rem 0 0;
-		font-size: 1rem;
+		margin: var(--banto-space-1) 0 0;
+		font-size: var(--banto-font-size-lg);
 		color: var(--banto-text-muted);
 	}
 
-	/* Asymmetric 12-column chart grid (design.md §10, plan Phase 3): the
-	   primary (monthly-trend) chart spans 8/12, secondary charts 4/12 each,
-	   collapsing to a single column under 900px. */
-	.chart-grid {
+	.link-grid {
+		list-style: none;
+		margin: 0;
+		padding: 0;
 		display: grid;
-		grid-template-columns: repeat(12, 1fr);
-		gap: 1rem;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+		gap: var(--banto-space-4);
 	}
 
-	.card {
+	.link-card {
+		display: flex;
+		align-items: center;
+		gap: var(--banto-space-3);
+		height: 100%;
+		box-sizing: border-box;
+		padding: var(--banto-space-3) var(--banto-space-4);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
-		padding: 1rem 1.25rem;
+		color: var(--banto-text);
+		text-decoration: none;
+	}
+
+	.link-card:hover {
+		border-color: var(--banto-primary);
+	}
+
+	.link-card:focus-visible {
+		outline: none;
+		box-shadow: var(--banto-focus-ring);
+	}
+
+	.link-body {
+		display: flex;
+		flex-direction: column;
+		gap: var(--banto-space-1);
 		min-width: 0;
-		grid-column: span 12;
 	}
 
-	@media (min-width: 901px) {
-		.card.primary {
-			grid-column: span 8;
-		}
-
-		.card.secondary {
-			grid-column: span 4;
-		}
+	.link-label {
+		font-weight: 600;
 	}
 
-	h2 {
-		margin: 0 0 0.25rem;
-		font-size: 1rem;
-		font-feature-settings: 'palt';
-	}
-
-	.card-caption {
-		margin: 0 0 0.5rem;
+	.link-note {
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		text-wrap: pretty;
 	}
 
@@ -846,42 +741,42 @@
 	.workspace {
 		background: var(--banto-surface-subtle);
 		border-radius: var(--banto-radius-lg);
-		padding: 1.25rem;
+		padding: var(--banto-space-5);
 	}
 
 	.workspace-heading {
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
-		margin: 0 0 0.5rem;
-		font-size: 1rem;
+		gap: var(--banto-space-1);
+		margin: 0 0 var(--banto-space-2);
+		font-size: var(--banto-font-size-lg);
 		font-feature-settings: 'palt';
 	}
 
 	.workspace-caption {
 		margin: 0;
 		color: var(--banto-text-muted);
-		font-size: 0.875rem;
+		font-size: var(--banto-font-size-md);
 		text-wrap: pretty;
 	}
 
 	.dock-toolbar {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.5rem;
-		margin: 0.75rem 0;
+		gap: var(--banto-space-2);
+		margin: var(--banto-space-3) 0;
 	}
 
 	.dock-toggle {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
-		border: 1px solid var(--banto-border);
+		gap: var(--banto-space-1);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: 999px;
 		background: var(--banto-surface);
 		color: var(--banto-text-muted);
-		padding: 0.35rem 0.9rem;
-		font-size: 0.8rem;
+		padding: var(--banto-space-1) var(--banto-space-3);
+		font-size: var(--banto-font-size-sm);
 		cursor: pointer;
 	}
 
@@ -901,12 +796,12 @@
 	}
 
 	.dock-reset {
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: 999px;
 		background: var(--banto-surface);
 		color: var(--banto-text);
-		padding: 0.35rem 0.9rem;
-		font-size: 0.8rem;
+		padding: var(--banto-space-1) var(--banto-space-3);
+		font-size: var(--banto-font-size-sm);
 		cursor: pointer;
 		margin-left: auto;
 	}
@@ -916,12 +811,12 @@
 	}
 
 	.dock-wrapper {
-		height: 520px;
+		height: 300px;
 	}
 
 	.dock-panel {
 		height: 100%;
 		box-sizing: border-box;
-		padding: 0.75rem;
+		padding: var(--banto-space-3);
 	}
 </style>

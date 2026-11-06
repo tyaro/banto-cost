@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * 顧客マスタ一覧 (banto-cost P3a, docs/recipes/add-resource.md step 8).
-	 * Deliberately lean compared with the items list: a read-only BantoGrid
+	 * Deliberately lean: a read-only BantoGrid
 	 * whose columns derive from `customersSchema` (M23) plus a row link and a
 	 * "new" button. Reading needs admin or the `ViewMasters` capability; a
 	 * `forbidden` answer shows a no-access state instead of an error.

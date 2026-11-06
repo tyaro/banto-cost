@@ -1,5 +1,5 @@
 <script lang="ts">
-	/** 顧客の新規登録 (banto-cost P3a; same shape as items/new). */
+	/** 顧客の新規登録 (banto-cost P3a; same shape as projects/new). */
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { BantoForm, UnsavedChangesNotice, createFormStore } from '@banto/forms';

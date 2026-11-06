@@ -1,12 +1,12 @@
 <script lang="ts">
 	/**
-	 * 顧客の詳細・編集 (banto-cost P3a; same shape as items/[id], without
+	 * 顧客の詳細・編集 (banto-cost P3a; same shape as projects/[id], without
 	 * delete - customers are switched to inactive instead). The `rowVersion`
 	 * read by `getOne` stays in the form values, so the update carries it
 	 * back; a stale one comes back as a `rowVersion` field error, which no
 	 * rendered field owns and is therefore listed above the form.
 	 *
-	 * As with items/[id], the (app) layout keys this page on its route params,
+	 * As with every detail page, the (app) layout keys this page on its route params,
 	 * so reading `page.params.id` once at setup is enough.
 	 */
 	import { page } from '$app/state';

@@ -9,12 +9,9 @@ pub mod customers;
 pub mod db;
 pub mod events;
 pub mod first_boot;
-// [scaffold:items] begin
-pub mod items;
+pub mod orders;
 pub mod pipeline;
 pub mod projects;
-// [scaffold:items] end
-pub mod orders;
 pub mod rest;
 
 // Theme C (docs/template-scope.md §7): the domain-agnostic services moved to

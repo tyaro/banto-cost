@@ -371,10 +371,6 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'auth_login', rest: 'POST /api/auth/login' },
 		{ tauri: 'auth_logout', rest: 'POST /api/auth/logout' },
 		{ tauri: 'auth_change_password', rest: 'POST /api/auth/change-password' },
-		{ tauri: 'items_create', rest: 'POST /api/items', role: 'Editor' },
-		{ tauri: 'items_update', rest: 'PUT /api/items/{id}', role: 'Editor' },
-		{ tauri: 'items_delete', rest: 'DELETE /api/items/{id}', role: 'Editor' },
-		{ tauri: 'items_import', rest: 'POST /api/items/import', role: 'Editor' },
 		{ tauri: 'users_create', rest: 'POST /api/users', role: 'Admin' },
 		{ tauri: 'users_update', rest: 'PUT /api/users/{id}', role: 'Admin' },
 		{ tauri: 'users_delete', rest: 'DELETE /api/users/{id}', role: 'Admin' },
@@ -508,8 +504,7 @@ const isAllowedPackageImport = (spec) =>
 		'settings_set',
 		'auth_config_apply',
 		'panel_open',
-		'backups_open_folder',
-		'items_export_csv_to_folder'
+		'backups_open_folder'
 	]);
 
 	// 読み取り系（list/get/status。§1 により両経路とも監査せず、対称強制の対象外）。
@@ -530,8 +525,6 @@ const isAllowedPackageImport = (spec) =>
 		// Issue #219 PR-B: reads this PC's Windows Firewall (admin, like
 		// server_status). Desktop-only by nature - no REST twin.
 		'firewall_rule_status',
-		'items_get',
-		'items_list',
 		'ping',
 		'order_get',
 		'outlook_get',
@@ -559,7 +552,6 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/auth/check',
 		'GET /api/auth/identity',
 		'GET /api/events',
-		'GET /api/items/{id}',
 		'GET /api/users',
 		'GET /api/authz/me',
 		'GET /api/users/{id}/capabilities',
@@ -580,7 +572,6 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/backups',
 		'GET /api/backups/{fileName}',
 		'GET /api/backups/pending-restore',
-		'POST /api/items/list',
 		'POST /api/audit-log/list'
 	]);
 
@@ -684,7 +675,7 @@ const isAllowedPackageImport = (spec) =>
 		// その本体内の `.route("path", <verbs>(...))` の各メソッドに割り当てる。
 		// 走査先は上の doc-sync (d) と同じ2ディレクトリ: ドメイン非依存のルータは
 		// `banto-server`（theme C PR-C4, docs/template-scope.md §7 移行順 ④）、
-		// アプリ固有の `items`/`attachments` はアプリの `rest/` にある。ロール床は
+		// アプリ固有のルータ（authz・projects 等）はアプリの `rest/` にある。ロール床は
 		// どちらに実装があっても同一でなければならない。
 		const restRouteRole = {};
 		for (const file of restRouterDirs.flatMap((dir) => [...walk(dir, ['.rs'])])) {
