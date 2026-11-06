@@ -83,17 +83,41 @@ jobs:
       # Tauri v2 Linux prerequisites (https://tauri.app/start/prerequisites/).
       # Windows needs nothing extra for `cargo check`: the WebView2 SDK comes
       # in through the webview2-com crate, not a system package.
+      #
+      # The .deb files are cached (keyed by this workflow file and the runner
+      # image version): the Azure apt mirror is sometimes extremely slow
+      # (measured 2026-11-06: tens of KB/s, the step ran 21 min until
+      # cancelled), and with the cache only `apt-get update` and the install
+      # itself touch the network/disk. `timeout-minutes` turns a stalled
+      # mirror into a fast, re-runnable failure instead of a 40-min job.
+      - name: Restore apt package cache (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/apt-archives
+          key: tauri-apt-${{ runner.os }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('.github/workflows/tauri-check.yml') }}
+          restore-keys: |
+            tauri-apt-${{ runner.os }}-${{ env.ImageOS }}-
+
       - name: Install Tauri system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
+          mkdir -p ~/apt-archives/partial
+          sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y \
+            -o Acquire::Retries=3 \
+            -o Dir::Cache::Archives="$HOME/apt-archives" \
             libwebkit2gtk-4.1-dev \
             build-essential \
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
+          # apt leaves root-only files (lock, partial/) that the cache save
+          # step, running as the runner user, could not read.
+          sudo rm -rf ~/apt-archives/lock ~/apt-archives/partial
+          sudo chown -R "$USER" ~/apt-archives
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable

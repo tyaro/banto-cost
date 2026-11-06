@@ -54,6 +54,29 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # i18n サプライチェーン/再現性ガード（テンプレート実用性レビュー §2）。
+      # inlang プラグインは以前 jsdelivr の CDN URL で参照されており、毎ビルド
+      # CDN 取得＝`--frozen-lockfile` の再現性の外だった。取得失敗時 paraglide-js は
+      # WARN 後 exit 0 で空カタログを吐く（fail-open）ため、CI は常に緑・被害は
+      # 閉域網の端末で発生していた。プラグインをローカル devDependency に移した
+      # うえで、依存 install の直後に CDN を遮断し、以降の手順（compile・check・
+      # build）すべてが (1) CDN に一切依存しないこと (2) fail-closed ガード
+      # (scripts/check-i18n-nonempty.mjs) が非空カタログを保証すること、を検証する。
+      # もし何かが CDN 取得に退行したら 127.0.0.1 への接続が失敗し、空カタログ
+      # → ガードが非0終了してこのジョブが赤になる。
+      # （以前は別ジョブ i18n-offline だった。install までが同じなので統合した。
+      # なお旧ジョブはリネーム後も `--filter admin-template` のままで、どの
+      # パッケージにも当たらず何も検査せずに緑だった。`--fail-if-no-match` で
+      # 同じ取りこぼしを赤にする）
+      - name: Block CDN egress (jsdelivr / unpkg / esm.sh)
+        run: |
+          echo "127.0.0.1 cdn.jsdelivr.net" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 unpkg.com" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 esm.sh" | sudo tee -a /etc/hosts
+
+      - name: Compile i18n from local plugins (offline)
+        run: pnpm --filter banto-cost-app --fail-if-no-match paraglide:compile
+
       - name: Lint (ESLint)
         run: pnpm lint
 
@@ -89,49 +112,6 @@ jobs:
 
       - name: Build
         run: pnpm build
-
-  # i18n サプライチェーン/再現性ガード（テンプレート実用性レビュー §2）。
-  # inlang プラグインは以前 jsdelivr の CDN URL で参照されており、毎ビルド
-  # CDN 取得＝`--frozen-lockfile` の再現性の外だった。取得失敗時 paraglide-js は
-  # WARN 後 exit 0 で空カタログを吐く（fail-open）ため、CI は常に緑・被害は
-  # 閉域網の端末で発生していた。プラグインをローカル devDependency に移した
-  # うえで、このジョブは「依存 install 後に CDN を遮断してから compile」して
-  # (1) CDN に一切依存しないこと (2) fail-closed ガード
-  # (scripts/check-i18n-nonempty.mjs) が非空カタログを保証すること、を検証する。
-  i18n-offline:
-    name: i18n (CDN-blocked reproducibility)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # jsdelivr（および一般的な npm ミラー CDN）をブラックホール化する。
-      # ローカル参照が正しければ compile はこれで一切影響を受けない。もし
-      # 何かが CDN 取得に退行したら 127.0.0.1 への接続が失敗し、空カタログ
-      # → fail-closed ガードが非0終了してこのジョブが赤になる。
-      - name: Block CDN egress (jsdelivr)
-        run: |
-          echo "127.0.0.1 cdn.jsdelivr.net" | sudo tee -a /etc/hosts
-          echo "127.0.0.1 unpkg.com" | sudo tee -a /etc/hosts
-          echo "127.0.0.1 esm.sh" | sudo tee -a /etc/hosts
-
-      # ローカルプラグインから compile が成功し、ガードが非空カタログを
-      # 通すことを確認する（CDN 遮断下でも緑になるのが正しい状態）。
-      - name: Compile i18n from local plugins (offline)
-        run: pnpm --filter admin-template paraglide:compile
 
   rust:
     name: Rust (fmt / clippy / check / test)
@@ -324,13 +304,13 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Run E2E smoke suite
-        run: pnpm e2e
-
-      # Viewer-public mode (Issue #189): second banto-serve started with
-      # BANTO_VIEWER_PUBLIC=1 by the same playwright config.
-      - name: Run E2E viewer-public suite
-        run: pnpm e2e:public-viewer
+      # Smoke (`pnpm e2e`) and viewer-public (`pnpm e2e:public-viewer`, Issue
+      # #189: a second banto-serve started with BANTO_VIEWER_PUBLIC=1 by the
+      # same playwright config) in ONE run: each project is pinned to one
+      # worker and has its own server and DB, so they run side by side instead
+      # of back to back.
+      - name: Run E2E smoke + viewer-public suites
+        run: pnpm exec playwright test --config=e2e/playwright.config.ts --project=chromium --project=public-viewer
 
       - name: Upload Playwright report
         if: failure()

@@ -159,7 +159,7 @@ absent. Changes on the Tauri command side are covered by code review +
 `tauri-check.yml` (which runs `cargo check -p admin-template` +
 `cargo test -p admin-template` on ubuntu/windows for PRs that touch the Tauri
 side / dependency graph and on main pushes, plus a weekly schedule). CI runs
-the jobs in `.github/workflows/ci.yml` (frontend / i18n-offline / rust /
+the jobs in `.github/workflows/ci.yml` (frontend, which includes the CDN-blocked i18n check / rust /
 storage-postgres / app-postgres / e2e / audit), plus the weekly/triggered
 workflows `template-acceptance.yml` (copy→rename→check + the four scaffold
 presets), `visual-baselines.yml` (Linux visual-baseline regeneration,

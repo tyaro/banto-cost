@@ -136,7 +136,7 @@ Tauri コマンド側の変更はコードレビュー + `tauri-check.yml`（Tau
 グラフを触る PR と main push、および週次スケジュールで
 `cargo check -p admin-template` + `cargo test -p admin-template` を
 ubuntu/windows で実行）で担保する。
-CI は `.github/workflows/ci.yml` の各ジョブ（frontend / i18n-offline / rust /
+CI は `.github/workflows/ci.yml` の各ジョブ（frontend（i18n の CDN 遮断検査を含む） / rust /
 storage-postgres / app-postgres / e2e / audit）に加えて、週次+トリガ型の
 `template-acceptance.yml`（copy→rename→check + scaffold 4プリセットの受け入れ）、
 `visual-baselines.yml`（Linux visual ベースライン再生成、dispatch）、
