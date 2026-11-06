@@ -15,6 +15,7 @@ pub mod ledger;
 pub mod money;
 pub mod outlook;
 pub mod pipeline;
+pub mod project;
 pub mod purchase;
 pub mod revenue;
 

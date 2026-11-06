@@ -50,6 +50,9 @@ banto-server = { workspace = true }
 # out took `argon2`/`password-hash` (the only argon2id password-hash users)
 # with it, so this crate no longer depends on them directly.
 banto-admin-services = { workspace = true }
+# banto-cost: the calculation rules (pure Rust, no external deps). The service
+# layer only calls it (CLAUDE.md: DB/REST/Tauri layers call this crate).
+cost-domain = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

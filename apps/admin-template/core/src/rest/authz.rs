@@ -25,7 +25,7 @@ use std::str::FromStr;
 /// session has no user row here (a grant session, ADR-0017). Never derived
 /// from the username alone when the session carries its account stamp, so a
 /// reused username cannot inherit another account's grants.
-async fn caller_user_id(
+pub(super) async fn caller_user_id(
     session: &AuthenticatedSession,
     users: &UsersService,
 ) -> Result<Option<i64>, BantoError> {
