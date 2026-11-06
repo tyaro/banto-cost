@@ -1,0 +1,617 @@
+//! 直接費の台帳：費用配分・調整（返品・取消・値引き）・仮計上の確定と、月別・期別・累計の集計。
+//!
+//! - 調整は元明細を参照する別の記録で表し、通常入力の負数とは区別する（仕様11）。
+//! - 仮計上は請求確定の記録で置き換え、両方を原価に数えない（仕様6.3）。
+//! - 配分した元費用は配分先だけに計上し、元費用と配分先を二重に集計しない（仕様6.3、6.4）。
+//! - 集計の対象日付は各記録の管理計上日に統一する。配分は元費用の管理計上日を使う（T15）。
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::calendar::{Date, FiscalCalendar, YearMonth};
+use crate::forecast::{ByCostType, CostType};
+use crate::money::Yen;
+
+/// 調整の種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdjustmentKind {
+    Return,
+    Cancel,
+    Discount,
+}
+
+/// 記録の種類。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryKind {
+    Normal,
+    /// 請求未着の見積計上。
+    Provisional,
+    /// 仮計上を請求確定額で置き換える訂正。
+    Confirms {
+        provisional_id: String,
+    },
+    /// 元明細への調整。`amount` は減額分を正の値で持つ。
+    Adjustment {
+        corrects_id: String,
+        kind: AdjustmentKind,
+    },
+}
+
+/// 直接費の1記録。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CostEntry {
+    pub id: String,
+    /// 帰属する案件。`None` は配分待ち（複数案件の旅費など）。調整・確定は元明細の案件を引き継ぐ。
+    pub project: Option<String>,
+    pub cost_type: CostType,
+    /// 管理計上日。
+    pub booked_on: Date,
+    pub amount: Yen,
+    pub kind: EntryKind,
+}
+
+/// 費用配分の1行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Allocation {
+    pub source_id: String,
+    pub project: String,
+    pub amount: Yen,
+}
+
+/// 台帳の不整合。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LedgerIssue {
+    /// 通常・仮計上・調整の金額は正、確定額は0以上であること。減額は調整で表す。
+    InvalidAmount {
+        id: String,
+    },
+    DuplicateId {
+        id: String,
+    },
+    UnknownReference {
+        id: String,
+        target: String,
+    },
+    /// 調整・確定の参照先が不適切（調整への調整、確定済みの仮計上への調整など）。
+    InvalidTarget {
+        id: String,
+        target: String,
+    },
+    ProvisionalConfirmedTwice {
+        provisional_id: String,
+    },
+    /// 調整の合計が元明細を超える。
+    AdjustmentExceedsOriginal {
+        target: String,
+        excess: Yen,
+    },
+    /// 配分合計が元費用（調整後）と一致しない。
+    AllocationMismatch {
+        source_id: String,
+        allocated: Yen,
+        source: Yen,
+    },
+    /// 配分は「通常」または「確定」の記録にだけ付けられる。
+    AllocationOfInvalidSource {
+        source_id: String,
+    },
+    /// 案件が未設定で配分もない。
+    Unassigned {
+        id: String,
+    },
+}
+
+/// 集計に使う確定した計上行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Posting {
+    pub project: String,
+    pub cost_type: CostType,
+    pub booked_on: Date,
+    pub amount: Yen,
+    /// 由来の記録。
+    pub entry_id: String,
+}
+
+/// 金額を重みで按分する。端数は最大剰余法で配り、合計は必ず元の金額に一致する。
+///
+/// 重みがすべて0、または負の重みがあれば `None`。
+pub fn split_by_weights(amount: Yen, weights: &[i64]) -> Option<Vec<Yen>> {
+    if weights.iter().any(|w| *w < 0) {
+        return None;
+    }
+    let total: i128 = weights.iter().map(|w| *w as i128).sum();
+    if total == 0 {
+        return None;
+    }
+    let a = amount as i128;
+    let mut parts: Vec<i128> = weights.iter().map(|w| a * *w as i128 / total).collect();
+    let mut rest = a - parts.iter().sum::<i128>();
+    let mut order: Vec<usize> = (0..weights.len()).collect();
+    // 余りの大きい順（同じなら先の行）に1円ずつ配る。
+    order.sort_by_key(|&i| (std::cmp::Reverse((a * weights[i] as i128 % total).abs()), i));
+    let step = rest.signum();
+    for &i in order.iter().cycle() {
+        if rest == 0 {
+            break;
+        }
+        if weights[i] == 0 {
+            continue;
+        }
+        parts[i] += step;
+        rest -= step;
+    }
+    Some(parts.into_iter().map(|p| p as Yen).collect())
+}
+
+/// 元明細とそれを参照する調整・確定の記録を、元明細を先頭に返す（T14の追跡）。
+pub fn history<'a>(entries: &'a [CostEntry], id: &str) -> Vec<&'a CostEntry> {
+    let mut out: Vec<&CostEntry> = entries.iter().filter(|e| e.id == id).collect();
+    out.extend(entries.iter().filter(|e| match &e.kind {
+        EntryKind::Confirms { provisional_id } => provisional_id == id,
+        EntryKind::Adjustment { corrects_id, .. } => corrects_id == id,
+        _ => false,
+    }));
+    out
+}
+
+/// 台帳を検査し、集計用の計上行に変換する。不整合があれば計上行を返さない。
+pub fn postings(
+    entries: &[CostEntry],
+    allocations: &[Allocation],
+) -> Result<Vec<Posting>, Vec<LedgerIssue>> {
+    let mut issues = Vec::new();
+    let mut by_id: BTreeMap<&str, &CostEntry> = BTreeMap::new();
+    for e in entries {
+        if by_id.insert(&e.id, e).is_some() {
+            issues.push(LedgerIssue::DuplicateId { id: e.id.clone() });
+        }
+        let ok = match e.kind {
+            EntryKind::Confirms { .. } => e.amount >= 0,
+            _ => e.amount > 0,
+        };
+        if !ok {
+            issues.push(LedgerIssue::InvalidAmount { id: e.id.clone() });
+        }
+    }
+
+    // 仮計上の確定と、元明細ごとの調整合計。
+    let mut confirmed: BTreeSet<&str> = BTreeSet::new();
+    let mut adjusted: BTreeMap<&str, Yen> = BTreeMap::new();
+    for e in entries {
+        let (target, is_confirm) = match &e.kind {
+            EntryKind::Confirms { provisional_id } => (provisional_id.as_str(), true),
+            EntryKind::Adjustment { corrects_id, .. } => (corrects_id.as_str(), false),
+            _ => continue,
+        };
+        let Some(t) = by_id.get(target) else {
+            issues.push(LedgerIssue::UnknownReference {
+                id: e.id.clone(),
+                target: target.into(),
+            });
+            continue;
+        };
+        if is_confirm {
+            if t.kind != EntryKind::Provisional {
+                issues.push(LedgerIssue::InvalidTarget {
+                    id: e.id.clone(),
+                    target: target.into(),
+                });
+            } else if !confirmed.insert(target) {
+                issues.push(LedgerIssue::ProvisionalConfirmedTwice {
+                    provisional_id: target.into(),
+                });
+            }
+        } else if matches!(t.kind, EntryKind::Adjustment { .. }) {
+            issues.push(LedgerIssue::InvalidTarget {
+                id: e.id.clone(),
+                target: target.into(),
+            });
+        } else {
+            *adjusted.entry(target).or_default() += e.amount;
+        }
+    }
+    for (target, adj) in &adjusted {
+        let t = by_id[target];
+        if t.kind == EntryKind::Provisional && confirmed.contains(target) {
+            // 確定済みの仮計上は原価に残らないため、調整は確定の記録に付ける。
+            for e in entries.iter().filter(|e| {
+                matches!(&e.kind, EntryKind::Adjustment { corrects_id, .. } if corrects_id == target)
+            }) {
+                issues.push(LedgerIssue::InvalidTarget {
+                    id: e.id.clone(),
+                    target: (*target).into(),
+                });
+            }
+        } else if *adj > t.amount {
+            issues.push(LedgerIssue::AdjustmentExceedsOriginal {
+                target: (*target).into(),
+                excess: adj - t.amount,
+            });
+        }
+    }
+
+    // 配分。
+    let mut allocated: BTreeMap<&str, Vec<&Allocation>> = BTreeMap::new();
+    for a in allocations {
+        allocated.entry(&a.source_id).or_default().push(a);
+    }
+    for (src, lines) in &allocated {
+        let Some(s) = by_id.get(src) else {
+            issues.push(LedgerIssue::UnknownReference {
+                id: format!("allocation:{src}"),
+                target: (*src).into(),
+            });
+            continue;
+        };
+        if !matches!(s.kind, EntryKind::Normal | EntryKind::Confirms { .. }) {
+            issues.push(LedgerIssue::AllocationOfInvalidSource {
+                source_id: (*src).into(),
+            });
+            continue;
+        }
+        let net = s.amount - adjusted.get(src).copied().unwrap_or(0);
+        let sum: Yen = lines.iter().map(|a| a.amount).sum();
+        if sum != net || lines.iter().any(|a| a.amount < 0) {
+            issues.push(LedgerIssue::AllocationMismatch {
+                source_id: (*src).into(),
+                allocated: sum,
+                source: net,
+            });
+        }
+    }
+
+    // 帰属案件と費目の解決（確定・調整は元明細のものを引き継ぐ）。
+    // 不正な参照の循環でも止まるよう、たどる回数を記録数で打ち切る。
+    let root = |e: &'_ CostEntry| -> Option<(Option<String>, CostType)> {
+        let mut cur = e;
+        for _ in 0..=entries.len() {
+            match &cur.kind {
+                EntryKind::Confirms { provisional_id: t }
+                | EntryKind::Adjustment { corrects_id: t, .. } => {
+                    cur = by_id.get(t.as_str())?;
+                }
+                _ => return Some((cur.project.clone(), cur.cost_type)),
+            }
+        }
+        None
+    };
+
+    let mut out = Vec::new();
+    for e in entries {
+        if allocated.contains_key(e.id.as_str()) {
+            for a in &allocated[e.id.as_str()] {
+                out.push(Posting {
+                    project: a.project.clone(),
+                    cost_type: e.cost_type,
+                    booked_on: e.booked_on,
+                    amount: a.amount,
+                    entry_id: e.id.clone(),
+                });
+            }
+            continue;
+        }
+        let amount = match &e.kind {
+            EntryKind::Provisional if confirmed.contains(e.id.as_str()) => continue,
+            EntryKind::Adjustment { corrects_id, .. } => {
+                // 配分済みの元費用への調整は、配分額（調整後で一致検査済み）に含まれる。
+                if allocated.contains_key(corrects_id.as_str()) {
+                    continue;
+                }
+                -e.amount
+            }
+            _ => e.amount,
+        };
+        match root(e) {
+            Some((Some(project), cost_type)) => out.push(Posting {
+                project,
+                cost_type,
+                booked_on: e.booked_on,
+                amount,
+                entry_id: e.id.clone(),
+            }),
+            _ => issues.push(LedgerIssue::Unassigned { id: e.id.clone() }),
+        }
+    }
+    if issues.is_empty() {
+        Ok(out)
+    } else {
+        Err(issues)
+    }
+}
+
+/// 案件の原価集計（当月・当期・案件累計）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CostSummary {
+    pub by_month: BTreeMap<YearMonth, ByCostType>,
+    /// 期番号ごと。
+    pub by_period: BTreeMap<i32, ByCostType>,
+    pub cumulative: ByCostType,
+}
+
+/// 1案件の計上行を、管理計上日で月別・期別・累計に集計する。
+pub fn summarize(postings: &[Posting], project: &str, cal: &FiscalCalendar) -> CostSummary {
+    let mut s = CostSummary::default();
+    for p in postings.iter().filter(|p| p.project == project) {
+        let ym = p.booked_on.year_month();
+        s.by_month.entry(ym).or_default().add(p.cost_type, p.amount);
+        s.by_period
+            .entry(cal.period_of(ym))
+            .or_default()
+            .add(p.cost_type, p.amount);
+        s.cumulative.add(p.cost_type, p.amount);
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d(s: &str) -> Date {
+        Date::parse(s).unwrap()
+    }
+    fn entry(id: &str, project: Option<&str>, t: CostType, on: &str, amount: Yen) -> CostEntry {
+        CostEntry {
+            id: id.into(),
+            project: project.map(Into::into),
+            cost_type: t,
+            booked_on: d(on),
+            amount,
+            kind: EntryKind::Normal,
+        }
+    }
+    fn adjust(id: &str, target: &str, on: &str, amount: Yen, kind: AdjustmentKind) -> CostEntry {
+        CostEntry {
+            id: id.into(),
+            project: None,
+            cost_type: CostType::Material,
+            booked_on: d(on),
+            amount,
+            kind: EntryKind::Adjustment {
+                corrects_id: target.into(),
+                kind,
+            },
+        }
+    }
+    fn alloc(src: &str, project: &str, amount: Yen) -> Allocation {
+        Allocation {
+            source_id: src.into(),
+            project: project.into(),
+            amount,
+        }
+    }
+    fn total_of(p: &[Posting], project: &str) -> Yen {
+        p.iter()
+            .filter(|x| x.project == project)
+            .map(|x| x.amount)
+            .sum()
+    }
+
+    #[test]
+    fn t10_旅費30000円を2案件に配分しても合計は30000円() {
+        let entries = [entry("E1", None, CostType::Travel, "2026-12-10", 30_000)];
+        let parts = split_by_weights(30_000, &[3, 2]).unwrap();
+        assert_eq!(parts, vec![18_000, 12_000]);
+        let allocs = [alloc("E1", "P-A", parts[0]), alloc("E1", "P-B", parts[1])];
+        let p = postings(&entries, &allocs).unwrap();
+        assert_eq!(total_of(&p, "P-A"), 18_000);
+        assert_eq!(total_of(&p, "P-B"), 12_000);
+        // 元費用は配分先にだけ計上され、二重に数えない。
+        assert_eq!(p.iter().map(|x| x.amount).sum::<Yen>(), 30_000);
+        assert_eq!(p.len(), 2);
+    }
+
+    #[test]
+    fn t10_案件のある元費用を配分しても元案件に残らない() {
+        let entries = [entry(
+            "E1",
+            Some("P-A"),
+            CostType::Travel,
+            "2026-12-10",
+            30_000,
+        )];
+        let allocs = [alloc("E1", "P-A", 15_000), alloc("E1", "P-B", 15_000)];
+        let p = postings(&entries, &allocs).unwrap();
+        assert_eq!((total_of(&p, "P-A"), total_of(&p, "P-B")), (15_000, 15_000));
+    }
+
+    #[test]
+    fn t10_配分合計が元費用と違えば不整合() {
+        let entries = [entry("E1", None, CostType::Travel, "2026-12-10", 30_000)];
+        let allocs = [alloc("E1", "P-A", 20_000), alloc("E1", "P-B", 20_000)];
+        assert_eq!(
+            postings(&entries, &allocs),
+            Err(vec![LedgerIssue::AllocationMismatch {
+                source_id: "E1".into(),
+                allocated: 40_000,
+                source: 30_000
+            }])
+        );
+        // 配分のない案件未設定の費用も検出する。
+        assert_eq!(
+            postings(&entries, &[]),
+            Err(vec![LedgerIssue::Unassigned { id: "E1".into() }])
+        );
+    }
+
+    #[test]
+    fn 按分の端数は合計に一致させる() {
+        assert_eq!(
+            split_by_weights(30_001, &[1, 1]).unwrap(),
+            vec![15_001, 15_000]
+        );
+        assert_eq!(split_by_weights(100, &[1, 1, 1]).unwrap(), vec![34, 33, 33]);
+        assert_eq!(split_by_weights(100, &[0, 2, 1]).unwrap(), vec![0, 67, 33]);
+        assert_eq!(split_by_weights(100, &[0, 0]), None);
+        assert_eq!(split_by_weights(100, &[1, -1]), None);
+    }
+
+    #[test]
+    fn t14_返品と費用取消は元明細から減額し追跡できる() {
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            adjust("M1-R", "M1", "2026-11-20", 20_000, AdjustmentKind::Return),
+            entry("O1", Some("P-A"), CostType::Outsource, "2026-11-10", 50_000),
+            adjust("O1-C", "O1", "2026-12-01", 50_000, AdjustmentKind::Cancel),
+        ];
+        let p = postings(&entries, &[]).unwrap();
+        let s = summarize(&p, "P-A", &FiscalCalendar::COMPANY_DEFAULT);
+        assert_eq!(s.cumulative.material, 80_000);
+        assert_eq!(s.cumulative.outsource, 0);
+        // 調整は自分の管理計上日の月に入る。
+        let dec = s.by_month[&YearMonth::parse("2026-12").unwrap()];
+        assert_eq!(dec.outsource, -50_000);
+        let h: Vec<&str> = history(&entries, "M1")
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(h, vec!["M1", "M1-R"]);
+    }
+
+    #[test]
+    fn t14_仮計上の確定は置き換えで原価を二重にしない() {
+        let mut prov = entry(
+            "V1",
+            Some("P-A"),
+            CostType::Outsource,
+            "2026-11-30",
+            300_000,
+        );
+        prov.kind = EntryKind::Provisional;
+        let mut conf = entry("V1-F", None, CostType::Outsource, "2026-11-30", 320_000);
+        conf.kind = EntryKind::Confirms {
+            provisional_id: "V1".into(),
+        };
+        let p = postings(&[prov.clone()], &[]).unwrap();
+        assert_eq!(total_of(&p, "P-A"), 300_000);
+        let entries = [prov, conf];
+        let p = postings(&entries, &[]).unwrap();
+        assert_eq!(total_of(&p, "P-A"), 320_000);
+        assert_eq!(p.len(), 1);
+        let h: Vec<&str> = history(&entries, "V1")
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(h, vec!["V1", "V1-F"]);
+    }
+
+    #[test]
+    fn t14_不正な調整と負数入力を拒否() {
+        let mut prov = entry(
+            "V1",
+            Some("P-A"),
+            CostType::Outsource,
+            "2026-11-30",
+            300_000,
+        );
+        prov.kind = EntryKind::Provisional;
+        let mut conf1 = entry("F1", None, CostType::Outsource, "2026-11-30", 300_000);
+        conf1.kind = EntryKind::Confirms {
+            provisional_id: "V1".into(),
+        };
+        let mut conf2 = conf1.clone();
+        conf2.id = "F2".into();
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            adjust("R1", "M1", "2026-11-20", 120_000, AdjustmentKind::Return),
+            adjust("R2", "R1", "2026-11-21", 1_000, AdjustmentKind::Discount),
+            entry("N1", Some("P-A"), CostType::Material, "2026-11-05", -5_000),
+            adjust("R3", "NOPE", "2026-11-21", 1_000, AdjustmentKind::Discount),
+            prov,
+            conf1,
+            conf2,
+            adjust("R4", "V1", "2026-12-01", 1_000, AdjustmentKind::Discount),
+        ];
+        let issues = postings(&entries, &[]).unwrap_err();
+        for expected in [
+            LedgerIssue::AdjustmentExceedsOriginal {
+                target: "M1".into(),
+                excess: 20_000,
+            },
+            LedgerIssue::InvalidTarget {
+                id: "R2".into(),
+                target: "R1".into(),
+            },
+            LedgerIssue::InvalidAmount { id: "N1".into() },
+            LedgerIssue::UnknownReference {
+                id: "R3".into(),
+                target: "NOPE".into(),
+            },
+            LedgerIssue::ProvisionalConfirmedTwice {
+                provisional_id: "V1".into(),
+            },
+            LedgerIssue::InvalidTarget {
+                id: "R4".into(),
+                target: "V1".into(),
+            },
+        ] {
+            assert!(
+                issues.contains(&expected),
+                "{expected:?} が無い: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn 配分済み元費用への調整は配分額で一致させる() {
+        let entries = [
+            entry("E1", None, CostType::Travel, "2026-12-10", 30_000),
+            adjust("E1-D", "E1", "2026-12-15", 2_000, AdjustmentKind::Discount),
+        ];
+        // 調整後28,000円に対して30,000円を配分していれば不整合。
+        assert!(postings(
+            &entries,
+            &[alloc("E1", "P-A", 15_000), alloc("E1", "P-B", 15_000)]
+        )
+        .is_err());
+        let p = postings(
+            &entries,
+            &[alloc("E1", "P-A", 14_000), alloc("E1", "P-B", 14_000)],
+        )
+        .unwrap();
+        assert_eq!(p.iter().map(|x| x.amount).sum::<Yen>(), 28_000);
+    }
+
+    #[test]
+    fn t15_年度またぎ案件の月別期別累計が明細合計と一致() {
+        let entries = [
+            entry("A1", Some("P-A"), CostType::Material, "2027-04-15", 200_000),
+            entry(
+                "A2",
+                Some("P-A"),
+                CostType::Outsource,
+                "2027-05-31",
+                300_000,
+            ),
+            entry(
+                "A3",
+                Some("P-A"),
+                CostType::Outsource,
+                "2027-06-01",
+                150_000,
+            ),
+            entry("A4", Some("P-A"), CostType::Travel, "2027-07-20", 40_000),
+            adjust("A1-R", "A1", "2027-06-10", 10_000, AdjustmentKind::Return),
+            entry("B1", Some("P-B"), CostType::Material, "2027-05-01", 999_999),
+        ];
+        let p = postings(&entries, &[]).unwrap();
+        let s = summarize(&p, "P-A", &FiscalCalendar::COMPANY_DEFAULT);
+        let ym = |x: &str| YearMonth::parse(x).unwrap();
+        assert_eq!(s.by_month[&ym("2027-05")].total(), 300_000);
+        assert_eq!(s.by_month[&ym("2027-06")].total(), 140_000);
+        // 5月末は第13期、6月1日は第14期（管理計上日で判定）。
+        assert_eq!(s.by_period[&13].total(), 500_000);
+        assert_eq!(s.by_period[&14].total(), 180_000);
+        let line_total: Yen = p
+            .iter()
+            .filter(|x| x.project == "P-A")
+            .map(|x| x.amount)
+            .sum();
+        let month_total: Yen = s.by_month.values().map(|c| c.total()).sum();
+        let period_total: Yen = s.by_period.values().map(|c| c.total()).sum();
+        assert_eq!(line_total, 680_000);
+        assert_eq!(month_total, line_total);
+        assert_eq!(period_total, line_total);
+        assert_eq!(s.cumulative.total(), line_total);
+        assert_eq!(s.cumulative.material, 190_000);
+    }
+}

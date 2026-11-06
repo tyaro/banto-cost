@@ -177,17 +177,23 @@ outlook_snapshot_rows(snapshot_id, project_id, pipeline_version_id NULL,
 
 全関数は整数の円・分を受け取り、結果に **確定度**（`complete` / `provisional` / `missing`）と除外の内訳をつけて返す。
 
-| 関数                                   | 内容                                                                   | 受入条件      |
-| -------------------------------------- | ---------------------------------------------------------------------- | ------------- |
-| `labor_cost(minutes, rate)`            | 円単位で四捨五入。単価なしは `missing`                                 | T02, T03, T04 |
-| `actual_direct_cost(project, until)`   | 承認済みの工数原価＋直接費＋配分。未承認・単価なしは件数として別に返す | T04, T10      |
-| `po_remaining(po)`                     | 発注額 − 取消 − 実績化済み                                             | T05           |
-| `forecast(version)`                    | 実績スナップショット＋残（発注残＋その他＋残工数×単価）                | T06, T28      |
-| `forecast_profit(order, cost)`         | 受注額が0円・未確定なら利益率は「算出不可」                            | T06, T08      |
-| `budget_variance` / `forecast_overrun` | プラスが超過                                                           | T28           |
-| `pipeline_totals(versions)`            | 総額・確度加重額。未設定は除外して件数・理由を返す                     | T21, T25      |
-| `monthly_outlook(month)`               | 計上実績＋受注済み予定＋未受注予定×確度。内訳は三つに分けて返す        | T26, T27      |
-| `ratio(profit, sales)`                 | 合計利益÷合計売上、小数第1位。売上0は算出不可                          | 7.4           |
+| 関数                                   | 内容                                                                     | 受入条件      |
+| -------------------------------------- | ------------------------------------------------------------------------ | ------------- |
+| `labor_cost(minutes, rate)`            | 円単位で四捨五入。単価なしは `missing`                                   | T02, T03, T04 |
+| `actual_direct_cost(project, until)`   | 承認済みの工数原価＋直接費＋配分。未承認・単価なしは件数として別に返す   | T04, T10      |
+| `po_remaining(po)`                     | 発注額 − 取消 − 実績化済み                                               | T05           |
+| `forecast(version)`                    | 実績スナップショット＋残（発注残＋その他＋残工数×単価）                  | T06, T28      |
+| `forecast_profit(order, cost)`         | 受注額が0円・未確定なら利益率は「算出不可」                              | T06, T08      |
+| `budget_variance` / `forecast_overrun` | プラスが超過                                                             | T28           |
+| `pipeline_totals(versions)`            | 総額・確度加重額。未設定は除外して件数・理由を返す                       | T21, T25      |
+| `monthly_outlook(month)`               | 計上実績＋受注済み予定＋未受注予定×確度。内訳は三つに分けて返す          | T27           |
+| `ratio(profit, sales)`                 | 合計利益÷合計売上、小数第1位。売上0は算出不可                            | 7.4           |
+| `ledger::postings(entries, allocs)`    | 調整・仮計上確定・配分を検査して計上行にする。配分元は配分先だけに計上   | T10, T14      |
+| `ledger::summarize(postings, project)` | 管理計上日で月別・期別・累計に集計（合計は明細合計に一致）               | T15           |
+| `ledger::split_by_weights(amount, w)`  | 按分。端数は最大剰余法で配り、合計を元の金額に一致させる                 | T10           |
+| `OrderedRevenue::check()`              | 未計上残と売上予定（未消込）の一致、消し込み超過、受注超過の検出         | T26, 5.5      |
+| `closeout::check_closeout(state, w)`   | 精算完了の阻害項目。残額だけ理由・承認つきで解消でき、金額が変われば無効 | T17           |
+| `calc_basis::impact(values, new, use)` | 基準追加時の影響案件・上書きで影響しない案件・承認待ち件数・訂正候補     | T32, T33      |
 
 利益率は分母0のとき `None` を返し、画面は「算出不可」と表示する。四捨五入の規則は明細ごと（7.4）に固定し、集計時に再計算しない。
 
