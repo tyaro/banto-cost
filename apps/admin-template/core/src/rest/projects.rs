@@ -26,6 +26,10 @@
 //! | outlook / snapshot view | scope `amount_projects` |
 //! | snapshots list | `ViewMasters` |
 //! | snapshot create | `ViewAllReports` |
+//! | company calc basis | `ViewCalcBasis` |
+//! | company calc basis add / preview | `EditCalcBasis` (the item's change right) |
+//! | project calc basis | `ViewProjectAmounts` |
+//! | project override add / preview | `OverrideCalcBasis` |
 //!
 //! Self-approval: banto-cost is run by one person in a small company
 //! (user decision 2026-11-06), so the order-change decision allows it
@@ -47,6 +51,10 @@ use banto_core::BantoError;
 use banto_server::AuthenticatedSession;
 use std::str::FromStr;
 
+use crate::calc_basis::{
+    audit_detail, CalcBasisService, CalcValueInput, CalcValueRow, CompanyBasis, ImpactPreview,
+    ProjectBasis,
+};
 use crate::customers::{Customer, CustomerInput, CustomersService};
 use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use crate::orders::{
@@ -64,6 +72,7 @@ struct BusinessState {
     projects: ProjectsService,
     pipeline: PipelineService,
     orders: OrdersService,
+    calc_basis: CalcBasisService,
     authz: AuthzService,
     users: UsersService,
     audit: AuditLogService,
@@ -642,6 +651,143 @@ async fn outlook_snapshot_create(
     Ok(Json(snapshot))
 }
 
+// --- calc basis (P4a) -------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct OnQuery {
+    on: String,
+}
+
+/// `EditCalcBasis` for the item the request names.
+async fn company_basis_guard(
+    state: &BusinessState,
+    session: &AuthenticatedSession,
+    input: &CalcValueInput,
+) -> Result<Option<i64>, BantoError> {
+    let item = state.calc_basis.item_for(input).await?;
+    let (_, user_id) = state
+        .guard(
+            session,
+            Operation::EditCalcBasis {
+                capability: item.capability()?,
+            },
+            "calc_basis",
+        )
+        .await?;
+    Ok(user_id)
+}
+
+/// `OverrideCalcBasis` on the project for the item the request names.
+async fn project_basis_guard(
+    state: &BusinessState,
+    session: &AuthenticatedSession,
+    project_id: i64,
+    input: &CalcValueInput,
+) -> Result<Option<i64>, BantoError> {
+    let item = state.calc_basis.item_for(input).await?;
+    let (_, user_id) = state
+        .guard(
+            session,
+            Operation::OverrideCalcBasis {
+                project_id,
+                capability: item.capability()?,
+                managers_allowed: item.managers_may_override,
+            },
+            "calc_basis",
+        )
+        .await?;
+    Ok(user_id)
+}
+
+async fn calc_basis_get(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Query(query): Query<OnQuery>,
+) -> Result<Json<CompanyBasis>, ApiError> {
+    state
+        .guard(&session, Operation::ViewCalcBasis, "calc_basis")
+        .await?;
+    Ok(Json(state.calc_basis.company(&query.on).await?))
+}
+
+async fn calc_basis_preview(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Json(input): Json<CalcValueInput>,
+) -> Result<Json<ImpactPreview>, ApiError> {
+    company_basis_guard(&state, &session, &input).await?;
+    Ok(Json(state.calc_basis.preview(None, input).await?))
+}
+
+async fn calc_basis_add(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Json(input): Json<CalcValueInput>,
+) -> Result<Json<CalcValueRow>, ApiError> {
+    let user_id = company_basis_guard(&state, &session, &input).await?;
+    let row = state.calc_basis.add(None, input, user_id).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "create",
+        "calc_basis",
+        Some(&row.id.to_string()),
+        Some(audit_detail(&row)),
+    )
+    .await;
+    Ok(Json(row))
+}
+
+async fn project_basis_get(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(id): Path<i64>,
+    Query(query): Query<OnQuery>,
+) -> Result<Json<ProjectBasis>, ApiError> {
+    state
+        .guard(
+            &session,
+            Operation::ViewProjectAmounts { project_id: id },
+            "calc_basis",
+        )
+        .await?;
+    Ok(Json(state.calc_basis.project(id, &query.on).await?))
+}
+
+async fn project_basis_preview(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(id): Path<i64>,
+    Json(input): Json<CalcValueInput>,
+) -> Result<Json<ImpactPreview>, ApiError> {
+    project_basis_guard(&state, &session, id, &input).await?;
+    Ok(Json(state.calc_basis.preview(Some(id), input).await?))
+}
+
+async fn project_basis_add(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<CalcValueInput>,
+) -> Result<Json<CalcValueRow>, ApiError> {
+    let user_id = project_basis_guard(&state, &session, id, &input).await?;
+    let row = state.calc_basis.add(Some(id), input, user_id).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "override",
+        "calc_basis",
+        Some(&row.id.to_string()),
+        Some(audit_detail(&row)),
+    )
+    .await;
+    Ok(Json(row))
+}
+
 /// The services the business routers need, bundled so `api_router` passes one value.
 #[derive(Clone)]
 pub(super) struct BusinessServices {
@@ -649,6 +795,7 @@ pub(super) struct BusinessServices {
     pub projects: ProjectsService,
     pub pipeline: PipelineService,
     pub orders: OrdersService,
+    pub calc_basis: CalcBasisService,
     pub authz: AuthzService,
     pub users: UsersService,
 }
@@ -659,6 +806,7 @@ fn state(services: BusinessServices, audit: AuditLogService, auth: AuthState) ->
         projects: services.projects,
         pipeline: services.pipeline,
         orders: services.orders,
+        calc_basis: services.calc_basis,
         authz: services.authz,
         users: services.users,
         audit,
@@ -686,6 +834,13 @@ pub(super) fn business_read_router(
         .route("/api/outlook", get(outlook_get))
         .route("/api/outlook/snapshots", get(outlook_snapshots_list))
         .route("/api/outlook/snapshots/{id}", get(outlook_snapshot_get))
+        .route("/api/calc-basis", get(calc_basis_get))
+        .route("/api/calc-basis/preview", post(calc_basis_preview))
+        .route("/api/projects/{id}/calc-basis", get(project_basis_get))
+        .route(
+            "/api/projects/{id}/calc-basis/preview",
+            post(project_basis_preview),
+        )
         .with_state(state(services, audit, auth.clone()))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
@@ -731,6 +886,8 @@ pub(super) fn business_write_router(
             post(recognition_cancel),
         )
         .route("/api/outlook/snapshots", post(outlook_snapshot_create))
+        .route("/api/calc-basis", post(calc_basis_add))
+        .route("/api/projects/{id}/calc-basis", post(project_basis_add))
         .with_state(state(services, audit.clone(), auth.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {

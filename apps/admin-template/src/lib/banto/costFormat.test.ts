@@ -6,11 +6,14 @@
 import { describe, expect, it } from 'vitest';
 import * as m from '#lib/paraglide/messages.js';
 import {
+	calcItemLabel,
+	formatCalcValue,
 	formatPct,
 	formatSignedYen,
 	formatYen,
 	issueLabel,
 	statusLabel,
+	todayIso,
 	unmatchedFieldErrors
 } from './costFormat';
 import { isOrderedStatus, projectFormSchema, SETTABLE_STATUSES } from './resources/projects';
@@ -83,5 +86,31 @@ describe('projectFormSchema', () => {
 		const customer = picked.fields.find((field) => field.name === 'customerId')!;
 		expect(customer.type).toBe('select');
 		expect(customer.label).toBe(m['projects.fieldCustomer']());
+	});
+});
+
+describe('calc basis display (P4a)', () => {
+	it('shows an unset value as unset, never as 0', () => {
+		expect(formatCalcValue(null, 'yen_per_hour')).toBe(m['cost.unset']());
+		expect(formatCalcValue(5000, 'yen_per_hour')).toBe(
+			m['calcBasis.unit.yenPerHour']({ value: (5000).toLocaleString() })
+		);
+		expect(formatCalcValue(0, 'percent')).toBe('0%');
+	});
+
+	it('shows whole hours next to minutes', () => {
+		expect(formatCalcValue(480, 'minutes')).toBe(
+			m['calcBasis.unit.minutesHours']({ value: (480).toLocaleString(), hours: '8' })
+		);
+		expect(formatCalcValue(15, 'minutes')).toBe(m['calcBasis.unit.minutes']({ value: '15' }));
+	});
+
+	it('labels seeded items and falls back to the stored label', () => {
+		expect(calcItemLabel({ key: 'emp_rate', label: 'x' })).toBe(m['calcBasis.item.empRate']());
+		expect(calcItemLabel({ key: 'added_later', label: '後から追加' })).toBe('後から追加');
+	});
+
+	it('formats the local date as YYYY-MM-DD', () => {
+		expect(todayIso(new Date(2026, 10, 6, 23, 59))).toBe('2026-11-06');
 	});
 });

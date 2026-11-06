@@ -139,6 +139,26 @@ macro_rules! execute {
 
 pub(crate) use {execute, fetch_all, fetch_optional, in_tx, on_pool, scalar};
 
+/// `?` placeholders as the backend wants them (`$1`, `$2`, … on Postgres).
+pub(crate) fn placeholders(dialect: Dialect, s: &str) -> String {
+    match dialect {
+        Dialect::Sqlite => s.to_string(),
+        Dialect::Postgres => {
+            let mut out = String::with_capacity(s.len() + 8);
+            let mut n = 0;
+            for ch in s.chars() {
+                if ch == '?' {
+                    n += 1;
+                    out.push_str(&format!("${n}"));
+                } else {
+                    out.push(ch);
+                }
+            }
+            out
+        }
+    }
+}
+
 // --- wire types ---------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
@@ -695,22 +715,7 @@ impl OrdersService {
 
     /// `?` placeholders as the backend wants them (`$1`, `$2`, … on Postgres).
     pub(crate) fn sql(&self, s: &str) -> String {
-        match self.db.dialect() {
-            Dialect::Sqlite => s.to_string(),
-            Dialect::Postgres => {
-                let mut out = String::with_capacity(s.len() + 8);
-                let mut n = 0;
-                for ch in s.chars() {
-                    if ch == '?' {
-                        n += 1;
-                        out.push_str(&format!("${n}"));
-                    } else {
-                        out.push(ch);
-                    }
-                }
-                out
-            }
-        }
+        placeholders(self.db.dialect(), s)
     }
 
     fn now(&self) -> &'static str {

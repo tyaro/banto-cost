@@ -32,6 +32,7 @@ async fn reset_schema(url: &str) {
         .await
         .expect("connect for schema reset");
     for stmt in [
+        "DROP TABLE IF EXISTS calc_values, calc_items CASCADE",
         "DROP TABLE IF EXISTS outlook_snapshot_rows, outlook_snapshots, revenue_clearings, \
          revenue_recognitions, revenue_plan, order_changes, order_conversions CASCADE",
         "DROP TABLE IF EXISTS pipeline_revenue_plan, pipeline_versions, projects, customers, \
@@ -339,6 +340,50 @@ async fn app_layer_crud_round_trips_on_postgres() {
             (3_000_000, 1_800_000)
         );
         assert_eq!(overview.rows[0].undated_amount, Some(0));
+
+        // banto-cost P4a: the calc basis's Postgres arms (seeded items with
+        // BOOLEAN flags, the COALESCE unique indexes, RETURNING id).
+        use admin_template_core::calc_basis::{AppliedSource, CalcBasisService, CalcValueInput};
+        let basis = CalcBasisService::new(db.clone());
+        let value = |item: &str, from: &str, value: Option<i64>| -> CalcValueInput {
+            serde_json::from_value(serde_json::json!({
+                "itemKey": item, "validFrom": from, "value": value, "reason": "架空の改定"
+            }))
+            .unwrap()
+        };
+        assert_eq!(basis.items().await.unwrap().len(), 12);
+        let v1 = basis
+            .add(
+                None,
+                value("emp_rate", "2026-06-01", Some(5_000)),
+                Some(manager),
+            )
+            .await
+            .expect("company value on Postgres");
+        assert_eq!(v1.version_no, 1);
+        assert!(matches!(
+            basis
+                .add(
+                    None,
+                    value("emp_rate", "2026-06-01", Some(5_100)),
+                    Some(manager)
+                )
+                .await,
+            Err(banto_core::BantoError::Validation { .. })
+        ));
+        basis
+            .add(
+                Some(project.id),
+                value("emp_rate", "2026-12-01", Some(5_500)),
+                Some(manager),
+            )
+            .await
+            .expect("override on Postgres");
+        let applied = basis.project(project.id, "2026-12-01").await.unwrap();
+        assert_eq!(applied.items[0].applied_value, Some(5_500));
+        assert_eq!(applied.items[0].source, AppliedSource::Project);
+        let company = basis.company("2026-12-01").await.unwrap();
+        assert_eq!(company.items[0].overriding_projects, 1);
     }
 }
 
