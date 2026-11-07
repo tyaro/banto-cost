@@ -49,6 +49,8 @@
 	let monday = $state(mondayOf(todayIso()));
 	const dates = $derived(weekDates(monday));
 	let entries = $state<TimeEntry[] | null>(null);
+	/** The Monday `entries` were loaded for; another week's rows are never acted on (PR #16 review). */
+	let loadedFor = $state<string | null>(null);
 	let loadError = $state<unknown>(null);
 	let loadToken = 0;
 	const forbidden = $derived(isForbiddenError(loadError));
@@ -72,11 +74,13 @@
 	async function load() {
 		if (!available) return;
 		const token = ++loadToken;
+		const week = monday;
 		loadError = null;
 		try {
 			const rows = await listOwnEntries(dates[0], dates[6]);
 			if (token !== loadToken) return;
 			entries = rows;
+			loadedFor = week;
 		} catch (err) {
 			if (token !== loadToken) return;
 			loadError = err;
@@ -121,7 +125,7 @@
 	});
 	const weekTotal = $derived((entries ?? []).reduce((sum, e) => sum + e.minutes, 0));
 	const editable = (e: TimeEntry) => e.status === 'draft' || e.status === 'returned';
-	const pendingSubmit = $derived((entries ?? []).filter(editable));
+	const pendingSubmit = $derived(loadedFor === monday ? (entries ?? []).filter(editable) : []);
 	const statusTotals = $derived.by(() => {
 		const totals: Record<string, number> = { draft: 0, returned: 0, submitted: 0, approved: 0 };
 		for (const e of entries ?? []) totals[e.status] = (totals[e.status] ?? 0) + e.minutes;
@@ -151,15 +155,19 @@
 	function moveWeek(days: number | null) {
 		if (!canLeaveForm()) return;
 		closeForm();
-		monday = days === null ? mondayOf(todayIso()) : addDays(monday, days);
+		const next = days === null ? mondayOf(todayIso()) : addDays(monday, days);
+		if (next !== monday) entries = null;
+		monday = next;
 	}
 
 	function onSaved(saved: TimeEntrySaved) {
 		warnings = saved.warnings.map(warningText);
 		notify('success', saved.replayed ? m['time.savedReplayed']() : m['time.saved']());
 		closeForm();
-		if (!dates.includes(saved.entry.workDate)) monday = mondayOf(saved.entry.workDate);
-		else void load();
+		if (!dates.includes(saved.entry.workDate)) {
+			entries = null;
+			monday = mondayOf(saved.entry.workDate);
+		} else void load();
 	}
 
 	function fail(err: unknown) {

@@ -54,9 +54,10 @@ use admin_template_core::settings::{
 use admin_template_core::system_info::SystemInfoService;
 #[cfg(feature = "system-metrics")]
 use admin_template_core::system_metrics::SystemMetricsSampler;
+use admin_template_core::time_access::{approve_op, enter_op as enter_time_op, shown, shown_saved};
 use admin_template_core::time_entries::{
-    enter_op as enter_time_op, DecisionInput, ProjectTimeSummary, TimeEntriesService, TimeEntry,
-    TimeEntryInput, TimeEntrySaved, VersionInput,
+    DecisionInput, ProjectTimeSummary, TimeEntriesService, TimeEntry, TimeEntryInput,
+    TimeEntrySaved, VersionInput,
 };
 use admin_template_core::users::{Role, UserIdentity, UserSummary, UsersService};
 use admin_template_core::work_masters::{
@@ -4120,7 +4121,7 @@ async fn project_calc_basis_add_body(
 // (`admin_template_core::rest::time`): the same role floors, the same
 // `Operation`s through `authorize_audited`, the same audit actions and
 // detail (`TimeEntry::audit_detail`, no rate), and the same masking
-// (`TimeEntry::shown_to`).
+// (`time_access::shown`).
 
 const TIME_RESOURCE: &str = "time_entries";
 
@@ -4251,7 +4252,7 @@ async fn time_entries_list_body(
     let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
     let (subject, user_id) = time_guard(state, &identity, Operation::EnterCommonTime).await?;
     let rows = state.time_entries.list_own(user_id, &from, &to).await?;
-    Ok(rows.into_iter().map(|e| e.shown_to(&subject)).collect())
+    Ok(rows.into_iter().map(|e| shown(&subject, e)).collect())
 }
 
 #[tauri::command]
@@ -4280,7 +4281,7 @@ async fn time_entries_create_body(
         )
         .await;
     }
-    Ok(saved.shown_to(&subject))
+    Ok(shown_saved(&subject, saved))
 }
 
 #[tauri::command]
@@ -4310,7 +4311,7 @@ async fn time_entries_update_body(
         Some(saved.entry.audit_detail()),
     )
     .await;
-    Ok(saved.shown_to(&subject))
+    Ok(shown_saved(&subject, saved))
 }
 
 #[tauri::command]
@@ -4373,7 +4374,7 @@ async fn time_entries_submit_body(
         Some(entry.audit_detail()),
     )
     .await;
-    Ok(entry.shown_to(&subject))
+    Ok(shown(&subject, entry))
 }
 
 #[tauri::command]
@@ -4387,7 +4388,7 @@ async fn time_entries_approvals_body(state: &AppState) -> Result<Vec<TimeEntry>,
     let scope = approval_projects(&subject);
     let common = subject.is_company_member() && subject.has(Capability::FinanceClose);
     let rows = state.time_entries.approvals(&scope, common).await?;
-    Ok(rows.into_iter().map(|e| e.shown_to(&subject)).collect())
+    Ok(rows.into_iter().map(|e| shown(&subject, e)).collect())
 }
 
 #[tauri::command]
@@ -4409,7 +4410,7 @@ async fn time_entries_decide_body(
     let (subject, user_id, allowed) = business_guard_with(
         state,
         &actor,
-        entry.approve_op(),
+        approve_op(&entry),
         admin_template_core::approval::APPROVAL_POLICY,
         TIME_RESOURCE,
     )
@@ -4427,7 +4428,7 @@ async fn time_entries_decide_body(
         Some(detail),
     )
     .await;
-    Ok(entry.shown_to(&subject))
+    Ok(shown(&subject, entry))
 }
 
 #[tauri::command]

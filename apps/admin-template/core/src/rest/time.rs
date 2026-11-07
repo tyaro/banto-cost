@@ -28,9 +28,9 @@ use banto_core::BantoError;
 use banto_server::AuthenticatedSession;
 
 use crate::approval::APPROVAL_POLICY;
+use crate::time_access::{approve_op, enter_op, shown, shown_saved};
 use crate::time_entries::{
-    enter_op, DecisionInput, ProjectTimeSummary, TimeEntry, TimeEntryInput, TimeEntrySaved,
-    VersionInput,
+    DecisionInput, ProjectTimeSummary, TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
 };
 use crate::work_masters::{MasterKind, WorkMaster, WorkMasterInput};
 
@@ -204,9 +204,7 @@ async fn entries_list(
         .time_entries
         .list_own(user_id, &query.from, &query.to)
         .await?;
-    Ok(Json(
-        rows.into_iter().map(|e| e.shown_to(&subject)).collect(),
-    ))
+    Ok(Json(rows.into_iter().map(|e| shown(&subject, e)).collect()))
 }
 
 async fn entries_create(
@@ -229,7 +227,7 @@ async fn entries_create(
         )
         .await;
     }
-    Ok(Json(saved.shown_to(&subject)))
+    Ok(Json(shown_saved(&subject, saved)))
 }
 
 async fn entries_update(
@@ -252,7 +250,7 @@ async fn entries_update(
         Some(saved.entry.audit_detail()),
     )
     .await;
-    Ok(Json(saved.shown_to(&subject)))
+    Ok(Json(shown_saved(&subject, saved)))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -310,7 +308,7 @@ async fn entries_submit(
         Some(entry.audit_detail()),
     )
     .await;
-    Ok(Json(entry.shown_to(&subject)))
+    Ok(Json(shown(&subject, entry)))
 }
 
 async fn approvals_list(
@@ -321,9 +319,7 @@ async fn approvals_list(
     let scope = approval_projects(&subject);
     let common = subject.is_company_member() && subject.has(Capability::FinanceClose);
     let rows = state.time_entries.approvals(&scope, common).await?;
-    Ok(Json(
-        rows.into_iter().map(|e| e.shown_to(&subject)).collect(),
-    ))
+    Ok(Json(rows.into_iter().map(|e| shown(&subject, e)).collect()))
 }
 
 async fn entries_decide(
@@ -335,7 +331,7 @@ async fn entries_decide(
 ) -> Result<Json<TimeEntry>, ApiError> {
     let entry = state.time_entries.get(id).await?;
     let (subject, user_id, allowed) = state
-        .guard_with(&session, entry.approve_op(), APPROVAL_POLICY, RESOURCE)
+        .guard_with(&session, approve_op(&entry), APPROVAL_POLICY, RESOURCE)
         .await?;
     let approve = input.approve;
     let entry = state.time_entries.decide(id, input, user_id).await?;
@@ -351,7 +347,7 @@ async fn entries_decide(
         Some(detail),
     )
     .await;
-    Ok(Json(entry.shown_to(&subject)))
+    Ok(Json(shown(&subject, entry)))
 }
 
 async fn project_time_summary(

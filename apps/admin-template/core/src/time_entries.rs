@@ -23,7 +23,7 @@
 //! of a second one. On Postgres a create/update locks the person's user row
 //! so two concurrent saves cannot both pass the 24-hour check.
 
-use banto_admin_services::authz::{sees_record_costs, Operation, ProjectScope, Subject};
+use banto_admin_services::authz::ProjectScope;
 use banto_core::{BantoError, FieldError};
 use banto_server::ServerEvent;
 use banto_storage::{Db, Dialect};
@@ -75,7 +75,7 @@ pub struct TimeEntry {
     pub decided_at: Option<String>,
     pub return_reason: Option<String>,
     /// The hourly rate fixed at approval. Shown only to `finance.rate`
-    /// holders (the wiring masks it, [`TimeEntry::without_costs`]).
+    /// holders (the wiring masks it through `crate::time_access`).
     pub applied_rate: Option<i64>,
     /// The labor cost fixed at approval (same visibility as the rate).
     pub labor_cost: Option<i64>,
@@ -94,30 +94,6 @@ impl TimeEntry {
         self
     }
 
-    /// The entry as `subject` may see it: the rate and cost only for
-    /// `sees_record_costs`. Both wiring layers return entries through this.
-    pub fn shown_to(self, subject: &Subject) -> Self {
-        if sees_record_costs(subject) {
-            self
-        } else {
-            self.without_costs()
-        }
-    }
-
-    /// The operation that decides this entry: `Approve` on its project, or
-    /// `ApproveCommon` for a common activity (the same on both paths).
-    pub fn approve_op(&self) -> Operation {
-        match self.project_id {
-            Some(project_id) => Operation::Approve {
-                project_id,
-                submitted_by: self.user_id,
-            },
-            None => Operation::ApproveCommon {
-                submitted_by: self.user_id,
-            },
-        }
-    }
-
     /// The audit detail both wiring layers record: date, minutes, target and
     /// status - never the rate or the cost (spec §4 / §11).
     pub fn audit_detail(&self) -> serde_json::Value {
@@ -128,25 +104,6 @@ impl TimeEntry {
             "activityId": self.activity_id,
             "status": self.status,
         })
-    }
-}
-
-/// The operation that lets a person enter hours on a target: `EnterTime` on
-/// the project, or `EnterCommonTime` (also for an input naming neither, which
-/// the service then refuses).
-pub fn enter_op(project_id: Option<i64>) -> Operation {
-    match project_id {
-        Some(project_id) => Operation::EnterTime { project_id },
-        None => Operation::EnterCommonTime,
-    }
-}
-
-impl TimeEntrySaved {
-    pub fn shown_to(self, subject: &Subject) -> Self {
-        Self {
-            entry: self.entry.shown_to(subject),
-            ..self
-        }
     }
 }
 
@@ -652,22 +609,36 @@ impl TimeEntriesService {
         );
         let date = on.to_string();
         let rework = checked.domain.rework.map(Rework::as_str);
-        let result: Result<(i64, Vec<WarningView>), BantoError> = async {
+        let again =
+            self.sql("SELECT id FROM time_entries WHERE user_id = ? AND client_request_id = ?");
+        // `Err(id)` = a concurrent retry with the same request id committed
+        // while this one waited for the lock (PR #16 review): its row is the
+        // answer, and it must not be counted against this day as a second one.
+        let result: Result<Result<(i64, Vec<WarningView>), i64>, BantoError> = async {
             Ok(in_tx!(&self.db, tx => {
                 if let Some(lock) = &lock {
                     let _: Vec<(i64,)> = fetch_all!(&mut *tx, lock, user_id)?;
                 }
-                let rows: Vec<DayRow> = fetch_all!(&mut *tx, day, user_id, &date)?;
-                let warnings = Self::day_check(&checked, rows, unit, standard)?;
-                let id: i64 = scalar!(&mut *tx, insert, &date, user_id, checked.project_id(),
-                    checked.activity_id(), checked.domain.phase, checked.domain.minutes,
-                    &checked.description, rework, &checked.request_id)?;
-                (id, warnings)
+                let first: Option<(i64,)> = match &checked.request_id {
+                    Some(rid) => fetch_optional!(&mut *tx, again, user_id, rid)?,
+                    None => None,
+                };
+                if let Some((existing,)) = first {
+                    Err(existing)
+                } else {
+                    let rows: Vec<DayRow> = fetch_all!(&mut *tx, day, user_id, &date)?;
+                    let warnings = Self::day_check(&checked, rows, unit, standard)?;
+                    let id: i64 = scalar!(&mut *tx, insert, &date, user_id, checked.project_id(),
+                        checked.activity_id(), checked.domain.phase, checked.domain.minutes,
+                        &checked.description, rework, &checked.request_id)?;
+                    Ok((id, warnings))
+                }
             }))
         }
         .await;
         let (id, warnings) = match result {
-            Ok(v) => v,
+            Ok(Ok(v)) => v,
+            Ok(Err(id)) => return self.replayed(id).await,
             // A concurrent retry with the same request id committed first.
             Err(BantoError::Storage(m)) if m.to_lowercase().contains("unique") => {
                 if let Some(rid) = &checked.request_id {
