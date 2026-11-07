@@ -231,6 +231,11 @@ pub enum Operation {
     /// (the project's manager or accounting, `amount.view`, self-approval by
     /// policy). A split cost needs this on each project it lands on.
     ApproveCost { project_id: i64, submitted_by: i64 },
+    /// Adopt a completion forecast draft (完了見込の採用, banto-cost P5,
+    /// spec §6.6: the confirmer): as [`Operation::ApproveBudget`] (the
+    /// project's manager or accounting, `amount.view`, self-adoption by
+    /// policy). `submitted_by` is the person who last saved the draft.
+    AdoptForecast { project_id: i64, submitted_by: i64 },
     /// Register and revise (amount, cancellation) a project's purchase
     /// orders (banto-cost P4d): its manager (`project.manage`) or accounting
     /// (`finance.close`), with `amount.view`.
@@ -292,6 +297,7 @@ impl Operation {
             Operation::ApproveBudget { .. } => "approve_budget",
             Operation::EnterCost { .. } => "enter_cost",
             Operation::ApproveCost { .. } => "approve_cost",
+            Operation::AdoptForecast { .. } => "adopt_forecast",
             Operation::EditPurchaseOrder { .. } => "edit_purchase_order",
             Operation::ApproveCommon { .. } => "approve_common",
             Operation::ViewRates => "view_rates",
@@ -320,6 +326,7 @@ impl Operation {
             | Operation::ApproveBudget { project_id, .. }
             | Operation::EnterCost { project_id }
             | Operation::ApproveCost { project_id, .. }
+            | Operation::AdoptForecast { project_id, .. }
             | Operation::EditPurchaseOrder { project_id }
             | Operation::EditProject { project_id }
             | Operation::EditOrder { project_id }
@@ -445,10 +452,16 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         | Operation::ApproveCost {
             project_id,
             submitted_by,
+        }
+        | Operation::AdoptForecast {
+            project_id,
+            submitted_by,
         } => {
             if matches!(
                 op,
-                Operation::ApproveBudget { .. } | Operation::ApproveCost { .. }
+                Operation::ApproveBudget { .. }
+                    | Operation::ApproveCost { .. }
+                    | Operation::AdoptForecast { .. }
             ) {
                 require(subject, Capability::AmountView)?;
             }
@@ -1297,6 +1310,46 @@ mod tests {
         assert_eq!(
             deny(&none, Operation::EnterCost { project_id: P1 }),
             Denial::MissingCapability(Capability::TimeEntry)
+        );
+    }
+
+    #[test]
+    fn p5_forecast_adoption_is_the_manager_or_accounting_with_amounts() {
+        let pm = subject(
+            41,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P1, MemberKind::Manager)],
+        );
+        let adopt = |project_id, submitted_by| Operation::AdoptForecast {
+            project_id,
+            submitted_by,
+        };
+        allow(&pm, adopt(P1, 40));
+        allow(&pm, Operation::ManageProject { project_id: P1 });
+        assert_eq!(
+            deny(&pm, adopt(P2, 40)),
+            Denial::OutOfProjectScope { project_id: P2 }
+        );
+        assert_eq!(deny(&pm, adopt(P1, 41)), Denial::SelfApproval);
+        let blind = subject(
+            42,
+            &[Capability::ProjectManage],
+            &[(P1, MemberKind::Manager)],
+        );
+        assert_eq!(
+            deny(&blind, adopt(P1, 40)),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        let finance = subject(43, &[Capability::FinanceClose, Capability::AmountView], &[]);
+        allow(&finance, adopt(P2, 40));
+        let worker = subject(
+            44,
+            &[Capability::TimeEntry, Capability::AmountView],
+            &[(P1, MemberKind::Worker)],
+        );
+        assert_eq!(
+            deny(&worker, adopt(P1, 40)),
+            Denial::MissingCapability(Capability::ProjectManage)
         );
     }
 

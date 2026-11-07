@@ -369,6 +369,22 @@ pub struct ProjectCosts {
     pub committed: i64,
 }
 
+/// What a completion forecast takes from the direct costs
+/// ([`DirectCostsService::snapshot`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CostSnapshot {
+    /// Approved actuals booked up to the date, by phase × cost type.
+    pub actual: Vec<(Option<i64>, CostType, i64)>,
+    /// Every approved actual of the project, whatever its date (最新実績).
+    pub latest_total: i64,
+    /// Order remainders at the date, by phase × cost type (発注済み未実績).
+    pub committed: Vec<(Option<i64>, CostType, i64)>,
+    /// Records booked up to the date that are not approved yet.
+    pub pending: i64,
+    /// Approved provisionals booked up to the date and not confirmed.
+    pub provisional: i64,
+}
+
 /// What the budget comparison takes from the direct costs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectActuals {
@@ -1597,6 +1613,75 @@ impl DirectCostsService {
         Ok(ProjectActuals {
             by_key: project_actuals(&postings, &project_id.to_string()),
             complete: pending.count == 0 && provisional.count == 0,
+        })
+    }
+
+    /// What a completion forecast takes from the direct costs as of `until`
+    /// (its base date, spec §6.6): approved actuals booked up to then, each
+    /// order's remainder at that date (orders placed by then; realized by
+    /// records booked by then; the amount and cancellation as they stand),
+    /// and whether records up to then wait for approval or are provisional.
+    /// `postings` is [`Self::postings`] (read once by the caller).
+    pub async fn snapshot(
+        &self,
+        project_id: i64,
+        until: Date,
+        postings: &[Posting],
+    ) -> Result<CostSnapshot, BantoError> {
+        let until_postings: Vec<Posting> = postings
+            .iter()
+            .filter(|p| p.booked_on <= until)
+            .cloned()
+            .collect();
+        let key = project_id.to_string();
+        let orders = self.orders_of(project_id, &until_postings).await?;
+        let mut committed: Vec<(Option<i64>, CostType, i64)> = Vec::new();
+        for o in orders
+            .iter()
+            .filter(|o| Date::parse(&o.ordered_on).is_some_and(|d| d <= until) && o.remaining > 0)
+        {
+            let Some(t) = CostType::parse(&o.cost_type) else {
+                continue;
+            };
+            match committed
+                .iter_mut()
+                .find(|(ph, ct, _)| *ph == o.phase_id && *ct == t)
+            {
+                Some(row) => row.2 += o.remaining,
+                None => committed.push((o.phase_id, t, o.remaining)),
+            }
+        }
+        let on = until.to_string();
+        let pending_sql = self.sql(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM direct_costs \
+             WHERE project_id = ? AND status <> 'approved' AND booked_on <= ?",
+        );
+        let pending_alloc_sql = self.sql(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM cost_allocations a \
+             JOIN direct_costs c ON c.id = a.direct_cost_id \
+             WHERE a.project_id = ? AND c.status <> 'approved' AND c.booked_on <= ?",
+        );
+        let provisional_sql = self.sql(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM direct_costs p WHERE p.project_id = ? \
+             AND p.status = 'approved' AND p.entry_kind = 'provisional' AND p.booked_on <= ? \
+             AND NOT EXISTS (SELECT 1 FROM direct_costs f WHERE f.ref_id = p.id \
+             AND f.entry_kind = 'confirms' AND f.status = 'approved')",
+        );
+        let (a, b, c): (i64, i64, i64) = on_pool!(&self.db, pool => (
+            scalar!(pool, pending_sql, project_id, &on)?,
+            scalar!(pool, pending_alloc_sql, project_id, &on)?,
+            scalar!(pool, provisional_sql, project_id, &on)?,
+        ));
+        Ok(CostSnapshot {
+            actual: project_actuals(&until_postings, &key),
+            latest_total: postings
+                .iter()
+                .filter(|p| p.project == key)
+                .map(|p| p.amount)
+                .sum(),
+            committed,
+            pending: a + b,
+            provisional: c,
         })
     }
 

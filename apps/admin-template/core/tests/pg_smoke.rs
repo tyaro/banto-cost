@@ -571,6 +571,67 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .find(|t| t.cost_type == "outsource")
             .unwrap();
         assert_eq!(outsource.actual, Some(300_000));
+
+        // banto-cost P5: completion forecasts on Postgres (the one-draft
+        // partial index, the snapshot columns' CHECK, the project-row lock of
+        // the adoption, CURRENT_DATE::text, the overall list).
+        use admin_template_core::forecasts::{ForecastDraftInput, ForecastsService};
+        basis
+            .add(
+                None,
+                value("forecast_rate", "2020-01-01", Some(5_000)),
+                Some(manager),
+            )
+            .await
+            .expect("forecast rate on Postgres");
+        let forecasts = ForecastsService::new(db.clone());
+        let draft = forecasts
+            .create_draft(project.id, Some(manager))
+            .await
+            .expect("forecast draft on Postgres")
+            .draft;
+        assert!(
+            forecasts
+                .create_draft(project.id, Some(manager))
+                .await
+                .unwrap()
+                .replayed
+        );
+        let input: ForecastDraftInput = serde_json::from_value(serde_json::json!({
+            "rowVersion": draft.row_version,
+            "baseDate": draft.base_date,
+            "reason": "初回",
+            "lines": [
+                { "phaseId": 1, "costType": "labor", "remainingMinutes": 600 },
+                { "costType": "material", "amount": 100_000 }
+            ]
+        }))
+        .unwrap();
+        let saved = forecasts
+            .update_draft(draft.id, input, Some(manager))
+            .await
+            .expect("save forecast on Postgres");
+        assert_eq!(
+            saved.remaining_total.map(|r| r - saved.committed_total),
+            Some(150_000)
+        );
+        let v1 = forecasts
+            .adopt(&saved, saved.row_version, Some(manager))
+            .await
+            .expect("adopt on Postgres");
+        assert_eq!(v1.version_no, Some(1));
+        assert_eq!(v1.cost_total, saved.cost_total);
+        let o = forecasts.overview(project.id).await.unwrap();
+        assert_eq!(o.history.len(), 1);
+        let portfolio = forecasts
+            .portfolio()
+            .overview(
+                &banto_admin_services::authz::ProjectScope::All,
+                &banto_admin_services::authz::ProjectScope::All,
+            )
+            .await
+            .expect("portfolio on Postgres");
+        assert!(portfolio.rows.iter().any(|r| r.project_id == project.id));
     }
 }
 

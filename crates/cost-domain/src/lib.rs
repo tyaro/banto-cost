@@ -7,6 +7,7 @@
 //! 仕様は `docs/project/spec.md`、設計は `docs/project/design.md` を参照。
 //! 各モジュールのテスト名にある `t02` などは仕様書の受入条件番号。
 
+pub mod alerts;
 pub mod budget;
 pub mod calc_basis;
 pub mod calendar;
