@@ -1267,7 +1267,7 @@
   "costs.entriesNote": "Approved records are never rewritten: corrections are returns, cancellations, discounts or invoice confirmations kept next to the original.",
   "costs.refOf": "Of record #{id}",
   "costs.adjustedBy": "Adjusted −{amount}",
-  "costs.splitOf": "Split from {amount}",
+  "costs.splitOf": "This project's share of a split cost",
   "costs.approvalsTitle": "Direct costs to approve",
   "costs.approvalsEmpty": "No direct costs waiting for approval.",
   "budget.directActualComplete": "Direct-cost actuals final",

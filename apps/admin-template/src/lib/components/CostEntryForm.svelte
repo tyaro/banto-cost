@@ -457,7 +457,7 @@
 				{#if errors.vendorId}<span class="error">{errors.vendorId}</span>{/if}
 			</label>
 			<label class="field check">
-				<input type="checkbox" bind:checked={provisional} disabled={split} />
+				<input type="checkbox" bind:checked={provisional} disabled={split || start !== null} />
 				<span>{m['costs.fieldProvisional']()}</span>
 			</label>
 		{/if}

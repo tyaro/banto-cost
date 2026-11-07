@@ -662,7 +662,7 @@
 									<td class="num">
 										{formatSignedYen(share(c))}
 										{#if c.projectId === null}
-											<div class="sub">{m['costs.splitOf']({ amount: formatYen(c.amount) })}</div>
+											<div class="sub">{m['costs.splitOf']()}</div>
 										{/if}
 									</td>
 									<td>{c.userName}</td>

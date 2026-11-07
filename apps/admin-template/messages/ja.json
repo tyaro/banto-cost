@@ -1269,7 +1269,7 @@
   "costs.entriesNote": "承認済みの明細は書き換えません。訂正は返品・取消・値引き、仮計上は請求確定の明細で行い、元の明細と並べて残します。",
   "costs.refOf": "元の明細 #{id}",
   "costs.adjustedBy": "調整済み −{amount}",
-  "costs.splitOf": "配分元 {amount}",
+  "costs.splitOf": "複数案件に配分した明細（この案件の分）",
   "costs.approvalsTitle": "直接費の承認",
   "costs.approvalsEmpty": "承認待ちの直接費はありません。"
 }

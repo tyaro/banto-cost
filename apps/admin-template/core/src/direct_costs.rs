@@ -351,7 +351,7 @@ pub struct MonthCosts {
 pub struct ProjectCosts {
     pub project_id: i64,
     /// Every record that lands on the project (any status), newest first. A
-    /// split record shows its whole amount and its allocations.
+    /// split record shows only this project's share and allocation line.
     pub entries: Vec<DirectCost>,
     /// Approved actuals of the project by cost type (case累計).
     pub totals: Vec<CostTypeAmount>,
@@ -1615,7 +1615,14 @@ impl DirectCostsService {
         ));
         let rows: Vec<CostRow> =
             on_pool!(&self.db, pool => fetch_all!(pool, sql, project_id, project_id))?;
-        let entries = self.views(rows).await?;
+        // A split record shows only this project's share: its other projects
+        // and its whole amount are not this project's to see (T12).
+        let entries: Vec<DirectCost> = self
+            .views(rows)
+            .await?
+            .into_iter()
+            .map(|c| scoped_to(c, project_id))
+            .collect();
         let postings = self.postings().await?;
         let key = project_id.to_string();
         let summary = ledger::summarize(&postings, &key, &FiscalCalendar::COMPANY_DEFAULT);
@@ -2018,6 +2025,18 @@ impl DirectCostsService {
     }
 }
 
+/// A split record as one of its projects sees it: only that project's
+/// allocation line, its share as the amount, no tax-inclusive total.
+fn scoped_to(mut cost: DirectCost, project_id: i64) -> DirectCost {
+    if cost.project_id.is_some() {
+        return cost;
+    }
+    cost.allocations.retain(|a| a.project_id == project_id);
+    cost.amount = cost.allocations.iter().map(|a| a.amount).sum();
+    cost.amount_in_tax = None;
+    cost
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2265,6 +2284,12 @@ pub(crate) mod tests {
         let pb = svc.project_costs(b).await.unwrap();
         assert_eq!((pa.total, pb.total), (18_000, 12_000));
         assert_eq!(pa.entries.len(), 1);
+        // Each project sees only its own share of the split (T12).
+        assert_eq!(pa.entries[0].amount, 18_000);
+        assert_eq!(pa.entries[0].allocations.len(), 1);
+        assert_eq!(pa.entries[0].allocations[0].project_id, a);
+        assert_eq!(pb.entries[0].amount, 12_000);
+        assert!(pb.entries[0].allocations.iter().all(|x| x.project_id == b));
         assert_eq!(pb.entries[0].id, c.id);
         // The postings total the original once.
         let all: i64 = svc.postings().await.unwrap().iter().map(|p| p.amount).sum();
