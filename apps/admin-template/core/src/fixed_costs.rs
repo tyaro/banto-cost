@@ -520,13 +520,24 @@ impl FixedCostsService {
         let booked_on = m.last_day().to_string();
         let gate = MonthGate::new(self.db.dialect());
         let settled = settled_check_sql(self.db.dialect());
-        let contracts_sql = self.sql(
+        // The contracts are read inside the transaction and, on Postgres,
+        // locked (`FOR UPDATE OF c`), so a concurrent `update` waits for the
+        // posting and then sees it (its re-check refuses a term that drops
+        // the month), or commits first and the posting takes its new term,
+        // project and amount (PR #27 review). On SQLite the month gate's
+        // write already holds the database's write lock.
+        let lock = match self.db.dialect() {
+            banto_storage::Dialect::Sqlite => "",
+            banto_storage::Dialect::Postgres => " FOR UPDATE OF c",
+        };
+        let contracts_sql = self.sql(&format!(
             "SELECT c.id, c.project_id, p.status, c.from_month, c.to_month, c.cost_type, \
              c.monthly_amount, \
              CAST((SELECT COUNT(*) FROM fixed_cost_postings f WHERE f.contract_id = c.id \
                AND f.month = ? AND f.status = 'approved') AS BIGINT) \
-             FROM fixed_cost_contracts c JOIN projects p ON p.id = c.project_id ORDER BY c.id",
-        );
+             FROM fixed_cost_contracts c JOIN projects p ON p.id = c.project_id \
+             ORDER BY c.id{lock}"
+        ));
         let insert = self.sql(
             "INSERT INTO fixed_cost_postings (contract_id, month, project_id, cost_type, amount, \
              booked_on, status, posted_by) VALUES (?, ?, ?, ?, ?, ?, 'approved', ?) \
@@ -590,11 +601,12 @@ impl FixedCostsService {
                 format!("{MAX_TEXT_LEN}文字以内で入力してください"),
             ));
         }
-        let read =
-            self.sql("SELECT month, booked_on, status FROM fixed_cost_postings WHERE id = ?");
-        let row: Option<(String, String, String)> =
+        let read = self.sql(
+            "SELECT month, booked_on, status, project_id FROM fixed_cost_postings WHERE id = ?",
+        );
+        let row: Option<(String, String, String, i64)> =
             on_pool!(&self.db, pool => fetch_optional!(pool, read, posting_id))?;
-        let Some((month, booked_on, status)) = row else {
+        let Some((month, booked_on, status, project_id)) = row else {
             return Err(BantoError::NotFound {
                 resource: "fixed_cost_posting".into(),
                 id: posting_id.to_string(),
@@ -604,6 +616,7 @@ impl FixedCostsService {
             return Err(one("status", "この計上は取消済みです"));
         }
         let gate = MonthGate::new(self.db.dialect());
+        let settled = settled_check_sql(self.db.dialect());
         let set = self.sql(&format!(
             "UPDATE fixed_cost_postings SET status = 'cancelled', cancel_reason = ?, \
              cancelled_by = ?, cancelled_at = {} WHERE id = ? AND status = 'approved'",
@@ -614,6 +627,9 @@ impl FixedCostsService {
                 return Err(stale_version_error());
             }
             refuse_closed!(&mut *tx, gate, &booked_on, "month");
+            // A settled project's costs stay as settled (PR #27 review).
+            refuse_settled!(&mut *tx, settled, project_id, "status",
+                "精算完了の案件の計上は取り消せません。精算完了を取り消してから行ってください");
         });
         self.notify();
         self.month(&month).await
@@ -963,5 +979,26 @@ mod tests {
         assert_eq!(view.due_count, 1);
         let again = svc.post_month("2026-08", Some(1)).await.unwrap();
         assert_eq!(again.posted, 1);
+
+        // A settled project's posting cannot be cancelled (its costs stay
+        // as settled), even while the month is open.
+        let sql = placeholders(
+            db.dialect(),
+            "UPDATE projects SET status = 'settled' WHERE id = ?",
+        );
+        on_pool!(&db, pool => execute!(pool, sql, p)).unwrap();
+        let posting = again.view.lines[0].posting.clone().unwrap();
+        let err = svc
+            .cancel(
+                posting.id,
+                CancelInput {
+                    reason: "誤り".into(),
+                },
+                Some(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(fields(err), vec!["status"]);
+        assert_eq!(svc.month("2026-08").await.unwrap().posted_total, 100_000);
     }
 }
