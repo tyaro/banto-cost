@@ -9,9 +9,10 @@
 	 *
 	 * Reading and the CSV need `ViewProjectAmounts`; a `forbidden` read hides
 	 * the section. The CSV is built by the server (conditions, output time,
-	 * formulas neutralized) and saved here.
+	 * formulas neutralized) and saved here. The table re-reads on the change
+	 * events of revenue (`projects`), direct costs and hours.
 	 */
-	import { isProviderError, notify } from '@banto/admin-core';
+	import { isProviderError, notify, onInvalidate } from '@banto/admin-core';
 	import { LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
@@ -57,6 +58,17 @@
 
 	$effect(() => {
 		void load(projectId);
+	});
+
+	// Revenue (orders emit `projects`), direct costs and hours recorded or
+	// cancelled elsewhere on the page or by someone else change the figures:
+	// re-read on the server's change events so the table matches the CSV.
+	$effect(() => {
+		const id = projectId;
+		const offs = ['projects', 'direct_costs', 'time_entries'].map((resource) =>
+			onInvalidate(resource, () => void load(id))
+		);
+		return () => offs.forEach((off) => off());
 	});
 
 	async function exportCsv() {
