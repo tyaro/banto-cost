@@ -5155,6 +5155,8 @@ pub fn run() {
                     pipeline.clone(),
                     orders.clone(),
                     calc_basis.clone(),
+                    work_masters.clone(),
+                    time_entries.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
                     events.clone(),
