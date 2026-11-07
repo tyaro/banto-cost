@@ -334,7 +334,7 @@ async fn entries_decide(
         .guard_with(&session, approve_op(&entry), APPROVAL_POLICY, RESOURCE)
         .await?;
     let approve = input.approve;
-    let entry = state.time_entries.decide(id, input, user_id).await?;
+    let entry = state.time_entries.decide(&entry, input, user_id).await?;
     let mut detail = entry.audit_detail();
     detail["selfApproval"] = json!(allowed.self_approval_exception);
     record_write(

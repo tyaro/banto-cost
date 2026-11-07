@@ -27,21 +27,38 @@
 	const available = isPipelineAvailable();
 	let summary = $state<ProjectTimeSummary | null>(null);
 	let loadError = $state<unknown>(null);
+	// Only the latest read may land: moving to another project while a read
+	// is in flight must not show the previous project's hours here.
+	let loadToken = 0;
 
-	async function load() {
+	async function load(id: number) {
 		if (!available) return;
+		const token = ++loadToken;
 		loadError = null;
+		summary = null;
 		try {
-			summary = await getProjectTimeSummary(projectId);
+			const got = await getProjectTimeSummary(id);
+			if (token !== loadToken) return;
+			summary = got;
 		} catch (err) {
+			if (token !== loadToken) return;
 			loadError = err;
 			summary = null;
 		}
 	}
 
 	$effect(() => {
-		void load();
+		void load(projectId);
 	});
+
+	/**
+	 * Approved hours exist but none has a fixed cost (all 原価未確定): show
+	 * "—", never ¥0 (T04). No approved hours at all is a true ¥0.
+	 */
+	function costText(s: ProjectTimeSummary['total']): string {
+		const costed = s.approved.count - s.missingRate.count;
+		return costed === 0 && s.missingRate.count > 0 ? '—' : formatYen(s.laborCost);
+	}
 </script>
 
 <section class="time" aria-labelledby="time-heading">
@@ -54,7 +71,11 @@
 		<p class="error" role="alert">
 			{isProviderError(loadError) ? loadError.message : String(loadError)}
 		</p>
-		<button type="button" class="banto-btn banto-btn--secondary" onclick={() => void load()}>
+		<button
+			type="button"
+			class="banto-btn banto-btn--secondary"
+			onclick={() => void load(projectId)}
+		>
 			{m['common.reload']()}
 		</button>
 	{:else if !summary}
@@ -68,7 +89,7 @@
 			</div>
 			<div>
 				<span class="label">{m['time.laborCost']()}</span>
-				<span class="value">{formatYen(t.laborCost)}</span>
+				<span class="value">{costText(t)}</span>
 			</div>
 			<StatusBadge
 				variant={t.complete ? 'success' : 'warning'}
@@ -124,7 +145,7 @@
 							<tr>
 								<td>{p.phaseName ?? ''}</td>
 								<td class="num">{formatMinutes(p.summary.approved.minutes)}</td>
-								<td class="num">{formatYen(p.summary.laborCost)}</td>
+								<td class="num">{costText(p.summary)}</td>
 								<td class="num">{formatMinutes(p.summary.missingRate.minutes)}</td>
 								<td class="num">
 									{formatMinutes(p.summary.submitted.minutes + p.summary.unsubmitted.minutes)}

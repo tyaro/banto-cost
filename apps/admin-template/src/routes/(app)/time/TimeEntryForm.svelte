@@ -70,6 +70,10 @@
 	let errors = $state<Record<string, string>>({});
 	let busy = $state(false);
 	let requestId = newRequestId();
+	// The values last sent under `requestId`. A retry of the same values keeps
+	// the id (the server returns the row it may already have saved); changed
+	// values get a new id, so a correction is never answered with the old row.
+	let requestFor: string | null = null;
 
 	function snapshot(): string {
 		return JSON.stringify([
@@ -135,12 +139,16 @@
 		if (busy) return;
 		const values = build();
 		if (!values) return;
+		const sending = JSON.stringify(values);
+		if (requestFor !== null && requestFor !== sending) requestId = newRequestId();
+		requestFor = sending;
 		busy = true;
 		try {
 			const saved = start
 				? await saveEntry(start.id, { ...values, rowVersion: start.rowVersion })
 				: await saveEntry(null, { ...values, clientRequestId: requestId });
 			requestId = newRequestId();
+			requestFor = null;
 			onSaved(saved);
 		} catch (err) {
 			if (isProviderError(err) && err.body.kind === 'validation') {

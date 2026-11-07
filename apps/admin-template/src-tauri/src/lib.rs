@@ -4416,7 +4416,7 @@ async fn time_entries_decide_body(
     )
     .await?;
     let approve = values.approve;
-    let entry = state.time_entries.decide(id, values, user_id).await?;
+    let entry = state.time_entries.decide(&entry, values, user_id).await?;
     let mut detail = entry.audit_detail();
     detail["selfApproval"] = serde_json::json!(allowed.self_approval_exception);
     record_ok(

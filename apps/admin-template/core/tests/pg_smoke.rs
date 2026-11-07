@@ -32,6 +32,7 @@ async fn reset_schema(url: &str) {
         .await
         .expect("connect for schema reset");
     for stmt in [
+        "DROP TABLE IF EXISTS time_entries, phases, common_activities CASCADE",
         "DROP TABLE IF EXISTS calc_values, calc_items CASCADE",
         "DROP TABLE IF EXISTS outlook_snapshot_rows, outlook_snapshots, revenue_clearings, \
          revenue_recognitions, revenue_plan, order_changes, order_conversions CASCADE",
@@ -417,7 +418,7 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .expect("submit on Postgres");
         let approved = time
             .decide(
-                saved.entry.id,
+                &submitted,
                 DecisionInput {
                     row_version: submitted.row_version,
                     approve: true,

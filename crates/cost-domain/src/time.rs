@@ -164,7 +164,10 @@ pub fn check_entry(
         .iter()
         .filter(|e| e.work_date == input.work_date)
         .collect();
-    let total = same_day.iter().map(|e| e.minutes).sum::<Minutes>() + input.minutes.max(0);
+    // 極端に大きな入力でも溢れて検査をすり抜けないよう、飽和加算で合計する。
+    let total = same_day
+        .iter()
+        .fold(input.minutes.max(0), |acc, e| acc.saturating_add(e.minutes));
     if total > DAY_LIMIT {
         issues.push(TimeIssue::DayOverLimit { total });
     }
@@ -488,6 +491,17 @@ mod tests {
         assert_eq!(
             check_entry(&input(120), &other_day, Some(15), None),
             Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn 極端に大きな作業時間でも合計が溢れず拒否() {
+        let others = [day(1, 60, 2)];
+        assert_eq!(
+            check_entry(&input(Minutes::MAX), &others, None, None),
+            Err(vec![TimeIssue::DayOverLimit {
+                total: Minutes::MAX
+            }])
         );
     }
 

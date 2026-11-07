@@ -423,7 +423,14 @@ impl TimeEntriesService {
     }
 
     /// Check the input against the masters, the project and the calc basis.
-    async fn check(&self, input: &TimeEntryInput) -> Result<Checked, BantoError> {
+    /// `kept` is the entry being corrected: a phase or common activity it
+    /// already carries stays usable after being discontinued (使用中止 only
+    /// closes it for new entries), so a returned entry can still be fixed.
+    async fn check(
+        &self,
+        input: &TimeEntryInput,
+        kept: Option<&TimeEntry>,
+    ) -> Result<Checked, BantoError> {
         let mut errors = Vec::new();
         let work_date = Date::parse(input.work_date.trim());
         if work_date.is_none() {
@@ -475,13 +482,17 @@ impl TimeEntriesService {
         let masters = WorkMastersService::new(self.db.clone());
         match target {
             Target::Project(pid) => self.require_open_project(pid).await?,
+            Target::Activity(aid) if kept.is_some_and(|k| k.activity_id == Some(aid)) => {}
             Target::Activity(aid) => {
                 masters
                     .require_active(MasterKind::Activities, aid, "activityId")
                     .await?;
             }
         }
-        if let Some(phase) = input.phase_id {
+        if let Some(phase) = input
+            .phase_id
+            .filter(|p| !kept.is_some_and(|k| k.phase_id == Some(*p)))
+        {
             masters
                 .require_active(MasterKind::Phases, phase, "phaseId")
                 .await?;
@@ -586,7 +597,7 @@ impl TimeEntriesService {
         user_id: i64,
         input: TimeEntryInput,
     ) -> Result<TimeEntrySaved, BantoError> {
-        let checked = self.check(&input).await?;
+        let checked = self.check(&input, None).await?;
         if let Some(rid) = &checked.request_id {
             if let Some(id) = self.by_request(user_id, rid).await? {
                 return self.replayed(id).await;
@@ -693,7 +704,7 @@ impl TimeEntriesService {
         input: TimeEntryInput,
     ) -> Result<TimeEntrySaved, BantoError> {
         let entry = self.editable(user_id, id, input.row_version).await?;
-        let checked = self.check(&input).await?;
+        let checked = self.check(&input, Some(&entry)).await?;
         let on = checked.domain.work_date;
         let unit = self.company_value(UNIT_ITEM, None, on).await?;
         let standard = self
@@ -757,9 +768,12 @@ impl TimeEntriesService {
         id: i64,
         row_version: i64,
     ) -> Result<TimeEntry, BantoError> {
-        self.editable(user_id, id, Some(row_version)).await?;
+        let entry = self.editable(user_id, id, Some(row_version)).await?;
+        if let Some(pid) = entry.project_id {
+            self.require_open_project(pid).await?;
+        }
         let sql = self.sql(&format!(
-            "UPDATE time_entries SET status = 'submitted', submitted_at = {now}, \
+            "UPDATE time_entries SET status = 'submitted',submitted_at = {now}, \
              row_version = row_version + 1, updated_at = {now} \
              WHERE id = ? AND row_version = ? AND status IN ('draft','returned')",
             now = self.now()
@@ -772,18 +786,32 @@ impl TimeEntriesService {
     }
 
     /// Approve (fixing the rate and labor cost) or return a submitted entry.
+    ///
+    /// `authorized` is the row the caller was authorized against (its project
+    /// decides who may approve). The decision applies only to that exact
+    /// version, so a row changed after authorization (e.g. moved to another
+    /// project and resubmitted) is refused as stale instead of being decided
+    /// under the earlier project's permission.
     pub async fn decide(
         &self,
-        id: i64,
+        authorized: &TimeEntry,
         input: DecisionInput,
         actor_user_id: Option<i64>,
     ) -> Result<TimeEntry, BantoError> {
+        let id = authorized.id;
         let entry = self.get(id).await?;
         if !TimeStatus::parse(&entry.status).is_some_and(TimeStatus::is_decidable) {
             return Err(status_error("申請中の工数だけを承認・差戻しできます"));
         }
-        if input.row_version != entry.row_version {
+        if input.row_version != authorized.row_version
+            || entry.row_version != authorized.row_version
+        {
             return Err(stale_version_error());
+        }
+        if input.approve {
+            if let Some(pid) = entry.project_id {
+                self.require_open_project(pid).await?;
+            }
         }
         let changed = if input.approve {
             let work_date = parse_date("workDate", &entry.work_date)?;
@@ -988,7 +1016,7 @@ mod tests {
         let e = svc.get(id).await.unwrap();
         let e = svc.submit(user, id, e.row_version).await.unwrap();
         svc.decide(
-            id,
+            &e,
             DecisionInput {
                 row_version: e.row_version,
                 approve: true,
@@ -1229,7 +1257,7 @@ mod tests {
         assert!(
             matches!(
                 svc.decide(
-                    e.id,
+                    &e,
                     DecisionInput {
                         row_version: e.row_version,
                         approve: true,
@@ -1252,7 +1280,7 @@ mod tests {
         assert_eq!(
             fields(
                 svc.decide(
-                    e.id,
+                    &s,
                     DecisionInput {
                         row_version: s.row_version,
                         approve: false,
@@ -1267,7 +1295,7 @@ mod tests {
         );
         let r = svc
             .decide(
-                e.id,
+                &s,
                 DecisionInput {
                     row_version: s.row_version,
                     approve: false,
@@ -1377,5 +1405,131 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    async fn deactivate_phase(db: &Db, id: i64) {
+        let masters = WorkMastersService::new(db.clone());
+        let phase = masters.get(MasterKind::Phases, id).await.unwrap();
+        masters
+            .update(
+                MasterKind::Phases,
+                id,
+                crate::work_masters::WorkMasterInput {
+                    name: phase.name,
+                    sort_order: phase.sort_order,
+                    active: false,
+                    row_version: Some(phase.row_version),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    fn decision(row_version: i64, approve: bool) -> DecisionInput {
+        DecisionInput {
+            row_version,
+            approve,
+            reason: (!approve).then(|| "直してください".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn returned_entry_keeps_its_discontinued_phase() {
+        let (db, svc, p) = setup().await;
+        let e = svc
+            .create(2, entry(p, "2026-11-09", 60))
+            .await
+            .unwrap()
+            .entry;
+        let s = svc.submit(2, e.id, e.row_version).await.unwrap();
+        let r = svc
+            .decide(&s, decision(s.row_version, false), Some(1))
+            .await;
+        let r = r.unwrap();
+        deactivate_phase(&db, 1).await;
+        // The phase it already has stays usable for the correction…
+        let mut fix = entry(p, "2026-11-09", 90);
+        fix.row_version = Some(r.row_version);
+        let fixed = svc.update(2, e.id, fix).await.unwrap().entry;
+        assert_eq!((fixed.phase_id, fixed.minutes), (Some(1), 90));
+        // …but is not offered to a new entry.
+        assert_eq!(
+            fields(svc.create(2, entry(p, "2026-11-10", 60)).await.unwrap_err()),
+            ["phaseId"]
+        );
+    }
+
+    #[tokio::test]
+    async fn settled_project_refuses_submit_and_approval() {
+        let (db, svc, p) = setup().await;
+        let draft = svc
+            .create(2, entry(p, "2026-11-09", 60))
+            .await
+            .unwrap()
+            .entry;
+        let other = svc
+            .create(2, entry(p, "2026-11-10", 60))
+            .await
+            .unwrap()
+            .entry;
+        let s = svc.submit(2, other.id, other.row_version).await.unwrap();
+        let sql = svc.sql("UPDATE projects SET status = 'settled' WHERE id = ?");
+        on_pool!(&db, pool => execute!(pool, sql, p)).unwrap();
+        assert_eq!(
+            fields(
+                svc.submit(2, draft.id, draft.row_version)
+                    .await
+                    .unwrap_err()
+            ),
+            ["projectId"]
+        );
+        assert_eq!(
+            fields(
+                svc.decide(&s, decision(s.row_version, true), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["projectId"]
+        );
+        // Returning it is still possible, so the owner learns why.
+        let r = svc
+            .decide(&s, decision(s.row_version, false), Some(1))
+            .await;
+        assert_eq!(r.unwrap().status, "returned");
+    }
+
+    #[tokio::test]
+    async fn decision_applies_only_to_the_authorized_version() {
+        let (_db, svc, p) = setup().await;
+        let e = svc
+            .create(2, entry(p, "2026-11-09", 60))
+            .await
+            .unwrap()
+            .entry;
+        let authorized = svc.submit(2, e.id, e.row_version).await.unwrap();
+        // Meanwhile it is returned, corrected and submitted again.
+        let r = svc
+            .decide(
+                &authorized,
+                decision(authorized.row_version, false),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let mut fix = entry(p, "2026-11-09", 30);
+        fix.row_version = Some(r.row_version);
+        let fixed = svc.update(2, e.id, fix).await.unwrap().entry;
+        let current = svc.submit(2, e.id, fixed.row_version).await.unwrap();
+        // A decision checked against the earlier row is stale even when the
+        // client sends the current version.
+        assert_eq!(
+            fields(
+                svc.decide(&authorized, decision(current.row_version, true), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["rowVersion"]
+        );
+        assert_eq!(svc.get(e.id).await.unwrap().status, "submitted");
     }
 }
