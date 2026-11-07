@@ -1457,6 +1457,6 @@
   "closing.colReason": "Reason",
   "closing.monthsTitle": "Closed and reopened months",
   "closing.noMonths": "No month has been closed.",
-  "closing.forbidden": "The monthly close needs accounting's permission (finance.close).",
+  "closing.forbidden": "The monthly close needs accounting (finance.close) and amount viewing (amount.view).",
   "closing.invalidMonth": "Enter the month as YYYY-MM"
 }

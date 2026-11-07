@@ -5,7 +5,7 @@
  * `closing_reopen`, apps/admin-template/src-tauri/src/lib.rs) and a LAN
  * browser calls `fetch()` against the twin routes
  * (apps/admin-template/core/src/rest/closing.rs). Every route is
- * accounting's (`finance.close`).
+ * accounting's (`CloseMonth`: `finance.close` + `amount.view`).
  *
  * Amounts are integer yen. Demo mode has no backend: every export rejects
  * like pipelineAdmin.ts.

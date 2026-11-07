@@ -290,7 +290,7 @@ P6b は 月次締め（P6b-1、この節）→ 締め後の訂正（P6b-2、`cor
 - 月の数値：労務費と単価未設定の件数は承認済み工数（案件の分）、売上は取り消していない売上計上、直接費は「その月末までの台帳 − 前月末までの台帳」（`Ledger::until`）。後の月で確定した仮計上は、仮計上の月の数値を変えない。
 - 同時更新（T13）：書き込む側は、自分の書き込みの後に同じトランザクションで月の `open` 行を作り（`ON CONFLICT DO NOTHING`）読み直す（Postgres は `FOR SHARE`）。締める側は同じ行を作って `FOR UPDATE` で押さえ、`row_version` を比べ、未承認件数を数え直し、数値を求める前に読んだ月の工数・直接費・売上計上の指紋（件数・版番号の合計・最大ID）と比べる。違えば古い版として拒否する。
 - 計算基準の影響の事前確認（10.5）：締め済みの月の工数を `closed` として数え、「締め済みの月を含む」を出す。
-- 認可：一覧・月の表示・締め・再開はすべて `FinanceClose`（REST は読み取りが任意のロール、書き込みが editor 以上）。REST は `GET /api/closing`・`GET /api/closing/{month}`・`POST /api/closing/{month}/close`・`…/reopen`、Tauri は `closing_months`・`closing_get`・`closing_close`・`closing_reopen`。監査には月と操作だけを残し、再開の理由（自由記述）と数値は残さない。
+- 認可：一覧・月の表示・締め・再開はすべて操作 `CloseMonth`（`finance.close`＋`amount.view`。月の全社の労務費・直接費・売上を示すため、PR #23 レビュー）。REST は読み取りが任意のロール、書き込みが editor 以上。REST は `GET /api/closing`・`GET /api/closing/{month}`・`POST /api/closing/{month}/close`・`…/reopen`、Tauri は `closing_months`・`closing_get`・`closing_close`・`closing_reopen`。監査には月と操作だけを残し、再開の理由（自由記述）と数値は残さない。
 - 画面：`/closing`（月次締め）。対象月（既定は前月）・状態・締めの確認（未承認の件数、注意）・この月の数値・締めるボタン、締め済みなら再開の理由と再開ボタン、締めた時点との違い、締め・再開の履歴、締め済み・再開中の月の一覧。
 
 ## 4 計算モジュール（`cost-domain`）

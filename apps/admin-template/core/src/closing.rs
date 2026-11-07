@@ -3,7 +3,7 @@
 //!
 //! The rules live in `cost_domain::closing`; this module loads and stores
 //! the months, the close/reopen history and the figures saved at each close.
-//! Authorization (`Operation::FinanceClose` for every route) and audit are
+//! Authorization (`Operation::CloseMonth`: `finance.close` + `amount.view`, for every route) and audit are
 //! the REST/Tauri wiring's.
 //!
 //! A closed month refuses every write of hours, direct costs and revenue

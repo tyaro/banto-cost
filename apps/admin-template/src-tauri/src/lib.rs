@@ -5004,7 +5004,7 @@ async fn project_closeout_reopen_body(
 // Twins of `/api/closing`, `/api/closing/{month}`, `/api/closing/{month}/close`
 // and `/api/closing/{month}/reopen` (`admin_template_core::rest::closing`):
 // the same role floors (any role for reads, editor for writes), the same
-// `Operation::FinanceClose` through `authorize_audited`, the same audit
+// `Operation::CloseMonth` through `authorize_audited`, the same audit
 // actions and detail (`closing::audit_detail`: the month and the action, no
 // reason, no figures).
 
@@ -5013,7 +5013,7 @@ async fn closing_months(
     state: State<'_, AppState>,
 ) -> Result<Vec<admin_template_core::closing::MonthRow>, BantoError> {
     let identity = require_role(&state, Role::Viewer, CLOSING_RESOURCE).await?;
-    business_guard(&state, &identity, Operation::FinanceClose, CLOSING_RESOURCE).await?;
+    business_guard(&state, &identity, Operation::CloseMonth, CLOSING_RESOURCE).await?;
     state.forecasts.closing().months().await
 }
 
@@ -5023,7 +5023,7 @@ async fn closing_get(
     month: String,
 ) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
     let identity = require_role(&state, Role::Viewer, CLOSING_RESOURCE).await?;
-    business_guard(&state, &identity, Operation::FinanceClose, CLOSING_RESOURCE).await?;
+    business_guard(&state, &identity, Operation::CloseMonth, CLOSING_RESOURCE).await?;
     state.forecasts.closing().get(&month).await
 }
 
@@ -5035,7 +5035,7 @@ async fn closing_close(
 ) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
     let (_, user_id) =
-        business_guard(&state, &actor, Operation::FinanceClose, CLOSING_RESOURCE).await?;
+        business_guard(&state, &actor, Operation::CloseMonth, CLOSING_RESOURCE).await?;
     let closed = state
         .forecasts
         .closing()
@@ -5064,7 +5064,7 @@ async fn closing_reopen(
 ) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
     let (_, user_id) =
-        business_guard(&state, &actor, Operation::FinanceClose, CLOSING_RESOURCE).await?;
+        business_guard(&state, &actor, Operation::CloseMonth, CLOSING_RESOURCE).await?;
     let reopened = state
         .forecasts
         .closing()

@@ -5342,6 +5342,20 @@ async fn t17_t12_rest_closeout_is_settled_and_reopened_by_the_manager_or_account
 #[tokio::test]
 async fn t11_rest_closing_is_accounting_only_and_refuses_hours_in_a_closed_month() {
     let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    // finance.close without amount.view: the month's figures stay hidden.
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["time.entry", "finance.close"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/closing/2026-10", &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     grant(&router, &admin, EDITOR_ID, json!(["time.entry"])).await;
     grant(&router, &admin, 1, json!(["finance.close", "amount.view"])).await;
 

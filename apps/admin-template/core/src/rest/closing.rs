@@ -6,8 +6,8 @@
 //!
 //! | Route | Decision |
 //! |-------|----------|
-//! | the list, a month (check, history, figures) | `FinanceClose` |
-//! | close / reopen (with a reason) | `FinanceClose` |
+//! | the list, a month (check, history, figures) | `CloseMonth` (`finance.close` + `amount.view`) |
+//! | close / reopen (with a reason) | `CloseMonth` |
 //!
 //! Audit details carry the month and the action only
 //! (`closing::audit_detail`): never the reopening's reason or the figures.
@@ -25,7 +25,7 @@ async fn closing_months(
     Extension(session): Extension<AuthenticatedSession>,
 ) -> Result<Json<Vec<MonthRow>>, ApiError> {
     state
-        .guard(&session, Operation::FinanceClose, RESOURCE)
+        .guard(&session, Operation::CloseMonth, RESOURCE)
         .await?;
     Ok(Json(state.forecasts.closing().months().await?))
 }
@@ -36,7 +36,7 @@ async fn closing_get(
     Path(month): Path<String>,
 ) -> Result<Json<MonthClosing>, ApiError> {
     state
-        .guard(&session, Operation::FinanceClose, RESOURCE)
+        .guard(&session, Operation::CloseMonth, RESOURCE)
         .await?;
     Ok(Json(state.forecasts.closing().get(&month).await?))
 }
@@ -49,7 +49,7 @@ async fn closing_close(
     Json(input): Json<CloseInput>,
 ) -> Result<Json<MonthClosing>, ApiError> {
     let (_, user_id) = state
-        .guard(&session, Operation::FinanceClose, RESOURCE)
+        .guard(&session, Operation::CloseMonth, RESOURCE)
         .await?;
     let closed = state
         .forecasts
@@ -77,7 +77,7 @@ async fn closing_reopen(
     Json(input): Json<ReopenInput>,
 ) -> Result<Json<MonthClosing>, ApiError> {
     let (_, user_id) = state
-        .guard(&session, Operation::FinanceClose, RESOURCE)
+        .guard(&session, Operation::CloseMonth, RESOURCE)
         .await?;
     let reopened = state
         .forecasts

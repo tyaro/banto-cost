@@ -1457,6 +1457,6 @@
   "closing.colReason": "理由",
   "closing.monthsTitle": "締め済み・再開中の月",
   "closing.noMonths": "締めた月はありません。",
-  "closing.forbidden": "月次締めは経理（finance.close）の権限が要ります。",
+  "closing.forbidden": "月次締めには経理（finance.close）と金額閲覧（amount.view）の権限が要ります。",
   "closing.invalidMonth": "月は YYYY-MM で入力してください"
 }
