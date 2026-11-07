@@ -11505,6 +11505,10 @@ mod tests {
         )
         .await
         .expect("grant editor");
+        // Granted while the admin session is current (capabilities are admin-only).
+        authz_capabilities_set_body(&state, admin.id, &[Capability::FinanceClose])
+            .await
+            .expect("grant admin");
 
         state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
         let project = projects_create_body(&state, project_input("P-T11", editor.id))
@@ -11567,9 +11571,6 @@ mod tests {
             .is_empty());
 
         // Someone else's entry is not found; accounting decides the correction.
-        authz_capabilities_set_body(&state, admin.id, &[Capability::FinanceClose])
-            .await
-            .expect("grant admin");
         state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
         assert!(matches!(
             time_entries_correct_body(&state, id, correction("x")).await,
