@@ -21,6 +21,12 @@
 //! (count, version sum, last id) taken before the check. Any write between
 //! the check and the commit makes it a stale-version error, so the check
 //! always describes what is settled.
+//!
+//! Reopening (精算完了の取消, 2026-11-07 decision): a settled project goes back
+//! to 作業完了 with a reason, by the same people who settle
+//! (`Operation::SettleProject`). The settlement and its waivers stay; one
+//! `closeout_reopenings` row records the cancellation, and settling again
+//! writes a new settlement (the check runs anew, waivers included).
 
 use banto_core::{BantoError, FieldError};
 use banto_server::ServerEvent;
@@ -111,6 +117,18 @@ pub struct WaiverView {
     pub order_description: Option<String>,
 }
 
+/// The cancellation of a settlement (精算完了の取消).
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ReopeningView {
+    #[serde(skip)]
+    pub closeout_id: i64,
+    pub reopened_on: String,
+    pub reason: String,
+    pub reopened_by_name: Option<String>,
+    pub created_at: String,
+}
+
 /// A recorded settlement.
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -123,6 +141,9 @@ pub struct CloseoutRecord {
     pub created_at: String,
     #[sqlx(skip)]
     pub waivers: Vec<WaiverView>,
+    /// Set once the settlement was cancelled (the project was reopened).
+    #[sqlx(skip)]
+    pub reopening: Option<ReopeningView>,
 }
 
 /// 案件詳細 → 精算完了. Amounts: `ViewProjectAmounts`.
@@ -138,7 +159,10 @@ pub struct CloseoutCheck {
     /// What blocks the settlement now (empty when nothing is left; also
     /// empty before the work is done and once settled).
     pub blockers: Vec<BlockerView>,
+    /// The settlement in force (the project is settled).
     pub closeout: Option<CloseoutRecord>,
+    /// Settlements cancelled since, newest first (each with its `reopening`).
+    pub history: Vec<CloseoutRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -160,6 +184,26 @@ pub struct SettleInput {
     pub note: Option<String>,
     #[serde(default)]
     pub waivers: Vec<WaiverInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReopenInput {
+    pub row_version: i64,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// What both wiring layers record for a reopening: the project, the
+/// settlement cancelled (its business date) and the reopening's date — not
+/// the reason (free text) nor any amount.
+pub fn reopen_audit_detail(project_id: i64, record: &CloseoutRecord) -> serde_json::Value {
+    serde_json::json!({
+        "projectId": project_id,
+        "closeoutId": record.id,
+        "settledOn": record.settled_on,
+        "reopenedOn": record.reopening.as_ref().map(|r| r.reopened_on.clone()),
+    })
 }
 
 /// What both wiring layers record: the project, the status before and the
@@ -431,34 +475,53 @@ impl CloseoutsService {
         Ok((state, labels))
     }
 
-    async fn record(&self, project_id: i64) -> Result<Option<CloseoutRecord>, BantoError> {
+    /// Every settlement of the project, newest first, with its waivers and
+    /// its cancellation if any.
+    async fn records(&self, project_id: i64) -> Result<Vec<CloseoutRecord>, BantoError> {
         let sql = self.sql(
             "SELECT c.id, c.previous_status, c.settled_on, c.note, \
              u.display_name AS settled_by_name, c.created_at FROM project_closeouts c \
-             LEFT JOIN users u ON u.id = c.settled_by WHERE c.project_id = ?",
+             LEFT JOIN users u ON u.id = c.settled_by WHERE c.project_id = ? ORDER BY c.id DESC",
         );
         let waivers_sql = self.sql(
             "SELECT w.closeout_id, w.kind, w.purchase_order_id, w.amount, w.reason, \
              u.display_name AS approved_by_name, po.ordered_on, v.name AS vendor_name, \
              po.description AS order_description FROM closeout_waivers w \
+             JOIN project_closeouts c ON c.id = w.closeout_id \
              LEFT JOIN users u ON u.id = w.approved_by \
              LEFT JOIN purchase_orders po ON po.id = w.purchase_order_id \
-             LEFT JOIN vendors v ON v.id = po.vendor_id WHERE w.closeout_id = ? ORDER BY w.id",
+             LEFT JOIN vendors v ON v.id = po.vendor_id WHERE c.project_id = ? ORDER BY w.id",
         );
-        let row: Option<CloseoutRecord> =
-            on_pool!(&self.db, pool => fetch_optional!(pool, sql, project_id))?;
-        let Some(mut row) = row else {
-            return Ok(None);
-        };
-        let mut waivers: Vec<WaiverView> =
-            on_pool!(&self.db, pool => fetch_all!(pool, waivers_sql, row.id))?;
-        for w in &mut waivers {
-            w.purchase_order_label = w.ordered_on.as_deref().map(|on| {
-                order_label(on, w.vendor_name.as_deref(), w.order_description.as_deref())
-            });
+        let reopenings_sql = self.sql(
+            "SELECT r.closeout_id, r.reopened_on, r.reason, u.display_name AS reopened_by_name, \
+             r.created_at FROM closeout_reopenings r \
+             JOIN project_closeouts c ON c.id = r.closeout_id \
+             LEFT JOIN users u ON u.id = r.reopened_by WHERE c.project_id = ?",
+        );
+        let (mut rows, waivers, reopenings): (
+            Vec<CloseoutRecord>,
+            Vec<WaiverView>,
+            Vec<ReopeningView>,
+        ) = on_pool!(&self.db, pool => (
+            fetch_all!(pool, sql, project_id)?,
+            fetch_all!(pool, waivers_sql, project_id)?,
+            fetch_all!(pool, reopenings_sql, project_id)?,
+        ));
+        for row in &mut rows {
+            row.waivers = waivers
+                .iter()
+                .filter(|w| w.closeout_id == row.id)
+                .cloned()
+                .map(|mut w| {
+                    w.purchase_order_label = w.ordered_on.as_deref().map(|on| {
+                        order_label(on, w.vendor_name.as_deref(), w.order_description.as_deref())
+                    });
+                    w
+                })
+                .collect();
+            row.reopening = reopenings.iter().find(|r| r.closeout_id == row.id).cloned();
         }
-        row.waivers = waivers;
-        Ok(Some(row))
+        Ok(rows)
     }
 
     /// What blocks the settlement of the project now, and the settlement
@@ -474,13 +537,26 @@ impl CloseoutsService {
         } else {
             Vec::new()
         };
+        // The settlement in force is the latest one not cancelled, while the
+        // project is settled; the cancelled ones are the history.
+        let (history, current): (Vec<_>, Vec<_>) = self
+            .records(project_id)
+            .await?
+            .into_iter()
+            .partition(|r| r.reopening.is_some());
+        let closeout = if status == ProjectStatus::Settled {
+            current.into_iter().next()
+        } else {
+            None
+        };
         Ok(CloseoutCheck {
             project_id,
             status: row.status,
             row_version: row.row_version,
             settleable: status.settleable(),
             blockers,
-            closeout: self.record(project_id).await?,
+            closeout,
+            history,
         })
     }
 
@@ -619,6 +695,71 @@ impl CloseoutsService {
         crate::events::notify_changed(&self.events, "projects");
         self.check(project_id).await
     }
+
+    /// Cancel the settlement of a settled project (精算完了の取消): back to
+    /// 作業完了 (`ProjectStatus::reopened_to`) with a reason. The settlement
+    /// and its waivers are kept; `actor_user_id` is recorded as who reopened.
+    pub async fn reopen(
+        &self,
+        project_id: i64,
+        input: ReopenInput,
+        actor_user_id: Option<i64>,
+    ) -> Result<CloseoutCheck, BantoError> {
+        let (status, row) = self.project(project_id).await?;
+        let Some(to) = status.reopened_to() else {
+            return Err(status_error("精算完了の案件だけを取り消せます"));
+        };
+        if input.row_version != row.row_version {
+            return Err(stale_version_error());
+        }
+        let reason = input.reason.trim().to_string();
+        if reason.is_empty() {
+            return Err(BantoError::Validation {
+                field_errors: vec![field_error("reason", "取り消す理由を入力してください")],
+            });
+        }
+        if reason.chars().count() > MAX_TEXT_LEN {
+            return Err(BantoError::Validation {
+                field_errors: vec![field_error(
+                    "reason",
+                    format!("{MAX_TEXT_LEN}文字以内で入力してください"),
+                )],
+            });
+        }
+        let today = ForecastsService::new(self.db.clone()).today().await?;
+        let reopened_on = today.to_string();
+        let now = now_expr(self.db.dialect());
+        let guard = self.sql(&format!(
+            "UPDATE projects SET status = ?, row_version = row_version + 1, \
+             revenue_version = revenue_version + 1, updated_at = {now} \
+             WHERE id = ? AND row_version = ? AND status = 'settled'"
+        ));
+        // The settlement in force: the latest one, not cancelled yet.
+        let latest = self.sql(
+            "SELECT c.id FROM project_closeouts c WHERE c.project_id = ? AND NOT EXISTS \
+             (SELECT 1 FROM closeout_reopenings r WHERE r.closeout_id = c.id) \
+             ORDER BY c.id DESC LIMIT 1",
+        );
+        let insert = self.sql(
+            "INSERT INTO closeout_reopenings (closeout_id, reopened_on, reason, reopened_by) \
+             VALUES (?, ?, ?, ?)",
+        );
+        let to = to.as_str();
+        in_tx!(&self.db, tx => {
+            if execute!(&mut *tx, guard, to, project_id, row.row_version)? == 0 {
+                return Err(stale_version_error());
+            }
+            let closeout: Option<(i64,)> = fetch_optional!(&mut *tx, latest, project_id)?;
+            let Some((closeout_id,)) = closeout else {
+                return Err(BantoError::Other(
+                    "精算完了の記録が見つかりません".into(),
+                ));
+            };
+            execute!(&mut *tx, insert, closeout_id, &reopened_on, &reason, actor_user_id)?;
+        });
+        crate::events::notify_changed(&self.events, "projects");
+        self.check(project_id).await
+    }
 }
 
 #[cfg(test)]
@@ -742,6 +883,91 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(fields(err)[0].0, "status");
+    }
+
+    #[tokio::test]
+    async fn t17_a_settlement_is_reopened_with_a_reason_and_settled_again() {
+        let db = fixture().await;
+        let p = ordered_project(&db, "P-S05", vec![line(Some("2026-12"), 1_000)]).await;
+        set_status(&db, p, "work_done").await;
+        let svc = CloseoutsService::new(db.clone());
+        let reopen = |row_version: i64, reason: &str| ReopenInput {
+            row_version,
+            reason: reason.into(),
+        };
+        // Only a settled project is reopened.
+        let c = svc.check(p).await.unwrap();
+        let err = svc
+            .reopen(p, reopen(c.row_version, "誤り"), Some(1))
+            .await
+            .unwrap_err();
+        assert_eq!(fields(err)[0].0, "status");
+
+        let waiver = |c: &CloseoutCheck, reason: &str| {
+            settle_input(c.row_version, vec![waive(&c.blockers[0], reason)])
+        };
+        let first = svc.settle(p, waiver(&c, "値引き"), Some(1)).await.unwrap();
+        assert_eq!(first.status, "settled");
+        assert!(first.history.is_empty());
+        // A reason is required; a stale row version is refused.
+        let err = svc
+            .reopen(p, reopen(first.row_version, "  "), Some(1))
+            .await
+            .unwrap_err();
+        assert_eq!(fields(err)[0].0, "reason");
+        assert!(matches!(
+            svc.reopen(p, reopen(first.row_version - 1, "誤り"), Some(1))
+                .await,
+            Err(BantoError::Validation { .. })
+        ));
+
+        let reopened = svc
+            .reopen(p, reopen(first.row_version, "売上の計上漏れ"), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(reopened.status, "work_done");
+        assert!(reopened.settleable);
+        assert!(reopened.closeout.is_none());
+        // The settlement and its waiver are kept, with the cancellation.
+        assert_eq!(reopened.history.len(), 1);
+        let past = &reopened.history[0];
+        assert_eq!(past.waivers.len(), 1);
+        assert_eq!(past.waivers[0].reason, "値引き");
+        let r = past.reopening.as_ref().unwrap();
+        assert_eq!(r.reason, "売上の計上漏れ");
+        assert!(r.reopened_by_name.is_some());
+        let detail = reopen_audit_detail(p, past);
+        assert_eq!(detail["closeoutId"], past.id);
+        assert!(!detail.to_string().contains("売上の計上漏れ"), "no reason");
+        // The check runs anew: the remaining revenue blocks it again.
+        assert_eq!(reopened.blockers[0].kind, "revenue_difference");
+        // Records are taken again while it is open.
+        OrdersService::new(db.clone())
+            .recognize(
+                p,
+                RecognitionInput {
+                    recognized_on: "2026-12-10".into(),
+                    amount: 1_000,
+                    basis: None,
+                    clears: None,
+                },
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let c = svc.check(p).await.unwrap();
+        assert!(c.blockers.is_empty());
+        let second = svc
+            .settle(p, settle_input(c.row_version, vec![]), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(second.status, "settled");
+        let rec = second.closeout.unwrap();
+        assert_ne!(rec.id, past.id);
+        assert!(rec.waivers.is_empty());
+        assert!(rec.reopening.is_none());
+        assert_eq!(second.history.len(), 1);
+        assert_eq!(second.history[0].id, past.id);
     }
 
     #[tokio::test]

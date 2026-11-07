@@ -675,6 +675,24 @@ async fn app_layer_crud_round_trips_on_postgres() {
         let settled = settled.expect("settle on Postgres");
         assert_eq!(settled.status, "settled");
         assert!(settled.closeout.is_some());
+
+        // 精算完了の取消 (the dropped unique index, the reopening row and
+        // its join, LIMIT in the latest-settlement read).
+        let reopened = closeouts
+            .reopen(
+                project.id,
+                admin_template_core::closeouts::ReopenInput {
+                    row_version: settled.row_version,
+                    reason: "計上漏れ".into(),
+                },
+                Some(manager),
+            )
+            .await
+            .expect("reopen on Postgres");
+        assert_eq!(reopened.status, "work_done");
+        assert!(reopened.closeout.is_none());
+        assert_eq!(reopened.history.len(), 1);
+        assert!(reopened.history[0].reopening.is_some());
     }
 }
 

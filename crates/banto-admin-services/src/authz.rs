@@ -240,10 +240,12 @@ pub enum Operation {
     /// orders (banto-cost P4d): its manager (`project.manage`) or accounting
     /// (`finance.close`), with `amount.view`.
     EditPurchaseOrder { project_id: i64 },
-    /// Settle a work-done project (精算完了, banto-cost P6a, spec §5.1, T17):
-    /// accounting (`finance.close`) on any project, with `amount.view` - the
-    /// check lists the remaining amounts and waiving them presupposes seeing
-    /// them. The settler is the approver of the waivers (one operator).
+    /// Settle a work-done project (精算完了, banto-cost P6a, spec §5.1, T17),
+    /// or reopen a settled one (精算完了の取消, back to 作業完了): the
+    /// project's manager (`project.manage`) or accounting (`finance.close`,
+    /// any project), with `amount.view` - the check lists the remaining
+    /// amounts and waiving them presupposes seeing them. The settler is the
+    /// approver of the waivers (one operator; 2026-11-07 decision).
     SettleProject { project_id: i64 },
     /// Approve hours someone submitted against a common activity. No project
     /// manager owns them, so accounting (`finance.close`) decides (P4b).
@@ -512,9 +514,16 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
                 return Err(Denial::MissingCapability(Capability::ProjectManage));
             }
         }
-        Operation::SettleProject { .. } => {
-            require(subject, Capability::FinanceClose)?;
+        Operation::SettleProject { project_id } => {
             require(subject, Capability::AmountView)?;
+            let as_manager = subject.has(Capability::ProjectManage)
+                && subject.holds(project_id, MemberKind::Manager);
+            if !as_manager && !subject.has(Capability::FinanceClose) {
+                if subject.has(Capability::ProjectManage) {
+                    return Err(Denial::OutOfProjectScope { project_id });
+                }
+                return Err(Denial::MissingCapability(Capability::FinanceClose));
+            }
         }
         Operation::EnterCommonTime => require(subject, Capability::TimeEntry)?,
         Operation::ApproveCommon { submitted_by } => {
@@ -1325,24 +1334,50 @@ mod tests {
     }
 
     #[test]
-    fn p6a_t17_settling_is_accounting_with_amounts() {
+    fn p6a_t17_settling_is_the_manager_or_accounting_with_amounts() {
         let settle = Operation::SettleProject { project_id: P1 };
         let finance = subject(50, &[Capability::FinanceClose, Capability::AmountView], &[]);
         allow(&finance, settle);
         allow(&finance, Operation::SettleProject { project_id: P2 });
-        // The project's manager does not settle.
+        // The project's manager settles (and reopens) their own project only.
         let pm = subject(
             51,
             &[Capability::ProjectManage, Capability::AmountView],
             &[(P1, MemberKind::Manager)],
         );
+        allow(&pm, settle);
         assert_eq!(
-            deny(&pm, settle),
+            deny(&pm, Operation::SettleProject { project_id: P2 }),
+            Denial::OutOfProjectScope { project_id: P2 }
+        );
+        // A member who is not the manager, or a manager without the capability.
+        let member = subject(
+            53,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P1, MemberKind::Worker)],
+        );
+        assert_eq!(
+            deny(&member, settle),
+            Denial::OutOfProjectScope { project_id: P1 }
+        );
+        let plain = subject(54, &[Capability::AmountView], &[(P1, MemberKind::Manager)]);
+        assert_eq!(
+            deny(&plain, settle),
             Denial::MissingCapability(Capability::FinanceClose)
         );
+        // Amounts are required either way.
         let blind = subject(52, &[Capability::FinanceClose], &[]);
         assert_eq!(
             deny(&blind, settle),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        let blind_pm = subject(
+            55,
+            &[Capability::ProjectManage],
+            &[(P1, MemberKind::Manager)],
+        );
+        assert_eq!(
+            deny(&blind_pm, settle),
             Denial::MissingCapability(Capability::AmountView)
         );
         assert_eq!(settle.project_id(), Some(P1));

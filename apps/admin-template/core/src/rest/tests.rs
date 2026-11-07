@@ -5125,7 +5125,7 @@ async fn t06_t12_t30_rest_forecast_versions_and_portfolio_follow_scope() {
 }
 
 #[tokio::test]
-async fn t17_t12_rest_closeout_is_checked_with_amounts_and_settled_by_accounting() {
+async fn t17_t12_rest_closeout_is_settled_and_reopened_by_the_manager_or_accounting() {
     let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
     grant(
         &router,
@@ -5209,19 +5209,17 @@ async fn t17_t12_rest_closeout_is_checked_with_amounts_and_settled_by_accounting
         "note": "精算",
         "waivers": [{ "kind": "revenue_difference", "amount": 1_000_000, "reason": "値引きで合意" }]
     });
-    // Neither the manager nor the viewer role settles (accounting does).
-    for token in [&editor, &viewer] {
-        let response = router
-            .clone()
-            .oneshot(post_json_auth(
-                &format!("/api/projects/{id}/closeout"),
-                token,
-                waiver.clone(),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
+    // The viewer role does not settle.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/closeout"),
+            &viewer,
+            waiver.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert!(denied_entries(&audit)
         .await
         .iter()
@@ -5237,11 +5235,12 @@ async fn t17_t12_rest_closeout_is_checked_with_amounts_and_settled_by_accounting
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // The project's manager settles it (2026-11-07 decision).
     let response = router
         .clone()
         .oneshot(post_json_auth(
             &format!("/api/projects/{id}/closeout"),
-            &admin,
+            &editor,
             waiver.clone(),
         ))
         .await
@@ -5250,6 +5249,58 @@ async fn t17_t12_rest_closeout_is_checked_with_amounts_and_settled_by_accounting
     let settled = body_json(response).await;
     assert_eq!(settled["status"], "settled");
     assert_eq!(settled["closeout"]["waivers"][0]["reason"], "値引きで合意");
+
+    // Reopening: the viewer may not; a reason is required; the manager may.
+    let reopen_url = format!("/api/projects/{id}/closeout/reopen");
+    let reopen = json!({ "rowVersion": settled["rowVersion"], "reason": "売上の計上漏れ" });
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(&reopen_url, &viewer, reopen.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &reopen_url,
+            &editor,
+            json!({ "rowVersion": settled["rowVersion"], "reason": "" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(&reopen_url, &editor, reopen.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let reopened = body_json(response).await;
+    assert_eq!(reopened["status"], "work_done");
+    assert!(reopened["closeout"].is_null());
+    assert_eq!(
+        reopened["history"][0]["reopening"]["reason"],
+        "売上の計上漏れ"
+    );
+    assert_eq!(
+        reopened["history"][0]["waivers"][0]["reason"],
+        "値引きで合意"
+    );
+    // Accounting settles it again.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/closeout"),
+            &admin,
+            json!({
+                "rowVersion": reopened["rowVersion"],
+                "waivers": [{ "kind": "revenue_difference", "amount": 1_000_000, "reason": "値引きで合意" }]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["status"], "settled");
     // Once settled, the order takes no revenue.
     let response = router
         .clone()
@@ -5270,8 +5321,20 @@ async fn t17_t12_rest_closeout_is_checked_with_amounts_and_settled_by_accounting
         .into_iter()
         .filter(|row| row.resource == "project_closeouts" && row.action == "settle")
         .collect();
-    assert_eq!(writes.len(), 1);
+    assert_eq!(writes.len(), 2);
     let detail = writes[0].detail.clone().unwrap_or_default();
     assert!(detail.contains("revenue_difference"), "{detail}");
     assert!(!detail.contains("1000000"), "no amounts: {detail}");
+    let reopens: Vec<_> = audit
+        .list(ListParams::default())
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter(|row| row.resource == "project_closeouts" && row.action == "reopen")
+        .collect();
+    assert_eq!(reopens.len(), 1);
+    let detail = reopens[0].detail.clone().unwrap_or_default();
+    assert!(detail.contains("closeoutId"), "{detail}");
+    assert!(!detail.contains("計上漏れ"), "no reason: {detail}");
 }

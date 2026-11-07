@@ -4884,9 +4884,11 @@ async fn forecast_draft_adopt_body(
 
 // --- banto-cost P6a: 精算完了 (T17) -------------------------------------------
 // Twins of `/api/projects/{id}/closeout` (`admin_template_core::rest::closeouts`):
-// the same role floors, the same `Operation`s through `authorize_audited`
-// (`ViewProjectAmounts`, `SettleProject`), the same audit action and detail
-// (`closeouts::audit_detail`, no amounts).
+// and `/api/projects/{id}/closeout/reopen`: the same role floors, the same
+// `Operation`s through `authorize_audited` (`ViewProjectAmounts`,
+// `SettleProject` for settling and reopening), the same audit actions and
+// details (`closeouts::audit_detail`, `closeouts::reopen_audit_detail`; no
+// amounts, no reason).
 
 #[tauri::command]
 async fn project_closeout_get(
@@ -4952,6 +4954,49 @@ async fn project_closeout_settle_body(
         .await;
     }
     Ok(settled)
+}
+
+#[tauri::command]
+async fn project_closeout_reopen(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: admin_template_core::closeouts::ReopenInput,
+) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
+    project_closeout_reopen_body(&state, project_id, values).await
+}
+
+async fn project_closeout_reopen_body(
+    state: &AppState,
+    project_id: i64,
+    values: admin_template_core::closeouts::ReopenInput,
+) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::SettleProject { project_id },
+        CLOSEOUT_RESOURCE,
+    )
+    .await?;
+    let reopened = state
+        .forecasts
+        .closeouts()
+        .reopen(project_id, values, user_id)
+        .await?;
+    if let Some(record) = reopened.history.first() {
+        record_ok(
+            &state.audit,
+            &actor,
+            "reopen",
+            CLOSEOUT_RESOURCE,
+            Some(&project_id.to_string()),
+            Some(admin_template_core::closeouts::reopen_audit_detail(
+                project_id, record,
+            )),
+        )
+        .await;
+    }
+    Ok(reopened)
 }
 
 // --- banto-cost P4d: vendors, direct costs and purchase orders ---------------
@@ -6261,6 +6306,7 @@ pub fn run() {
             portfolio_overview,
             project_closeout_get,
             project_closeout_settle,
+            project_closeout_reopen,
             vendors_list,
             vendors_create,
             vendors_update,
@@ -11589,7 +11635,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn t17_t12_tauri_closeout_is_checked_with_amounts_and_settled_by_accounting() {
+    async fn t17_t12_tauri_closeout_is_settled_and_reopened_by_the_manager_or_accounting() {
         let state = admin_app_state().await;
         seed_two_projects(&state).await;
         let admin = state
@@ -11648,7 +11694,7 @@ mod tests {
             .await
             .expect("work done");
 
-        // The manager sees the check but does not settle.
+        // The manager sees the check.
         let check = project_closeout_get_body(&state, project.id)
             .await
             .expect("check");
@@ -11663,6 +11709,13 @@ mod tests {
             }))
             .expect("input")
         };
+        // An editor without the capabilities may not settle.
+        let outsider = state
+            .users
+            .create_user("outsider", "password123", "部外者", Role::Editor)
+            .await
+            .expect("create outsider");
+        state.set_session_for_test(Some(DesktopSession::Account(outsider.clone())));
         assert!(matches!(
             project_closeout_settle_body(&state, project.id, waiver()).await,
             Err(BantoError::Forbidden)
@@ -11677,6 +11730,9 @@ mod tests {
             project_closeout_settle_body(&state, project.id, bare).await,
             Err(BantoError::Validation { .. })
         ));
+
+        // The project's manager settles it (2026-11-07 decision).
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
         let settled = project_closeout_settle_body(&state, project.id, waiver())
             .await
             .expect("settle");
@@ -11684,6 +11740,38 @@ mod tests {
         assert_eq!(
             settled.closeout.as_ref().expect("record").waivers[0].reason,
             "値引きで合意"
+        );
+
+        // Reopening: a reason is required; the manager reopens to 作業完了.
+        let reopen = |reason: &str| -> admin_template_core::closeouts::ReopenInput {
+            serde_json::from_value(serde_json::json!({
+                "rowVersion": settled.row_version,
+                "reason": reason
+            }))
+            .expect("input")
+        };
+        assert!(matches!(
+            project_closeout_reopen_body(&state, project.id, reopen(" ")).await,
+            Err(BantoError::Validation { .. })
+        ));
+        state.set_session_for_test(Some(DesktopSession::Account(outsider.clone())));
+        assert!(matches!(
+            project_closeout_reopen_body(&state, project.id, reopen("売上の計上漏れ")).await,
+            Err(BantoError::Forbidden)
+        ));
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let reopened = project_closeout_reopen_body(&state, project.id, reopen("売上の計上漏れ"))
+            .await
+            .expect("reopen");
+        assert_eq!(reopened.status, "work_done");
+        assert!(reopened.closeout.is_none());
+        assert_eq!(
+            reopened.history[0]
+                .reopening
+                .as_ref()
+                .expect("reopening")
+                .reason,
+            "売上の計上漏れ"
         );
 
         let rows = state
@@ -11700,6 +11788,14 @@ mod tests {
         let detail = writes[0].detail.clone().unwrap_or_default();
         assert!(detail.contains("revenue_difference"));
         assert!(!detail.contains("1000000"));
+        let reopens: Vec<_> = rows
+            .iter()
+            .filter(|r| r.resource == "project_closeouts" && r.action == "reopen")
+            .collect();
+        assert_eq!(reopens.len(), 1);
+        let detail = reopens[0].detail.clone().unwrap_or_default();
+        assert!(detail.contains("closeoutId"));
+        assert!(!detail.contains("計上漏れ"));
         assert!(rows.iter().any(|r| r.resource == "project_closeouts"
             && r.action == "denied"
             && r.origin == "tauri"));

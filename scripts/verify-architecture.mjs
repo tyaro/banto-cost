@@ -506,6 +506,12 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'project_closeout_settle',
 			rest: 'POST /api/projects/{id}/closeout',
 			role: 'Editor'
+		},
+		// banto-cost P6a 追補: 精算完了の取消。権限は精算と同じ（SettleProject）。
+		{
+			tauri: 'project_closeout_reopen',
+			rest: 'POST /api/projects/{id}/closeout/reopen',
+			role: 'Editor'
 		}
 	];
 

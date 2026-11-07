@@ -72,6 +72,12 @@ impl ProjectStatus {
         self == Self::WorkDone
     }
 
+    /// 精算完了を取り消したとき（再開）に戻す状態。精算完了の案件だけが取り消せ、
+    /// 理由を残して作業完了へ戻す（2026-11-07 ユーザー決定）。それ以外は `None`。
+    pub fn reopened_to(self) -> Option<Self> {
+        (self == Self::Settled).then_some(Self::WorkDone)
+    }
+
     /// 案件の編集画面から直接選べる状態か。受注済みの側へは受注転換（P3b）で、
     /// 精算完了へは精算完了の検査（T17）で移すため、ここでは選ばせない。
     pub fn settable_directly(self) -> bool {
@@ -166,6 +172,16 @@ mod tests {
         // 編集画面からは精算完了へ動かせない。
         assert!(!ProjectStatus::WorkDone.can_edit_to(ProjectStatus::Settled));
         assert!(!ProjectStatus::Settled.can_edit_to(ProjectStatus::WorkDone));
+    }
+
+    #[test]
+    fn t17_精算完了の取消は作業完了へ戻す() {
+        for s in ProjectStatus::ALL {
+            let expected = (s == ProjectStatus::Settled).then_some(ProjectStatus::WorkDone);
+            assert_eq!(s.reopened_to(), expected, "{s:?}");
+        }
+        // 戻した状態は再び精算完了にできる。
+        assert!(ProjectStatus::Settled.reopened_to().unwrap().settleable());
     }
 
     fn input(
