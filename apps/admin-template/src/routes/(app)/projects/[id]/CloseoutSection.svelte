@@ -14,8 +14,13 @@
 	 * Records processed in the other sections do not notify this one: 「確認し
 	 * 直す」 reads the check again and keeps the reasons typed so far.
 	 *
-	 * Reading needs `ViewProjectAmounts`; settling `SettleProject`. A
-	 * `forbidden` read hides the section's content.
+	 * A settled project may be reopened (精算完了の取消) back to 作業完了 with
+	 * a reason; the settlement and its waivers stay and are listed as
+	 * history, and settling again runs the check anew.
+	 *
+	 * Reading needs `ViewProjectAmounts`; settling and reopening
+	 * `SettleProject` (the project's manager or accounting). A `forbidden`
+	 * read hides the section's content.
 	 */
 	import { isProviderError, notify, type FieldError } from '@banto/admin-core';
 	import { LoadingState } from '@banto/ui';
@@ -26,6 +31,7 @@
 	import {
 		blockerKey,
 		getProjectCloseout,
+		reopenProject,
 		settleProject,
 		type CloseoutBlocker,
 		type CloseoutCheck,
@@ -51,8 +57,14 @@
 	let busy = $state(false);
 	let errors = $state<string[]>([]);
 	let missing = $state<Set<string>>(new Set());
+	let reopenReason = $state('');
+	let reopenMissing = $state(false);
 
-	const dirty = $derived(note.trim() !== '' || Object.values(reasons).some((r) => r.trim() !== ''));
+	const dirty = $derived(
+		note.trim() !== '' ||
+			reopenReason.trim() !== '' ||
+			Object.values(reasons).some((r) => r.trim() !== '')
+	);
 
 	$effect(() => {
 		onPendingChange?.({ dirty, busy });
@@ -159,14 +171,42 @@
 				onProjectChanged?.();
 				await load(projectId);
 			} catch (err) {
-				if (isProviderError(err) && err.body.kind === 'validation') {
-					showErrors(err.body.field_errors);
-					await load(projectId);
-				} else if (isForbiddenError(err)) {
-					notify('error', m['closeout.forbiddenEdit']());
-				} else {
-					notify('error', isProviderError(err) ? err.message : String(err));
-				}
+				await failed(err);
+			} finally {
+				busy = false;
+			}
+		})();
+	}
+
+	async function failed(err: unknown) {
+		if (isProviderError(err) && err.body.kind === 'validation') {
+			showErrors(err.body.field_errors);
+			await load(projectId);
+		} else if (isForbiddenError(err)) {
+			notify('error', m['closeout.forbiddenEdit']());
+		} else {
+			notify('error', isProviderError(err) ? err.message : String(err));
+		}
+	}
+
+	function reopen() {
+		const c = check;
+		if (!c || busy) return;
+		const reason = reopenReason.trim();
+		reopenMissing = reason === '';
+		if (reopenMissing) return;
+		if (!window.confirm(m['closeout.reopenConfirm']())) return;
+		busy = true;
+		errors = [];
+		void (async () => {
+			try {
+				await reopenProject(projectId, { rowVersion: c.rowVersion, reason });
+				notify('success', m['closeout.reopened']());
+				reopenReason = '';
+				onProjectChanged?.();
+				await load(projectId);
+			} catch (err) {
+				await failed(err);
 			} finally {
 				busy = false;
 			}
@@ -232,6 +272,32 @@
 				</table>
 			</div>
 		{/if}
+		{#each errors as message, i (i)}
+			<p class="error" role="alert">{message}</p>
+		{/each}
+		<label class="field">
+			<span class="label">{m['closeout.reopenReason']()}</span>
+			<input
+				type="text"
+				class="banto-input"
+				placeholder={m['closeout.reopenReasonPlaceholder']()}
+				disabled={!canWrite || busy}
+				bind:value={reopenReason}
+			/>
+			{#if reopenMissing && !reopenReason.trim()}
+				<span class="error">{m['closeout.reasonRequired']()}</span>
+			{/if}
+		</label>
+		<div class="actions">
+			<button
+				type="button"
+				class="banto-btn banto-btn--secondary"
+				disabled={!canWrite || busy}
+				onclick={reopen}
+			>
+				{m['closeout.reopen']()}
+			</button>
+		</div>
 	{:else if !check.settleable}
 		<p class="note">{m['closeout.notYet']()}</p>
 	{:else}
@@ -301,6 +367,35 @@
 			>
 				{m['closeout.recheck']()}
 			</button>
+		</div>
+	{/if}
+	{#if check && check.history.length > 0}
+		<h3>{m['closeout.historyTitle']()}</h3>
+		<div class="table-wrap">
+			<table>
+				<thead>
+					<tr>
+						<th scope="col">{m['closeout.colSettledOn']()}</th>
+						<th scope="col">{m['closeout.colSettledBy']()}</th>
+						<th scope="col" class="num">{m['closeout.colWaivers']()}</th>
+						<th scope="col">{m['closeout.colReopenedOn']()}</th>
+						<th scope="col">{m['closeout.colReopenReason']()}</th>
+						<th scope="col">{m['closeout.colReopenedBy']()}</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each check.history as h (h.id)}
+						<tr>
+							<td>{h.settledOn}</td>
+							<td>{h.settledByName ?? '—'}</td>
+							<td class="num">{h.waivers.length}</td>
+							<td>{h.reopening?.reopenedOn ?? '—'}</td>
+							<td>{h.reopening?.reason ?? '—'}</td>
+							<td>{h.reopening?.reopenedByName ?? '—'}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
 		</div>
 	{/if}
 </section>

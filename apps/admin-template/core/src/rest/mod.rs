@@ -84,6 +84,7 @@
 //! | POST   | `/api/forecast-versions/{id}/adopt` | `ForecastVersionInput` | `ForecastVersion` (editor+ + `AdoptForecast`, self-adoption allowed and audited) |
 //! | GET    | `/api/projects/{id}/closeout` | - | `CloseoutCheck` (any role + `ViewProjectAmounts`) |
 //! | POST   | `/api/projects/{id}/closeout` | `SettleInput` | `CloseoutCheck` (editor+ + `SettleProject`; 精算完了, T17) |
+//! | POST   | `/api/projects/{id}/closeout/reopen` | `ReopenInput` | `CloseoutCheck` (editor+ + `SettleProject`; 精算完了の取消, back to 作業完了) |
 //! | GET    | `/api/portfolio` | - | `Portfolio` (any role; rows `visible_projects` (admin all), amounts and alerts `amount_projects`) |
 //! | GET    | `/api/vendors` | - | `WorkMaster[]` (any role; admin or `ViewMasters`) |
 //! | POST   | `/api/vendors` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`) |

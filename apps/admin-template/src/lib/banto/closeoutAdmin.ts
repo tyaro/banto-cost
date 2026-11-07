@@ -2,7 +2,7 @@
  * Client for the banto-cost settlement API (精算完了, spec §5.1, T17, P6a).
  * Same transport split as forecastAdmin.ts: the Tauri webview calls
  * `invoke()` (`project_closeout_get`, `project_closeout_settle`,
- * apps/admin-template/src-tauri/src/lib.rs) and a LAN browser calls `fetch()`
+ * `project_closeout_reopen`, apps/admin-template/src-tauri/src/lib.rs) and a LAN browser calls `fetch()`
  * against the twin routes (apps/admin-template/core/src/rest/closeouts.rs).
  *
  * Amounts are integer yen, hours integer minutes. A waiver names the amount
@@ -45,6 +45,14 @@ export interface CloseoutWaiver {
 	purchaseOrderLabel: string | null;
 }
 
+/** Mirrors `admin_template_core::closeouts::ReopeningView` (精算完了の取消). */
+export interface CloseoutReopening {
+	reopenedOn: string;
+	reason: string;
+	reopenedByName: string | null;
+	createdAt: string;
+}
+
 export interface CloseoutRecord {
 	id: number;
 	previousStatus: string;
@@ -53,6 +61,8 @@ export interface CloseoutRecord {
 	settledByName: string | null;
 	createdAt: string;
 	waivers: CloseoutWaiver[];
+	/** Set once the settlement was cancelled. */
+	reopening: CloseoutReopening | null;
 }
 
 /** Mirrors `admin_template_core::closeouts::CloseoutCheck`. */
@@ -62,7 +72,10 @@ export interface CloseoutCheck {
 	rowVersion: number;
 	settleable: boolean;
 	blockers: CloseoutBlocker[];
+	/** The settlement in force (the project is settled). */
 	closeout: CloseoutRecord | null;
+	/** Settlements cancelled since, newest first. */
+	history: CloseoutRecord[];
 }
 
 export interface WaiverInput {
@@ -78,6 +91,11 @@ export interface SettleInput {
 	waivers: WaiverInput[];
 }
 
+export interface ReopenInput {
+	rowVersion: number;
+	reason: string;
+}
+
 function guard(): void {
 	if (!isPipelineAvailable()) throw demoModeError();
 }
@@ -91,7 +109,7 @@ export async function getProjectCloseout(projectId: number): Promise<CloseoutChe
 	return httpRequest<CloseoutCheck>(`/api/projects/${projectId}/closeout`, { method: 'GET' });
 }
 
-/** Settle a work-done project (`SettleProject`: accounting). */
+/** Settle a work-done project (`SettleProject`: the manager or accounting). */
 export async function settleProject(
 	projectId: number,
 	values: SettleInput
@@ -101,6 +119,24 @@ export async function settleProject(
 		return invokeCommand<CloseoutCheck>('project_closeout_settle', { projectId, values });
 	}
 	return httpRequest<CloseoutCheck>(`/api/projects/${projectId}/closeout`, {
+		method: 'POST',
+		body: values
+	});
+}
+
+/**
+ * Cancel the settlement (精算完了の取消): back to 作業完了 with a reason
+ * (`SettleProject`, as settling). The settlement and its waivers are kept.
+ */
+export async function reopenProject(
+	projectId: number,
+	values: ReopenInput
+): Promise<CloseoutCheck> {
+	guard();
+	if (tauri()) {
+		return invokeCommand<CloseoutCheck>('project_closeout_reopen', { projectId, values });
+	}
+	return httpRequest<CloseoutCheck>(`/api/projects/${projectId}/closeout/reopen`, {
 		method: 'POST',
 		body: values
 	});

@@ -85,7 +85,7 @@ Bantoの3ロールは全順序で、「経理は単価を見られるが利用�
 - 自己承認（2026-11-06 ユーザー決定）：操作するのは1人なので、承認は依頼者本人でもよい（仕様第4章の小規模例外）。会社の承認方針 `approval::APPROVAL_POLICY` に一本化し（P4b。P3b の `orders::ORDER_CHANGE_POLICY` を置き換え）、受注変更と工数の承認で REST と Tauri の両経路に同じ値を渡す。直接費の承認も同じ値を使う。使ったときは監査ログの詳細に `selfApproval: true` を残す。判定関数の既定（自己承認の禁止）は変えない。
 - P4c で予算版の操作を足した。下書きは `ManageProject`（`amount.view` も要求するよう変えた。それまで使っていなかった）、承認は `ApproveBudget`（`Approve`＋`amount.view`、`APPROVAL_POLICY`）。
 - P5 で完了見込の採用 `AdoptForecast` を足した（`ApproveBudget` と同じ範囲＋`amount.view`、`APPROVAL_POLICY`）。下書きは `ManageProject`。
-- P6a で精算完了 `SettleProject` を足した（`finance.close`＋`amount.view`、全案件。案件責任者は検査を見られるが精算完了にはしない）。残額の解消の承認者は実施した経理（操作するのは1人）。
+- P6a で精算完了 `SettleProject` を足した（`amount.view` に加えて、その案件の責任者の `project.manage` か `finance.close`（全案件）。2026-11-07 ユーザー決定で案件責任者にも許可）。精算完了の取消（再開）も同じ `SettleProject` で判定する。残額の解消の承認者は実施者（操作するのは1人）。
 - P4b で工数の操作を足した。案件の工数入力は `EnterTime`（`time.entry`＋案件のメンバー）、共通活動は `EnterCommonTime`（`time.entry` だけ）。承認は案件なら `Approve`（その案件の責任者の `project.manage` か `finance.close`）、共通活動は `ApproveCommon`（`finance.close`）。承認一覧の範囲は `approval_projects`。工数1件の単価・労務原価は個人の単価が分かるので `sees_record_costs`（`finance.rate`＋`amount.view`）だけに見せ、案件責任者には案件の集計（`ViewProjectAmounts`）だけを見せる。
 
 ## 3 データモデル案
@@ -268,14 +268,15 @@ outlook_snapshot_rows(snapshot_id, project_id, pipeline_version_id NULL,
 
 P6 は 精算完了（P6a、T17）→ 月次締めと締め後の訂正（T11）→ CSV と年度またぎの集計（T15）の順に分けて進める。
 
-- マイグレーション `0018_closeouts.sql`（SQLite / Postgres）：`project_closeouts`（案件ごとに1行、精算前の状態・精算完了日（業務日付）・備考・実施者）と `closeout_waivers`（解消した残額の種類・発注・金額・理由・承認者）。行は書き換え・削除しない。精算完了は1回だけ（一意索引）で、戻す操作は今は無い。
+- マイグレーション `0018_closeouts.sql`（SQLite / Postgres）：`project_closeouts`（精算1回ごとに1行、精算前の状態・精算完了日（業務日付）・備考・実施者）と `closeout_waivers`（解消した残額の種類・発注・金額・理由・承認者）。行は書き換え・削除しない。
+- 精算完了の取消（再開、2026-11-07 ユーザー決定）：マイグレーション `0019_closeout_reopenings.sql` で案件ごとの一意索引を外し、`closeout_reopenings`（取り消した精算・取消日（業務日付）・理由・実施者。精算1回につき1行）を足した。精算完了の案件だけを理由必須で作業完了に戻す（`ProjectStatus::reopened_to`）。精算と解消の記録は消さずに履歴として残し、もう一度精算完了にするときは検査と解消をやり直して新しい行を作る。案件の `row_version` で楽観ロックし、`row_version` と `revenue_version` を進める。
 - 計算規則は `cost_domain::closeout`（`blockers`・`check_closeout`）と `ProjectStatus::settleable`（作業完了だけ）。判断待ちの受注変更を処理が必要な項目に足した。サービスは `admin_template_core::closeouts`。
 - 処理が必要な項目（理由では解消できない）：未承認（下書き・申請中・差戻し）の工数と直接費（配分先を含む）、承認済みで単価未設定の工数、請求確定していない仮計上、判断待ちの受注変更。単価未設定の工数は訂正（P6 の次段階）が入るまで解消の手段がない。
 - 理由つきで解消できる残額：発注ごとの未実績発注残、最新の採用見込版の残見込みのうち発注済み未実績を除いた分（残工数の金額＋それ以外の見込み。発注残は発注ごとに数えるので重ねない）、未計上残（確定受注額 − 累計売上計上額。受注超過のマイナスも止める）。残見込みは、残りを0にした見込版を採用すれば消える。解消は画面に出た金額を添えて送り、金額が変わっていれば一致せず拒否する。承認者は実施者。
 - 同時更新（T13）：精算は案件の `row_version` と `revenue_version` を比べて状態を `settled` にし、同じトランザクションで工数・直接費・発注・見込版の指紋（件数・版番号の合計・最大ID）を読み直して、検査の前に読んだものと違えば拒否する。工数・直接費・発注の登録と変更は、精算前かを事前に確かめたうえで、自分の書き込みの後に同じトランザクションで案件の状態を読み直し（Postgres は `FOR SHARE`）、精算完了なら取り消す（事前の確認と書き込みの間に精算が確定した場合を防ぐ）。
 - 精算完了の案件には、工数・直接費・発注・予算の下書き・完了見込の下書き（既存の検査）に加えて、受注変更・売上予定の組み替え・売上の計上と取消も記録しない。
-- 認可：検査の閲覧は `ViewProjectAmounts`、精算は新しい `SettleProject`（`finance.close`＋`amount.view`）。監査には案件・精算前の状態・精算完了日・解消した種類だけを残し、金額は残さない。
-- 画面：案件詳細の「精算完了」（受注済みの案件に表示）。ほかの欄で処理しても自動では再確認しないので「確認し直す」で読み直す（入力した理由は残す）。作業完了の案件で残っている項目を並べ、残額には理由の入力欄、処理が必要な項目には「処理が必要です」を出す。精算後は精算完了日・実施者・精算前の状態と解消した残額の一覧を表示する。
+- 認可：検査の閲覧は `ViewProjectAmounts`、精算と取消は `SettleProject`（`amount.view`＋その案件の責任者の `project.manage` か `finance.close`）。REST は `POST /api/projects/{id}/closeout` と `…/closeout/reopen`、Tauri は `project_closeout_settle` と `project_closeout_reopen`。監査には案件・精算前の状態・精算完了日・解消した種類だけを残し、金額は残さない。取消（action `reopen`）は案件・取り消した精算とその精算完了日・取消日だけを残し、理由（自由記述）と金額は残さない。
+- 画面：案件詳細の「精算完了」（受注済みの案件に表示）。ほかの欄で処理しても自動では再確認しないので「確認し直す」で読み直す（入力した理由は残す）。作業完了の案件で残っている項目を並べ、残額には理由の入力欄、処理が必要な項目には「処理が必要です」を出す。精算後は精算完了日・実施者・精算前の状態と解消した残額の一覧を表示し、理由を入力して「精算完了を取り消す」ができる。取り消した精算完了は「取り消した精算完了」（精算完了日・実施者・解消した残額の件数・取消日・理由・取り消した人）に並べる。
 
 ## 4 計算モジュール（`cost-domain`）
 
