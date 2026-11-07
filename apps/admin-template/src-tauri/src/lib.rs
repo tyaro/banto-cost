@@ -53,6 +53,7 @@ use admin_template_core::direct_costs::{
 };
 use admin_template_core::events::event_channel;
 use admin_template_core::first_boot::seed_first_boot_settings;
+use admin_template_core::fixed_costs::RESOURCE as FIXED_COSTS_RESOURCE;
 use admin_template_core::forecasts::{
     ForecastDraftCreated, ForecastDraftInput, ForecastOverview, ForecastVersion,
     ForecastVersionInput, ForecastsService, RESOURCE as FORECAST_RESOURCE,
@@ -5162,6 +5163,228 @@ async fn closing_reopen(
     Ok(reopened)
 }
 
+// --- banto-cost P7b: 月額固定原価 (T37) -------------------------------------------
+// Twins of `/api/fixed-costs/contracts` (GET/POST), `/api/fixed-costs/contracts/{id}`
+// (PUT), `/api/fixed-costs/months/{month}` (GET), `.../months/{month}/post` and
+// `/api/fixed-costs/postings/{id}/cancel` (`admin_template_core::rest::fixed_costs`):
+// the same role floors (any role for reads, editor for writes), the same
+// `Operation::ManageFixedCosts` through `authorize_audited`, the same audit
+// actions and detail (`fixed_costs::audit_detail`: no amount, no reason).
+
+#[tauri::command]
+async fn fixed_cost_contracts(
+    state: State<'_, AppState>,
+) -> Result<Vec<admin_template_core::fixed_costs::Contract>, BantoError> {
+    fixed_cost_contracts_body(&state).await
+}
+
+async fn fixed_cost_contracts_body(
+    state: &AppState,
+) -> Result<Vec<admin_template_core::fixed_costs::Contract>, BantoError> {
+    let identity = require_role(state, Role::Viewer, FIXED_COSTS_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ManageFixedCosts,
+        FIXED_COSTS_RESOURCE,
+    )
+    .await?;
+    state.forecasts.fixed_costs().list().await
+}
+
+#[tauri::command]
+async fn fixed_cost_month(
+    state: State<'_, AppState>,
+    month: String,
+) -> Result<admin_template_core::fixed_costs::MonthView, BantoError> {
+    fixed_cost_month_body(&state, month).await
+}
+
+async fn fixed_cost_month_body(
+    state: &AppState,
+    month: String,
+) -> Result<admin_template_core::fixed_costs::MonthView, BantoError> {
+    let identity = require_role(state, Role::Viewer, FIXED_COSTS_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ManageFixedCosts,
+        FIXED_COSTS_RESOURCE,
+    )
+    .await?;
+    state.forecasts.fixed_costs().month(&month).await
+}
+
+#[tauri::command]
+async fn fixed_cost_contract_create(
+    state: State<'_, AppState>,
+    values: admin_template_core::fixed_costs::ContractInput,
+) -> Result<admin_template_core::fixed_costs::Contract, BantoError> {
+    fixed_cost_contract_create_body(&state, values).await
+}
+
+async fn fixed_cost_contract_create_body(
+    state: &AppState,
+    values: admin_template_core::fixed_costs::ContractInput,
+) -> Result<admin_template_core::fixed_costs::Contract, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageFixedCosts,
+        FIXED_COSTS_RESOURCE,
+    )
+    .await?;
+    let c = state
+        .forecasts
+        .fixed_costs()
+        .create(values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        FIXED_COSTS_RESOURCE,
+        Some(&c.id.to_string()),
+        Some(admin_template_core::fixed_costs::audit_detail(
+            "create",
+            Some(c.id),
+            None,
+            Some(c.project_id),
+        )),
+    )
+    .await;
+    Ok(c)
+}
+
+#[tauri::command]
+async fn fixed_cost_contract_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: admin_template_core::fixed_costs::ContractInput,
+) -> Result<admin_template_core::fixed_costs::Contract, BantoError> {
+    fixed_cost_contract_update_body(&state, id, values).await
+}
+
+async fn fixed_cost_contract_update_body(
+    state: &AppState,
+    id: i64,
+    values: admin_template_core::fixed_costs::ContractInput,
+) -> Result<admin_template_core::fixed_costs::Contract, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageFixedCosts,
+        FIXED_COSTS_RESOURCE,
+    )
+    .await?;
+    let c = state
+        .forecasts
+        .fixed_costs()
+        .update(id, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        FIXED_COSTS_RESOURCE,
+        Some(&c.id.to_string()),
+        Some(admin_template_core::fixed_costs::audit_detail(
+            "update",
+            Some(c.id),
+            None,
+            Some(c.project_id),
+        )),
+    )
+    .await;
+    Ok(c)
+}
+
+#[tauri::command]
+async fn fixed_cost_month_post(
+    state: State<'_, AppState>,
+    month: String,
+) -> Result<admin_template_core::fixed_costs::PostResult, BantoError> {
+    fixed_cost_month_post_body(&state, month).await
+}
+
+async fn fixed_cost_month_post_body(
+    state: &AppState,
+    month: String,
+) -> Result<admin_template_core::fixed_costs::PostResult, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageFixedCosts,
+        FIXED_COSTS_RESOURCE,
+    )
+    .await?;
+    let r = state
+        .forecasts
+        .fixed_costs()
+        .post_month(&month, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "post",
+        FIXED_COSTS_RESOURCE,
+        Some(&r.view.month),
+        Some(admin_template_core::fixed_costs::audit_detail(
+            "post",
+            None,
+            Some(&r.view.month),
+            None,
+        )),
+    )
+    .await;
+    Ok(r)
+}
+
+#[tauri::command]
+async fn fixed_cost_posting_cancel(
+    state: State<'_, AppState>,
+    id: i64,
+    values: admin_template_core::fixed_costs::CancelInput,
+) -> Result<admin_template_core::fixed_costs::MonthView, BantoError> {
+    fixed_cost_posting_cancel_body(&state, id, values).await
+}
+
+async fn fixed_cost_posting_cancel_body(
+    state: &AppState,
+    id: i64,
+    values: admin_template_core::fixed_costs::CancelInput,
+) -> Result<admin_template_core::fixed_costs::MonthView, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageFixedCosts,
+        FIXED_COSTS_RESOURCE,
+    )
+    .await?;
+    let svc = state.forecasts.fixed_costs();
+    let (project_id, month) = svc.posting_scope(id).await?;
+    let view = svc.cancel(id, values, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "cancel",
+        FIXED_COSTS_RESOURCE,
+        Some(&id.to_string()),
+        Some(admin_template_core::fixed_costs::audit_detail(
+            "cancel",
+            None,
+            Some(&month),
+            Some(project_id),
+        )),
+    )
+    .await;
+    Ok(view)
+}
+
 // --- banto-cost P6c: 月別収支と CSV (T12・T15) -----------------------------------
 // Twins of `/api/projects/{id}/monthly`, `/api/projects/{id}/monthly.csv`,
 // `/api/reports/portfolio.csv` and `/api/reports/period-monthly.csv`
@@ -6608,6 +6831,12 @@ pub fn run() {
             closing_get,
             closing_close,
             closing_reopen,
+            fixed_cost_contracts,
+            fixed_cost_month,
+            fixed_cost_contract_create,
+            fixed_cost_contract_update,
+            fixed_cost_month_post,
+            fixed_cost_posting_cancel,
             project_monthly,
             project_monthly_csv,
             portfolio_csv,
@@ -12198,6 +12427,138 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.resource == "budgets" && r.action == "denied" && r.origin == "tauri"));
+    }
+
+    #[tokio::test]
+    async fn t37_tauri_fixed_costs_need_finance_rate_and_post_a_month_once() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[
+                Capability::ProjectManage,
+                Capability::AmountView,
+                Capability::FinanceClose,
+            ],
+        )
+        .await
+        .expect("grant editor");
+        authz_capabilities_set_body(
+            &state,
+            admin.id,
+            &[Capability::FinanceRate, Capability::AmountView],
+        )
+        .await
+        .expect("grant admin");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let project = projects_create_body(&state, project_input("P-F01", editor.id))
+            .await
+            .expect("manager registers a project");
+        let conversion: ConversionRequest = serde_json::from_value(serde_json::json!({
+            "rowVersion": project.row_version,
+            "convertedOn": "2026-06-01",
+            "confirmedAmount": 3_600_000,
+            "basis": "年間契約",
+            "plannedStart": "2026-06-01",
+            "plannedEnd": "2027-05-31",
+            "revenuePlan": [{ "month": "2026-06", "amount": 3_600_000 }],
+            "scope": "whole"
+        }))
+        .expect("input");
+        order_convert_body(&state, project.id, conversion)
+            .await
+            .expect("convert");
+        let contract = || -> admin_template_core::fixed_costs::ContractInput {
+            serde_json::from_value(serde_json::json!({
+                "projectId": project.id,
+                "payeeKind": "employee",
+                "userId": editor.id,
+                "monthlyAmount": 450_000,
+                "fromMonth": "2026-06"
+            }))
+            .expect("input")
+        };
+        // finance.close without finance.rate: per-person amounts stay hidden.
+        assert!(matches!(
+            fixed_cost_contracts_body(&state).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            fixed_cost_contract_create_body(&state, contract()).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            fixed_cost_month_post_body(&state, "2026-06".into()).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        let created = fixed_cost_contract_create_body(&state, contract())
+            .await
+            .expect("create");
+        assert_eq!(created.cost_type, "labor");
+        let posted = fixed_cost_month_post_body(&state, "2026-06".into())
+            .await
+            .expect("post");
+        assert_eq!(posted.posted, 1);
+        assert_eq!(posted.view.posted_total, 450_000);
+        let again = fixed_cost_month_post_body(&state, "2026-06".into())
+            .await
+            .expect("post again");
+        assert_eq!(again.posted, 0);
+        assert_eq!(
+            fixed_cost_contracts_body(&state).await.expect("list")[0].posted_count,
+            1
+        );
+        let posting = again.view.lines[0].posting.clone().expect("posting");
+        let blank: admin_template_core::fixed_costs::CancelInput =
+            serde_json::from_value(serde_json::json!({ "reason": "" })).expect("input");
+        assert!(matches!(
+            fixed_cost_posting_cancel_body(&state, posting.id, blank).await,
+            Err(BantoError::Validation { .. })
+        ));
+        let reason: admin_template_core::fixed_costs::CancelInput =
+            serde_json::from_value(serde_json::json!({ "reason": "二重払いの訂正" }))
+                .expect("input");
+        let view = fixed_cost_posting_cancel_body(&state, posting.id, reason)
+            .await
+            .expect("cancel");
+        assert_eq!(view.posted_total, 0);
+        let month = fixed_cost_month_body(&state, "2026-06".into())
+            .await
+            .expect("month");
+        assert_eq!(month.due_count, 1);
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        for row in rows.iter().filter(|r| r.resource == "fixed_costs") {
+            let detail = row.detail.clone().unwrap_or_default();
+            assert!(!detail.contains("450000"), "{detail}");
+            assert!(!detail.contains("二重払い"), "{detail}");
+        }
+        assert!(rows
+            .iter()
+            .any(|r| r.resource == "fixed_costs" && r.action == "post"));
+        assert!(rows
+            .iter()
+            .any(|r| r.resource == "fixed_costs" && r.action == "denied" && r.origin == "tauri"));
     }
 
     #[tokio::test]

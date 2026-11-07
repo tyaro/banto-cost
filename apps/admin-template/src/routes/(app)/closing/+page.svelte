@@ -22,7 +22,8 @@
 		reopenMonth,
 		type MonthClosing,
 		type MonthRow,
-		type MonthStatus
+		type MonthStatus,
+		type WarningCode
 	} from '#lib/banto/closingAdmin.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { formatSignedYen, formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
@@ -45,10 +46,10 @@
 		return m[`closing.status.${s}`]();
 	}
 
-	function warningLabel(code: 'missing_rate' | 'provisional', count: number): string {
-		return code === 'missing_rate'
-			? m['closing.warning.missing_rate']({ count })
-			: m['closing.warning.provisional']({ count });
+	function warningLabel(code: WarningCode, count: number): string {
+		if (code === 'missing_rate') return m['closing.warning.missing_rate']({ count });
+		if (code === 'fixed_unposted') return m['closing.warning.fixed_unposted']({ count });
+		return m['closing.warning.provisional']({ count });
 	}
 
 	async function load() {

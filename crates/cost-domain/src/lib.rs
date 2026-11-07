@@ -15,6 +15,7 @@ pub mod closeout;
 pub mod closing;
 pub mod csv;
 pub mod direct_cost;
+pub mod fixed_cost;
 pub mod forecast;
 pub mod funds;
 pub mod ledger;

@@ -517,7 +517,28 @@ const isAllowedPackageImport = (spec) =>
 		},
 		// banto-cost P6b: 月次締め・再開。editor 床＋authorize_audited（FinanceClose）。
 		{ tauri: 'closing_close', rest: 'POST /api/closing/{month}/close', role: 'Editor' },
-		{ tauri: 'closing_reopen', rest: 'POST /api/closing/{month}/reopen', role: 'Editor' }
+		{ tauri: 'closing_reopen', rest: 'POST /api/closing/{month}/reopen', role: 'Editor' },
+		// banto-cost P7b: 月額固定原価。editor 床＋authorize_audited（ManageFixedCosts）。
+		{
+			tauri: 'fixed_cost_contract_create',
+			rest: 'POST /api/fixed-costs/contracts',
+			role: 'Editor'
+		},
+		{
+			tauri: 'fixed_cost_contract_update',
+			rest: 'PUT /api/fixed-costs/contracts/{id}',
+			role: 'Editor'
+		},
+		{
+			tauri: 'fixed_cost_month_post',
+			rest: 'POST /api/fixed-costs/months/{month}/post',
+			role: 'Editor'
+		},
+		{
+			tauri: 'fixed_cost_posting_cancel',
+			rest: 'POST /api/fixed-costs/postings/{id}/cancel',
+			role: 'Editor'
+		}
 	];
 
 	// ロール床を照合したい読み取り系の対（CR-6）。読み取りは rule 8 の存在対称の
@@ -596,6 +617,9 @@ const isAllowedPackageImport = (spec) =>
 		// banto-cost P6b の読み取り。
 		{ tauri: 'closing_months', rest: 'GET /api/closing', role: 'Viewer' },
 		{ tauri: 'closing_get', rest: 'GET /api/closing/{month}', role: 'Viewer' },
+		// banto-cost P7b の読み取り。
+		{ tauri: 'fixed_cost_contracts', rest: 'GET /api/fixed-costs/contracts', role: 'Viewer' },
+		{ tauri: 'fixed_cost_month', rest: 'GET /api/fixed-costs/months/{month}', role: 'Viewer' },
 		// banto-cost P6c の読み取り（CSV は出力を監査に残す読み取り）。
 		{ tauri: 'project_monthly', rest: 'GET /api/projects/{id}/monthly', role: 'Viewer' },
 		{
@@ -687,6 +711,8 @@ const isAllowedPackageImport = (spec) =>
 		'project_closeout_get',
 		'closing_months',
 		'closing_get',
+		'fixed_cost_contracts',
+		'fixed_cost_month',
 		'project_monthly',
 		'project_monthly_csv',
 		'portfolio_csv',
@@ -744,6 +770,8 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/projects/{id}/closeout',
 		'GET /api/closing',
 		'GET /api/closing/{month}',
+		'GET /api/fixed-costs/contracts',
+		'GET /api/fixed-costs/months/{month}',
 		'GET /api/projects/{id}/monthly',
 		'GET /api/projects/{id}/monthly.csv',
 		'GET /api/reports/portfolio.csv',

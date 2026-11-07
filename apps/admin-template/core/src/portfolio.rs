@@ -24,7 +24,7 @@ use cost_domain::alerts::{
     REVIEW_DELAY_ITEM,
 };
 use cost_domain::forecast::profit;
-use cost_domain::funds::{funds, TARGET_MARGIN_ITEM};
+use cost_domain::funds::funds;
 use cost_domain::money::ratio_permille;
 use cost_domain::project::ProjectStatus;
 use cost_domain::{Date, YearMonth};
@@ -264,9 +264,9 @@ impl PortfolioService {
                 row.forecast_ratio_permille = pr.ratio_permille;
                 row.forecast_overrun = row.budget_total.map(|b| f.cost_total - b);
             }
-            row.target_margin_pct = applied_value(&self.db, TARGET_MARGIN_ITEM, Some(p.id), today)
+            row.target_margin_pct = crate::forecasts::target_margin(&self.db, p.id, today)
                 .await?
-                .map(|(v, _)| v);
+                .0;
             row.funds = funds(order.confirmed_amount, row.target_margin_pct).map(|f| f.funds);
             let low_margin_pct = if status.is_ordered_open() {
                 applied_value(&self.db, LOW_MARGIN_ITEM, Some(p.id), today)
@@ -375,6 +375,7 @@ mod tests {
     use crate::forecasts::ForecastDraftInput;
     use crate::orders::tests::{line, ordered_project, pipeline_project};
     use crate::projects::tests::fixture;
+    use cost_domain::funds::TARGET_MARGIN_ITEM;
 
     fn row(p: &Portfolio, id: i64) -> &PortfolioRow {
         p.rows.iter().find(|r| r.project_id == id).unwrap()
@@ -544,7 +545,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(o.target_margin_pct, Some(15));
+        assert_eq!(o.target_margin_on, None, "未検収は業務日付の率");
         assert_eq!(o.target_profit, Some(600_000));
+        assert_eq!(o.funds, Some(3_400_000));
+
+        // 率は案件ごとに検収日（最初の売上計上日）の値：検収後に会社基準を
+        // 10% に変えても、検収済みの案件は15%のまま。未検収の案件は新しい率。
+        crate::orders::OrdersService::new(db.clone())
+            .recognize(
+                spec,
+                crate::orders::RecognitionInput {
+                    recognized_on: "2026-09-30".into(),
+                    amount: 100_000,
+                    basis: Some("検収".into()),
+                    clears: None,
+                },
+                Some(1),
+            )
+            .await
+            .unwrap();
+        basis
+            .add(
+                None,
+                value(TARGET_MARGIN_ITEM, "2026-10-01", Some(10), "改定"),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let other = ordered_project(&db, "P-F04", vec![line(None, 1_000_000)]).await;
+        let all = svc
+            .overview(&ProjectScope::All, &ProjectScope::All)
+            .await
+            .unwrap();
+        assert_eq!(row(&all, spec).target_margin_pct, Some(15));
+        assert_eq!(row(&all, other).target_margin_pct, Some(10));
+        assert_eq!(row(&all, other).funds, Some(900_000));
+        let o = ForecastsService::new(db.clone())
+            .overview(spec)
+            .await
+            .unwrap();
+        assert_eq!(o.target_margin_on.as_deref(), Some("2026-09-30"));
         assert_eq!(o.funds, Some(3_400_000));
     }
 }

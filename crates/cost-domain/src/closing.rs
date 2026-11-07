@@ -58,6 +58,8 @@ pub struct MonthState {
     pub missing_rate_entries: usize,
     /// 請求確定していない仮計上（その月に計上したもの）。
     pub provisional_entries: usize,
+    /// その月を期間に含むのに未計上の月額固定の取り決め（受注済みで精算前の案件だけ、T37）。
+    pub unposted_fixed_costs: usize,
 }
 
 /// 締めを止める理由。
@@ -70,8 +72,16 @@ pub enum CloseIssue {
 /// 締めは止めないが知らせる項目。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CloseWarning {
-    MissingRate { entries: usize },
-    Provisional { entries: usize },
+    MissingRate {
+        entries: usize,
+    },
+    Provisional {
+        entries: usize,
+    },
+    /// 未計上の月額固定。締めると、その月には再開するまで計上できない。
+    FixedUnposted {
+        contracts: usize,
+    },
 }
 
 impl CloseWarning {
@@ -79,12 +89,14 @@ impl CloseWarning {
         match self {
             Self::MissingRate { .. } => "missing_rate",
             Self::Provisional { .. } => "provisional",
+            Self::FixedUnposted { .. } => "fixed_unposted",
         }
     }
 
     pub fn count(&self) -> usize {
         match self {
             Self::MissingRate { entries } | Self::Provisional { entries } => *entries,
+            Self::FixedUnposted { contracts } => *contracts,
         }
     }
 }
@@ -100,6 +112,11 @@ pub fn warnings(s: &MonthState) -> Vec<CloseWarning> {
     if s.provisional_entries > 0 {
         out.push(CloseWarning::Provisional {
             entries: s.provisional_entries,
+        });
+    }
+    if s.unposted_fixed_costs > 0 {
+        out.push(CloseWarning::FixedUnposted {
+            contracts: s.unposted_fixed_costs,
         });
     }
     out
@@ -306,5 +323,16 @@ mod tests {
         let at: BTreeMap<String, MonthFigures> = [("1".to_string(), a)].into();
         let now: BTreeMap<String, MonthFigures> = [("1".to_string(), fig(2_000, 0, 0))].into();
         assert_eq!(compare(&at, &now).len(), 1);
+    }
+    #[test]
+    fn t37_unposted_fixed_costs_warn_but_do_not_block_the_close() {
+        let s = MonthState {
+            unposted_fixed_costs: 2,
+            ..Default::default()
+        };
+        let w = check_close(MonthStatus::Open, &s).unwrap();
+        assert_eq!(w, vec![CloseWarning::FixedUnposted { contracts: 2 }]);
+        assert_eq!(w[0].code(), "fixed_unposted");
+        assert_eq!(w[0].count(), 2);
     }
 }

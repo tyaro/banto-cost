@@ -9,7 +9,7 @@ import { LayoutDashboard, Users, ScrollText, Settings } from '@lucide/svelte';
 import { Palette } from '@lucide/svelte';
 import { Building, CalendarRange, Calculator, FolderKanban, TrendingUp } from '@lucide/svelte';
 import { ClipboardCheck, Clock, ListTree, Receipt } from '@lucide/svelte';
-import { CalendarCheck } from '@lucide/svelte';
+import { CalendarCheck, Repeat } from '@lucide/svelte';
 import type { CostNavIconKey, DemoNavIconKey, NavIconKey } from '#lib/navigation.js';
 
 export const NAV_ICONS: Record<NavIconKey | CostNavIconKey | DemoNavIconKey, Component> = {
@@ -27,5 +27,6 @@ export const NAV_ICONS: Record<NavIconKey | CostNavIconKey | DemoNavIconKey, Com
 	approvals: ClipboardCheck,
 	costs: Receipt,
 	closing: CalendarCheck,
+	'fixed-costs': Repeat,
 	'work-masters': ListTree
 };

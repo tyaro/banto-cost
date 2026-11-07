@@ -33,6 +33,7 @@ export type CostNavIconKey =
 	| 'approvals'
 	| 'costs'
 	| 'closing'
+	| 'fixed-costs'
 	| 'work-masters';
 export type CostNavLabelKey =
 	| 'nav.pipeline'
@@ -44,6 +45,7 @@ export type CostNavLabelKey =
 	| 'nav.approvals'
 	| 'nav.costs'
 	| 'nav.closing'
+	| 'nav.fixedCosts'
 	| 'nav.workMasters';
 
 /** Keys of the demo-only catalog entry (`NavItem.demoOnly`). Kept out of the unions above on purpose:
@@ -130,6 +132,8 @@ const allNavItems: NavItem[] = [
 	{ path: '/calc-basis', labelKey: 'nav.calcBasis', icon: 'calc-basis' },
 	// banto-cost P6b: 月次締め (spec §7 / §9, T11). Accounting only (finance.close, server-side).
 	{ path: '/closing', labelKey: 'nav.closing', icon: 'closing' },
+	// banto-cost P7b: 月額固定原価 (design §9.4, T37). finance.rate + amount.view (server-side).
+	{ path: '/fixed-costs', labelKey: 'nav.fixedCosts', icon: 'fixed-costs' },
 	// banto-cost P4b: 工程・共通活動 masters (spec §5.2).
 	{ path: '/work-masters', labelKey: 'nav.workMasters', icon: 'work-masters' },
 	{ path: '/ui-demo', labelKey: 'nav.uiDemo', icon: 'ui-demo', demoOnly: true },

@@ -524,9 +524,15 @@ type LedgerRow = (
     i64,
 );
 
+/// The approved direct costs and the approved monthly fixed-cost postings
+/// (月額固定原価, P7b, T37). A posting joins as a normal record under its
+/// negated id, so the two id spaces never meet; it has no phase, order or
+/// reference, and its cost type is labor (an employee) or outsourcing.
 const LEDGER_SQL: &str = "SELECT id, entry_kind, ref_id, adjustment_kind, project_id, phase_id, \
      cost_type, purchase_order_id, booked_on, amount FROM direct_costs \
-     WHERE status = 'approved' ORDER BY id";
+     WHERE status = 'approved' \
+     UNION ALL SELECT -id, 'normal', NULL, NULL, project_id, NULL, cost_type, NULL, \
+     booked_on, amount FROM fixed_cost_postings WHERE status = 'approved' ORDER BY 1";
 const LEDGER_ALLOC_SQL: &str = "SELECT a.direct_cost_id, a.project_id, a.amount \
      FROM cost_allocations a JOIN direct_costs c ON c.id = a.direct_cost_id \
      WHERE c.status = 'approved' ORDER BY a.direct_cost_id, a.line_no";
@@ -1867,7 +1873,12 @@ impl DirectCostsService {
             project_id,
             entries,
             totals: by_type(&summary.cumulative),
-            total: summary.cumulative.total(),
+            // Direct types only: an employee's monthly fixed cost in the
+            // ledger is labor (P7b) and belongs to the labor figures.
+            total: DIRECT_TYPES
+                .iter()
+                .map(|t| summary.cumulative.get(*t))
+                .sum(),
             months,
             pending,
             provisional,

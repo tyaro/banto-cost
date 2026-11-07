@@ -116,6 +116,8 @@ export interface ForecastOverview {
 	changeFromPrevious: number | null;
 	/** 目標粗利率 on the business date (`null` = 未設定, never 0%). */
 	targetMarginPct: number | null;
+	/** The acceptance date the rate was read on (`null` = not accepted: the business date). */
+	targetMarginOn: string | null;
 	targetProfit: number | null;
 	/** 原資 = confirmed order − 目標粗利 (`null` before the order or with no rate). */
 	funds: number | null;
