@@ -256,6 +256,10 @@ pub enum Operation {
     EditRates,
     /// Revenue recognition, cost confirmation, monthly close, corrections.
     FinanceClose,
+    /// The monthly close (月次締め, banto-cost P6b, T11): view a month, close
+    /// and reopen it. Accounting (`finance.close`), with `amount.view` - the
+    /// month's company-wide labor, direct costs and revenue are shown.
+    CloseMonth,
     /// Company-wide aggregates and every project's details.
     ViewAllReports,
     /// Read masters (customers, phases): any company member.
@@ -311,6 +315,7 @@ impl Operation {
             Operation::ViewRates => "view_rates",
             Operation::EditRates => "edit_rates",
             Operation::FinanceClose => "finance_close",
+            Operation::CloseMonth => "close_month",
             Operation::ViewAllReports => "view_all_reports",
             Operation::ViewMasters => "view_masters",
             Operation::EditMasters => "edit_masters",
@@ -345,6 +350,7 @@ impl Operation {
             | Operation::ViewRates
             | Operation::EditRates
             | Operation::FinanceClose
+            | Operation::CloseMonth
             | Operation::ViewAllReports
             | Operation::ViewMasters
             | Operation::EditMasters
@@ -539,6 +545,10 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         }
         Operation::ViewRates | Operation::EditRates => require(subject, Capability::FinanceRate)?,
         Operation::FinanceClose => require(subject, Capability::FinanceClose)?,
+        Operation::CloseMonth => {
+            require(subject, Capability::FinanceClose)?;
+            require(subject, Capability::AmountView)?;
+        }
         Operation::ViewAllReports => {
             require(subject, Capability::ReportAll)?;
             require(subject, Capability::AmountView)?;
@@ -1543,6 +1553,23 @@ mod tests {
         allow(&exec, Operation::ViewAllReports);
         assert_eq!(
             deny(&exec, Operation::FinanceClose),
+            Denial::MissingCapability(Capability::FinanceClose)
+        );
+    }
+
+    #[test]
+    fn t11_the_monthly_close_needs_accounting_and_amount_view() {
+        let finance = subject(3, &[Capability::FinanceClose, Capability::AmountView], &[]);
+        allow(&finance, Operation::CloseMonth);
+        // The close shows the month's amounts: finance.close alone is not enough.
+        let blind = subject(4, &[Capability::FinanceClose], &[]);
+        assert_eq!(
+            deny(&blind, Operation::CloseMonth),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        let viewer = subject(5, &[Capability::AmountView, Capability::ReportAll], &[]);
+        assert_eq!(
+            deny(&viewer, Operation::CloseMonth),
             Denial::MissingCapability(Capability::FinanceClose)
         );
     }

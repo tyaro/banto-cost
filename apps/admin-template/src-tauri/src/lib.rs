@@ -39,6 +39,7 @@ use admin_template_core::calc_basis::{
     CompanyBasis, ImpactPreview, ProjectBasis,
 };
 use admin_template_core::closeouts::RESOURCE as CLOSEOUT_RESOURCE;
+use admin_template_core::closing::RESOURCE as CLOSING_RESOURCE;
 use admin_template_core::cost_access::{
     approve_ops as cost_approve_ops, entry_ops as cost_entry_ops, order_create_op,
     own_ops as cost_own_ops,
@@ -4999,6 +5000,91 @@ async fn project_closeout_reopen_body(
     Ok(reopened)
 }
 
+// --- banto-cost P6b: 月次締め (T11) --------------------------------------------
+// Twins of `/api/closing`, `/api/closing/{month}`, `/api/closing/{month}/close`
+// and `/api/closing/{month}/reopen` (`admin_template_core::rest::closing`):
+// the same role floors (any role for reads, editor for writes), the same
+// `Operation::CloseMonth` through `authorize_audited`, the same audit
+// actions and detail (`closing::audit_detail`: the month and the action, no
+// reason, no figures).
+
+#[tauri::command]
+async fn closing_months(
+    state: State<'_, AppState>,
+) -> Result<Vec<admin_template_core::closing::MonthRow>, BantoError> {
+    let identity = require_role(&state, Role::Viewer, CLOSING_RESOURCE).await?;
+    business_guard(&state, &identity, Operation::CloseMonth, CLOSING_RESOURCE).await?;
+    state.forecasts.closing().months().await
+}
+
+#[tauri::command]
+async fn closing_get(
+    state: State<'_, AppState>,
+    month: String,
+) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
+    let identity = require_role(&state, Role::Viewer, CLOSING_RESOURCE).await?;
+    business_guard(&state, &identity, Operation::CloseMonth, CLOSING_RESOURCE).await?;
+    state.forecasts.closing().get(&month).await
+}
+
+#[tauri::command]
+async fn closing_close(
+    state: State<'_, AppState>,
+    month: String,
+    values: admin_template_core::closing::CloseInput,
+) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    let (_, user_id) =
+        business_guard(&state, &actor, Operation::CloseMonth, CLOSING_RESOURCE).await?;
+    let closed = state
+        .forecasts
+        .closing()
+        .close(&month, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "close",
+        CLOSING_RESOURCE,
+        Some(&closed.month),
+        Some(admin_template_core::closing::audit_detail(
+            &closed.month,
+            "close",
+        )),
+    )
+    .await;
+    Ok(closed)
+}
+
+#[tauri::command]
+async fn closing_reopen(
+    state: State<'_, AppState>,
+    month: String,
+    values: admin_template_core::closing::ReopenInput,
+) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    let (_, user_id) =
+        business_guard(&state, &actor, Operation::CloseMonth, CLOSING_RESOURCE).await?;
+    let reopened = state
+        .forecasts
+        .closing()
+        .reopen(&month, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "reopen",
+        CLOSING_RESOURCE,
+        Some(&reopened.month),
+        Some(admin_template_core::closing::audit_detail(
+            &reopened.month,
+            "reopen",
+        )),
+    )
+    .await;
+    Ok(reopened)
+}
+
 // --- banto-cost P4d: vendors, direct costs and purchase orders ---------------
 // Twins of `/api/vendors/*`, `/api/direct-costs/*`, `/api/purchase-orders/*`
 // and `/api/projects/{id}/costs` (`admin_template_core::rest::costs`): the
@@ -6307,6 +6393,10 @@ pub fn run() {
             project_closeout_get,
             project_closeout_settle,
             project_closeout_reopen,
+            closing_months,
+            closing_get,
+            closing_close,
+            closing_reopen,
             vendors_list,
             vendors_create,
             vendors_update,

@@ -12,7 +12,9 @@
 //!
 //! Workflow: 下書き → 申請 → 承認, or 差戻し (back to the person, who edits and
 //! submits again). Only drafts and returned entries can be edited or
-//! deleted; an approved entry is never edited here (corrections are P6).
+//! deleted; an approved entry is never edited here (corrections are P6b-2).
+//! An entry dated in a closed month (月次締め, P6b) takes no write at all:
+//! every write checks the month in its transaction (`refuse_closed!`).
 //! On approval the `emp_rate` calc-basis row in effect on the work date and
 //! the labor cost are stored; without a rate the cost stays NULL (原価未確定,
 //! T04). A later calc-basis change never rewrites them (T03, design §10.5):
@@ -38,6 +40,7 @@ use tokio::sync::broadcast;
 
 use crate::calc_basis::{domain_row, CalcBasisService, CalcValueRow};
 use crate::closeouts::{refuse_settled, settled_check_sql};
+use crate::closing::{refuse_closed, MonthGate};
 use crate::customers::{clean_optional, field_error, now_expr, stale_version_error};
 use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, MAX_TEXT_LEN,
@@ -624,6 +627,7 @@ impl TimeEntriesService {
         let again =
             self.sql("SELECT id FROM time_entries WHERE user_id = ? AND client_request_id = ?");
         let settled = settled_check_sql(self.db.dialect());
+        let gate = MonthGate::new(self.db.dialect());
         // `Err(id)` = a concurrent retry with the same request id committed
         // while this one waited for the lock (PR #16 review): its row is the
         // answer, and it must not be counted against this day as a second one.
@@ -644,6 +648,7 @@ impl TimeEntriesService {
                     let id: i64 = scalar!(&mut *tx, insert, &date, user_id, checked.project_id(),
                         checked.activity_id(), checked.domain.phase, checked.domain.minutes,
                         &checked.description, rework, &checked.request_id)?;
+                    refuse_closed!(&mut *tx, gate, &date, "workDate");
                     if let Some(p) = checked.project_id() {
                         refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
                     }
@@ -731,6 +736,7 @@ impl TimeEntriesService {
         let rework = checked.domain.rework.map(Rework::as_str);
         let version = entry.row_version;
         let settled = settled_check_sql(self.db.dialect());
+        let gate = MonthGate::new(self.db.dialect());
         let warnings = in_tx!(&self.db, tx => {
             if let Some(lock) = &lock {
                 let _: Vec<(i64,)> = fetch_all!(&mut *tx, lock, user_id)?;
@@ -743,6 +749,8 @@ impl TimeEntriesService {
             {
                 return Err(stale_version_error());
             }
+            refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
+            refuse_closed!(&mut *tx, gate, &date, "workDate");
             if let Some(p) = checked.project_id() {
                 refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
             }
@@ -758,14 +766,18 @@ impl TimeEntriesService {
 
     /// Delete a draft or returned entry of `user_id` (never an approved one).
     pub async fn delete(&self, user_id: i64, id: i64, row_version: i64) -> Result<(), BantoError> {
-        self.editable(user_id, id, Some(row_version)).await?;
+        let entry = self.editable(user_id, id, Some(row_version)).await?;
         let sql = self.sql(
             "DELETE FROM time_entries WHERE id = ? AND row_version = ? \
              AND status IN ('draft','returned')",
         );
-        if on_pool!(&self.db, pool => execute!(pool, sql, id, row_version))? == 0 {
-            return Err(stale_version_error());
-        }
+        let gate = MonthGate::new(self.db.dialect());
+        in_tx!(&self.db, tx => {
+            if execute!(&mut *tx, sql, id, row_version)? == 0 {
+                return Err(stale_version_error());
+            }
+            refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
+        });
         self.notify_changed();
         Ok(())
     }
@@ -787,9 +799,13 @@ impl TimeEntriesService {
              WHERE id = ? AND row_version = ? AND status IN ('draft','returned')",
             now = self.now()
         ));
-        if on_pool!(&self.db, pool => execute!(pool, sql, id, row_version))? == 0 {
-            return Err(stale_version_error());
-        }
+        let gate = MonthGate::new(self.db.dialect());
+        in_tx!(&self.db, tx => {
+            if execute!(&mut *tx, sql, id, row_version)? == 0 {
+                return Err(stale_version_error());
+            }
+            refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
+        });
         self.notify_changed();
         self.get(id).await
     }
@@ -822,6 +838,7 @@ impl TimeEntriesService {
                 self.require_open_project(pid).await?;
             }
         }
+        let gate = MonthGate::new(self.db.dialect());
         let changed = if input.approve {
             let work_date = parse_date("workDate", &entry.work_date)?;
             let rows = CalcBasisService::new(self.db.clone())
@@ -842,8 +859,12 @@ impl TimeEntriesService {
                 now = self.now()
             ));
             let rate = cost.rate.map(|r| r.value);
-            on_pool!(&self.db, pool => execute!(pool, sql, value_id, rate, cost.cost,
-                actor_user_id, id, input.row_version))?
+            in_tx!(&self.db, tx => {
+                let n = execute!(&mut *tx, sql, value_id, rate, cost.cost, actor_user_id, id,
+                    input.row_version)?;
+                refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
+                n
+            })
         } else {
             let reason = clean_optional(&input.reason);
             let mut errors = Vec::new();
@@ -863,8 +884,11 @@ impl TimeEntriesService {
                  WHERE id = ? AND row_version = ? AND status = 'submitted'",
                 now = self.now()
             ));
-            on_pool!(&self.db, pool => execute!(pool, sql, &reason, actor_user_id, id,
-                input.row_version))?
+            in_tx!(&self.db, tx => {
+                let n = execute!(&mut *tx, sql, &reason, actor_user_id, id, input.row_version)?;
+                refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
+                n
+            })
         };
         if changed == 0 {
             return Err(stale_version_error());
@@ -961,11 +985,12 @@ pub(crate) fn row_of(
 /// Time entries as usages of `emp_rate`, for the calc-basis impact preview
 /// (design §10.5): drafts, submissions and returned entries are pending (they
 /// will be costed at approval), approved ones carry the rate they were
-/// costed with. Closing months arrive in P6, so nothing is closed yet.
+/// costed with. An entry dated in a closed month (P6b) is `closed`.
 pub(crate) async fn usages(db: &Db, item_key: &str) -> Result<Vec<Usage>, BantoError> {
     if item_key != RATE_ITEM {
         return Ok(Vec::new());
     }
+    let closed = crate::closing::closed_months(db).await?;
     let sql =
         "SELECT id, project_id, work_date, status, applied_rate FROM time_entries".to_string();
     type Row = (i64, Option<i64>, String, String, Option<i64>);
@@ -983,7 +1008,7 @@ pub(crate) async fn usages(db: &Db, item_key: &str) -> Result<Vec<Usage>, BantoE
                 } else {
                     UsageStatus::Pending
                 },
-                closed: false,
+                closed: closed.contains(&crate::closing::month_of(&date)),
                 line_specific: None,
                 applied_value: rate,
             })

@@ -5338,3 +5338,132 @@ async fn t17_t12_rest_closeout_is_settled_and_reopened_by_the_manager_or_account
     assert!(detail.contains("closeoutId"), "{detail}");
     assert!(!detail.contains("計上漏れ"), "no reason: {detail}");
 }
+
+#[tokio::test]
+async fn t11_rest_closing_is_accounting_only_and_refuses_hours_in_a_closed_month() {
+    let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    // finance.close without amount.view: the month's figures stay hidden.
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["time.entry", "finance.close"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/closing/2026-10", &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    grant(&router, &admin, EDITOR_ID, json!(["time.entry"])).await;
+    grant(&router, &admin, 1, json!(["finance.close", "amount.view"])).await;
+
+    // Without finance.close: no month, no close.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/closing/2026-10", &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/closing/2026-10/close",
+            &editor,
+            json!({ "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "closing_periods"));
+
+    // Accounting closes the month.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/closing/2026-10", &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let month = body_json(response).await;
+    assert_eq!(month["status"], "open");
+    assert_eq!(month["canClose"], true);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/closing/2026-10/close",
+            &admin,
+            json!({ "rowVersion": month["rowVersion"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let closed = body_json(response).await;
+    assert_eq!(closed["status"], "closed");
+
+    // An hour on a common activity dated in the closed month is refused.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/time-entries",
+            &editor,
+            json!({ "workDate": "2026-10-15", "activityId": 1, "minutes": 60 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(response).await;
+    assert!(body.to_string().contains("締め済み"), "{body}");
+
+    // Reopening needs a reason, then the month takes hours again.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/closing/2026-10/reopen",
+            &admin,
+            json!({ "rowVersion": closed["rowVersion"], "reason": "" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/closing/2026-10/reopen",
+            &admin,
+            json!({ "rowVersion": closed["rowVersion"], "reason": "工数の追加" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/time-entries",
+            &editor,
+            json!({ "workDate": "2026-10-15", "activityId": 1, "minutes": 60 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/closing", &admin))
+        .await
+        .unwrap();
+    let months = body_json(response).await;
+    assert_eq!(months[0]["month"], "2026-10");
+    assert_eq!(months[0]["status"], "reopened");
+    // The audit names the month and the action, not the reason.
+    let entries = audit.list(ListParams::default()).await.unwrap().rows;
+    let reopen = entries
+        .iter()
+        .find(|e| e.resource == "closing_periods" && e.action == "reopen")
+        .expect("reopen audited");
+    let detail = format!("{:?}", reopen.detail);
+    assert!(detail.contains("2026-10"), "{detail}");
+    assert!(!detail.contains("工数の追加"), "{detail}");
+}
