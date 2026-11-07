@@ -508,9 +508,12 @@ impl CalcBasisService {
     }
 
     /// Records that use the item, so the preview counts them (design §10.5).
-    /// Time entries use `emp_rate` (P4b); costs and outlooks add theirs later.
+    /// Time entries use `emp_rate` (P4b), budget drafts `budget_rate` (P4c);
+    /// costs and outlooks add theirs later.
     async fn usages(&self, item_key: &str) -> Result<Vec<Usage>, BantoError> {
-        crate::time_entries::usages(&self.db, item_key).await
+        let mut found = crate::time_entries::usages(&self.db, item_key).await?;
+        found.extend(crate::budgets::usages(&self.db, item_key).await?);
+        Ok(found)
     }
 
     /// The item a request names, for the wiring layer's authorization.

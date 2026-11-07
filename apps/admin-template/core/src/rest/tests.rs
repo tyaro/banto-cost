@@ -73,6 +73,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
+    let budgets = crate::budgets::BudgetsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -132,6 +133,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: None,
     };
     (
@@ -157,6 +159,7 @@ async fn router_with_token() -> (Router, String) {
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
+    let budgets = crate::budgets::BudgetsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth
@@ -177,6 +180,7 @@ async fn router_with_token() -> (Router, String) {
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: None,
     };
     (api_router(services, auth, tx, false), token)
@@ -234,6 +238,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
+    let budgets = crate::budgets::BudgetsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
@@ -250,6 +255,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: None,
     };
     api_router(services, auth, tx, allow_setup)
@@ -457,6 +463,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
+    let budgets = crate::budgets::BudgetsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -476,6 +483,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: None,
     };
     (api_router(services, auth, tx, allow_setup), audit)
@@ -826,6 +834,7 @@ async fn router_with_role_tokens_audit_and_events() -> (
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
+    let budgets = crate::budgets::BudgetsService::new(pool.clone());
     let audit = AuditLogService::new(pool.clone());
 
     users
@@ -874,6 +883,7 @@ async fn router_with_role_tokens_audit_and_events() -> (
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: None,
     };
     let router = api_router(services, auth, tx.clone(), false);
@@ -924,6 +934,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
     let calc_basis = crate::calc_basis::CalcBasisService::new(db.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(db.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(db.clone());
+    let budgets = crate::budgets::BudgetsService::new(db.clone());
     let audit = AuditLogService::new(db);
 
     users
@@ -970,6 +981,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1332,6 +1344,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
+    let budgets = crate::budgets::BudgetsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -1365,6 +1378,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: Some(metrics),
     };
     let router = api_router(services, auth, tx, false);
@@ -1984,6 +1998,7 @@ async fn router_with_viewer_public(
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
+    let budgets = crate::budgets::BudgetsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     settings
@@ -2012,6 +2027,7 @@ async fn router_with_viewer_public(
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: None,
     };
     (
@@ -2666,6 +2682,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
+    let budgets = crate::budgets::BudgetsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -2696,6 +2713,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics: None,
     };
     (api_router(services, auth, tx, false), users)
@@ -4391,4 +4409,243 @@ async fn p4b_rest_returned_entry_is_fixed_resubmitted_and_drafts_deleted() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn t09_t12_rest_budget_versions_keep_the_original_and_follow_scope() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["project.manage", "amount.view"]),
+    )
+    .await;
+    grant(&router, &admin, 1, json!(["finance.rate", "amount.view"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/calc-basis",
+            &admin,
+            json!({ "itemKey": "budget_rate", "validFrom": "2020-01-01", "value": 5_000, "reason": "標準" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-B01", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": project["rowVersion"],
+                "convertedOn": "2026-11-20",
+                "confirmedAmount": 4_000_000,
+                "basis": "注文書受領",
+                "plannedStart": "2026-12-01",
+                "plannedEnd": "2027-03-31",
+                "revenuePlan": [{ "month": "2027-03", "amount": 4_000_000 }],
+                "scope": "whole"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Not the manager: no drafting (T12); the viewer role cannot write.
+    for token in [&admin, &viewer] {
+        let response = router
+            .clone()
+            .oneshot(post_json_auth(
+                &format!("/api/projects/{id}/budget/draft"),
+                token,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    // The manager drafts; a retried create returns the same draft (T13).
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(post_json_auth(
+                &format!("/api/projects/{id}/budget/draft"),
+                &editor,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        ids.push(body_json(response).await["draft"]["id"].as_i64().unwrap());
+    }
+    assert_eq!(ids[0], ids[1]);
+    let draft = ids[0];
+    let lines = json!([
+        { "phaseId": 1, "costType": "labor", "plannedMinutes": 12_000 },
+        { "costType": "material", "amount": 900_000 },
+        { "costType": "outsource", "amount": 500_000 },
+        { "costType": "travel", "amount": 150_000 },
+        { "costType": "other", "amount": 50_000 }
+    ]);
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/budget-versions/{draft}"),
+            &editor,
+            json!({ "rowVersion": 1, "lines": lines }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = body_json(response).await;
+    assert_eq!(saved["total"], 2_600_000);
+    // A stale version is refused (T13).
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/budget-versions/{draft}"),
+            &editor,
+            json!({ "rowVersion": 1, "lines": [] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Someone without the project's scope cannot approve it.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/budget-versions/{draft}/approve"),
+            &admin,
+            json!({ "rowVersion": saved["rowVersion"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // The manager approves their own draft (company policy), audited.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/budget-versions/{draft}/approve"),
+            &editor,
+            json!({ "rowVersion": saved["rowVersion"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let v1 = body_json(response).await;
+    assert_eq!(v1["versionNo"], 1);
+
+    // A change needs its reason, then becomes the current budget (T09).
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/budget/draft"),
+            &editor,
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    let d2 = body_json(response).await["draft"].clone();
+    let d2_id = d2["id"].as_i64().unwrap();
+    assert_eq!(d2["lines"].as_array().unwrap().len(), 5, "copied from v1");
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/budget-versions/{d2_id}/approve"),
+            &editor,
+            json!({ "rowVersion": d2["rowVersion"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/budget-versions/{d2_id}"),
+            &editor,
+            json!({
+                "rowVersion": d2["rowVersion"],
+                "reason": "追加工事",
+                "lines": [{ "phaseId": 1, "costType": "labor", "plannedMinutes": 14_400 }]
+            }),
+        ))
+        .await
+        .unwrap();
+    let d2 = body_json(response).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/budget-versions/{d2_id}/approve"),
+            &editor,
+            json!({ "rowVersion": d2["rowVersion"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/budget"), &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let overview = body_json(response).await;
+    assert_eq!(overview["original"]["versionNo"], 1);
+    assert_eq!(overview["original"]["total"], 2_600_000);
+    assert_eq!(overview["current"]["versionNo"], 2);
+    assert_eq!(overview["current"]["reason"], "追加工事");
+    assert_eq!(overview["current"]["total"], 1_200_000);
+    assert_eq!(overview["history"].as_array().unwrap().len(), 2);
+    // Approved versions are never deleted.
+    let response = router
+        .clone()
+        .oneshot(delete_auth(
+            &format!("/api/budget-versions/{draft}?rowVersion=2"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Out of scope: no budget amounts (T12).
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/budget"), &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // Audit: the self-approval is recorded, amounts are not.
+    let writes: Vec<_> = audit
+        .list(ListParams::default())
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter(|row| row.resource == "budgets" && row.action == "approve")
+        .collect();
+    assert_eq!(writes.len(), 2);
+    for row in &writes {
+        let detail = row.detail.clone().unwrap_or_default();
+        assert!(detail.contains("\"selfApproval\":true"), "{detail}");
+        assert!(!detail.contains("2600000"), "{detail}");
+    }
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "budgets"));
 }

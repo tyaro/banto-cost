@@ -32,6 +32,7 @@ async fn reset_schema(url: &str) {
         .await
         .expect("connect for schema reset");
     for stmt in [
+        "DROP TABLE IF EXISTS budget_lines, budget_versions CASCADE",
         "DROP TABLE IF EXISTS time_entries, phases, common_activities CASCADE",
         "DROP TABLE IF EXISTS calc_values, calc_items CASCADE",
         "DROP TABLE IF EXISTS outlook_snapshot_rows, outlook_snapshots, revenue_clearings, \
@@ -433,6 +434,65 @@ async fn app_layer_crud_round_trips_on_postgres() {
         assert!(!approved.cost_missing);
         let summary = time.project_summary(project.id).await.unwrap();
         assert_eq!(summary.total.labor_cost, 38_500);
+
+        // banto-cost P4c: budget versions on Postgres (the one-draft partial
+        // index, the COALESCE line index, CURRENT_DATE::text, the project-row
+        // lock of the approval, the budget-rate lookup).
+        use admin_template_core::budgets::{BudgetDraftInput, BudgetsService};
+        basis
+            .add(
+                None,
+                value("budget_rate", "2020-01-01", Some(5_000)),
+                Some(manager),
+            )
+            .await
+            .expect("budget rate on Postgres");
+        if let banto_storage::Db::Postgres(pool) = &db {
+            sqlx::query("UPDATE projects SET status = 'ordered' WHERE id = $1")
+                .bind(project.id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        let budgets = BudgetsService::new(db.clone());
+        let draft = budgets
+            .create_draft(project.id, Some(manager))
+            .await
+            .expect("draft on Postgres")
+            .draft;
+        assert!(
+            budgets
+                .create_draft(project.id, Some(manager))
+                .await
+                .unwrap()
+                .replayed
+        );
+        let input: BudgetDraftInput = serde_json::from_value(serde_json::json!({
+            "rowVersion": draft.row_version,
+            "lines": [
+                { "phaseId": 1, "costType": "labor", "plannedMinutes": 12_000 },
+                { "costType": "material", "amount": 900_000 }
+            ]
+        }))
+        .unwrap();
+        let saved = budgets
+            .update_draft(draft.id, input, Some(manager))
+            .await
+            .expect("save on Postgres");
+        assert_eq!(saved.total, Some(1_900_000));
+        let v1 = budgets
+            .approve(&saved, saved.row_version, Some(manager))
+            .await
+            .expect("approve on Postgres");
+        assert_eq!(v1.version_no, Some(1));
+        let overview = budgets.overview(project.id).await.unwrap();
+        assert_eq!(overview.current.unwrap().total, Some(1_900_000));
+        let labor = overview
+            .totals
+            .iter()
+            .find(|t| t.cost_type == "labor")
+            .unwrap();
+        assert_eq!(labor.actual, Some(38_500));
     }
 }
 

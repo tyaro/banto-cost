@@ -51,6 +51,7 @@ use banto_core::BantoError;
 use banto_server::AuthenticatedSession;
 use std::str::FromStr;
 
+use crate::budgets::BudgetsService;
 use crate::calc_basis::{
     audit_detail, CalcBasisService, CalcValueInput, CalcValueRow, CompanyBasis, ImpactPreview,
     ProjectBasis,
@@ -77,6 +78,7 @@ pub(super) struct BusinessState {
     pub(super) calc_basis: CalcBasisService,
     pub(super) work_masters: WorkMastersService,
     pub(super) time_entries: TimeEntriesService,
+    pub(super) budgets: BudgetsService,
     pub(super) authz: AuthzService,
     pub(super) users: UsersService,
     pub(super) audit: AuditLogService,
@@ -805,6 +807,7 @@ pub(super) struct BusinessServices {
     pub calc_basis: CalcBasisService,
     pub work_masters: WorkMastersService,
     pub time_entries: TimeEntriesService,
+    pub budgets: BudgetsService,
     pub authz: AuthzService,
     pub users: UsersService,
 }
@@ -822,6 +825,7 @@ pub(super) fn state(
         calc_basis: services.calc_basis,
         work_masters: services.work_masters,
         time_entries: services.time_entries,
+        budgets: services.budgets,
         authz: services.authz,
         users: services.users,
         audit,
