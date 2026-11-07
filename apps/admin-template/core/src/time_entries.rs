@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::calc_basis::{domain_row, CalcBasisService, CalcValueRow};
+use crate::closeouts::{refuse_settled, settled_check_sql};
 use crate::customers::{clean_optional, field_error, now_expr, stale_version_error};
 use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, MAX_TEXT_LEN,
@@ -50,6 +51,8 @@ pub const MAX_RANGE_DAYS: i64 = 62;
 pub const MAX_REQUEST_ID_LEN: usize = 100;
 
 /// One time entry as the screens see it.
+const SETTLED_MESSAGE: &str = "精算完了の案件には工数を入力できません";
+
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeEntry {
@@ -510,7 +513,8 @@ impl TimeEntriesService {
         })
     }
 
-    /// The project exists and is not settled (精算完了 closes it for hours).
+    /// The project exists and is not settled (精算完了 closes it for hours);
+    /// the writes check again in their transaction (`refuse_settled!`).
     async fn require_open_project(&self, project_id: i64) -> Result<(), BantoError> {
         let sql = self.sql("SELECT status FROM projects WHERE id = ?");
         let row: Option<(String,)> =
@@ -520,10 +524,7 @@ impl TimeEntriesService {
                 field_errors: vec![field_error("projectId", "見つかりません")],
             }),
             Some((status,)) if status == "settled" => Err(BantoError::Validation {
-                field_errors: vec![field_error(
-                    "projectId",
-                    "精算完了の案件には工数を入力できません",
-                )],
+                field_errors: vec![field_error("projectId", SETTLED_MESSAGE)],
             }),
             Some(_) => Ok(()),
         }
@@ -622,6 +623,7 @@ impl TimeEntriesService {
         let rework = checked.domain.rework.map(Rework::as_str);
         let again =
             self.sql("SELECT id FROM time_entries WHERE user_id = ? AND client_request_id = ?");
+        let settled = settled_check_sql(self.db.dialect());
         // `Err(id)` = a concurrent retry with the same request id committed
         // while this one waited for the lock (PR #16 review): its row is the
         // answer, and it must not be counted against this day as a second one.
@@ -642,6 +644,9 @@ impl TimeEntriesService {
                     let id: i64 = scalar!(&mut *tx, insert, &date, user_id, checked.project_id(),
                         checked.activity_id(), checked.domain.phase, checked.domain.minutes,
                         &checked.description, rework, &checked.request_id)?;
+                    if let Some(p) = checked.project_id() {
+                        refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
+                    }
                     Ok((id, warnings))
                 }
             }))
@@ -725,6 +730,7 @@ impl TimeEntriesService {
         let date = on.to_string();
         let rework = checked.domain.rework.map(Rework::as_str);
         let version = entry.row_version;
+        let settled = settled_check_sql(self.db.dialect());
         let warnings = in_tx!(&self.db, tx => {
             if let Some(lock) = &lock {
                 let _: Vec<(i64,)> = fetch_all!(&mut *tx, lock, user_id)?;
@@ -736,6 +742,9 @@ impl TimeEntriesService {
                 id, version)? == 0
             {
                 return Err(stale_version_error());
+            }
+            if let Some(p) = checked.project_id() {
+                refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
             }
             warnings
         });

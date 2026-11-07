@@ -8,6 +8,7 @@ pub mod approval;
 pub mod assets;
 pub mod budgets;
 pub mod calc_basis;
+pub mod closeouts;
 pub mod cost_access;
 pub mod customers;
 pub mod db;

@@ -632,6 +632,49 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .await
             .expect("portfolio on Postgres");
         assert!(portfolio.rows.iter().any(|r| r.project_id == project.id));
+
+        // banto-cost P6a: 精算完了 on Postgres (the fingerprint casts, the
+        // guarded status update, RETURNING id, the waivers' CHECK).
+        use admin_template_core::closeouts::{SettleInput, WaiverInput};
+        let pool = db.as_postgres().expect("a PostgreSQL handle");
+        sqlx::query("UPDATE projects SET status = 'work_done' WHERE id = $1")
+            .bind(project.id)
+            .execute(pool)
+            .await
+            .unwrap();
+        let closeouts = forecasts.closeouts();
+        let check = closeouts
+            .check(project.id)
+            .await
+            .expect("closeout check on Postgres");
+        assert!(check.settleable);
+        let waivers: Vec<WaiverInput> = check
+            .blockers
+            .iter()
+            .filter(|b| b.waivable)
+            .map(|b| WaiverInput {
+                kind: b.kind.clone(),
+                purchase_order_id: b.purchase_order_id,
+                amount: b.amount.unwrap_or(0),
+                reason: "不要になった".into(),
+            })
+            .collect();
+        let settled = closeouts
+            .settle(
+                project.id,
+                SettleInput {
+                    row_version: check.row_version,
+                    note: None,
+                    waivers,
+                },
+                Some(manager),
+            )
+            .await;
+        // Only remaining amounts are left on the project here: settled.
+        assert!(check.blockers.iter().all(|b| b.waivable));
+        let settled = settled.expect("settle on Postgres");
+        assert_eq!(settled.status, "settled");
+        assert!(settled.closeout.is_some());
     }
 }
 

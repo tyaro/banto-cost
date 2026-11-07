@@ -38,6 +38,7 @@ use admin_template_core::calc_basis::{
     audit_detail as calc_basis_audit_detail, CalcBasisService, CalcValueInput, CalcValueRow,
     CompanyBasis, ImpactPreview, ProjectBasis,
 };
+use admin_template_core::closeouts::RESOURCE as CLOSEOUT_RESOURCE;
 use admin_template_core::cost_access::{
     approve_ops as cost_approve_ops, entry_ops as cost_entry_ops, order_create_op,
     own_ops as cost_own_ops,
@@ -4881,6 +4882,78 @@ async fn forecast_draft_adopt_body(
     Ok(adopted)
 }
 
+// --- banto-cost P6a: 精算完了 (T17) -------------------------------------------
+// Twins of `/api/projects/{id}/closeout` (`admin_template_core::rest::closeouts`):
+// the same role floors, the same `Operation`s through `authorize_audited`
+// (`ViewProjectAmounts`, `SettleProject`), the same audit action and detail
+// (`closeouts::audit_detail`, no amounts).
+
+#[tauri::command]
+async fn project_closeout_get(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
+    project_closeout_get_body(&state, project_id).await
+}
+
+async fn project_closeout_get_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
+    let identity = require_role(state, Role::Viewer, CLOSEOUT_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        CLOSEOUT_RESOURCE,
+    )
+    .await?;
+    state.forecasts.closeouts().check(project_id).await
+}
+
+#[tauri::command]
+async fn project_closeout_settle(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: admin_template_core::closeouts::SettleInput,
+) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
+    project_closeout_settle_body(&state, project_id, values).await
+}
+
+async fn project_closeout_settle_body(
+    state: &AppState,
+    project_id: i64,
+    values: admin_template_core::closeouts::SettleInput,
+) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::SettleProject { project_id },
+        CLOSEOUT_RESOURCE,
+    )
+    .await?;
+    let settled = state
+        .forecasts
+        .closeouts()
+        .settle(project_id, values, user_id)
+        .await?;
+    if let Some(record) = &settled.closeout {
+        record_ok(
+            &state.audit,
+            &actor,
+            "settle",
+            CLOSEOUT_RESOURCE,
+            Some(&project_id.to_string()),
+            Some(admin_template_core::closeouts::audit_detail(
+                project_id, record,
+            )),
+        )
+        .await;
+    }
+    Ok(settled)
+}
+
 // --- banto-cost P4d: vendors, direct costs and purchase orders ---------------
 // Twins of `/api/vendors/*`, `/api/direct-costs/*`, `/api/purchase-orders/*`
 // and `/api/projects/{id}/costs` (`admin_template_core::rest::costs`): the
@@ -6186,6 +6259,8 @@ pub fn run() {
             forecast_draft_delete,
             forecast_draft_adopt,
             portfolio_overview,
+            project_closeout_get,
+            project_closeout_settle,
             vendors_list,
             vendors_create,
             vendors_update,
@@ -11511,6 +11586,123 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.resource == "budgets" && r.action == "denied" && r.origin == "tauri"));
+    }
+
+    #[tokio::test]
+    async fn t17_t12_tauri_closeout_is_checked_with_amounts_and_settled_by_accounting() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[Capability::ProjectManage, Capability::AmountView],
+        )
+        .await
+        .expect("grant editor");
+        authz_capabilities_set_body(
+            &state,
+            admin.id,
+            &[Capability::FinanceClose, Capability::AmountView],
+        )
+        .await
+        .expect("grant admin");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let project = projects_create_body(&state, project_input("P-C01", editor.id))
+            .await
+            .expect("manager registers a project");
+        let conversion: ConversionRequest = serde_json::from_value(serde_json::json!({
+            "rowVersion": project.row_version,
+            "convertedOn": "2026-11-20",
+            "confirmedAmount": 1_000_000,
+            "basis": "注文書受領",
+            "plannedStart": "2026-12-01",
+            "plannedEnd": "2027-03-31",
+            "revenuePlan": [{ "month": "2027-03", "amount": 1_000_000 }],
+            "scope": "whole"
+        }))
+        .expect("input");
+        order_convert_body(&state, project.id, conversion)
+            .await
+            .expect("convert");
+        let current = state.projects.get(project.id).await.expect("project");
+        let mut done = project_input("P-C01", editor.id);
+        done.status = "work_done".to_string();
+        done.planned_start = Some("2026-12-01".to_string());
+        done.planned_end = Some("2027-03-31".to_string());
+        done.row_version = Some(current.row_version);
+        state
+            .projects
+            .update(project.id, done)
+            .await
+            .expect("work done");
+
+        // The manager sees the check but does not settle.
+        let check = project_closeout_get_body(&state, project.id)
+            .await
+            .expect("check");
+        assert!(check.settleable);
+        assert_eq!(check.blockers[0].kind, "revenue_difference");
+        assert_eq!(check.blockers[0].amount, Some(1_000_000));
+        let waiver = || -> admin_template_core::closeouts::SettleInput {
+            serde_json::from_value(serde_json::json!({
+                "rowVersion": check.row_version,
+                "note": "精算",
+                "waivers": [{ "kind": "revenue_difference", "amount": 1_000_000, "reason": "値引きで合意" }]
+            }))
+            .expect("input")
+        };
+        assert!(matches!(
+            project_closeout_settle_body(&state, project.id, waiver()).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        // Accounting: the remaining revenue needs its waiver.
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        let bare: admin_template_core::closeouts::SettleInput =
+            serde_json::from_value(serde_json::json!({ "rowVersion": check.row_version }))
+                .expect("input");
+        assert!(matches!(
+            project_closeout_settle_body(&state, project.id, bare).await,
+            Err(BantoError::Validation { .. })
+        ));
+        let settled = project_closeout_settle_body(&state, project.id, waiver())
+            .await
+            .expect("settle");
+        assert_eq!(settled.status, "settled");
+        assert_eq!(
+            settled.closeout.as_ref().expect("record").waivers[0].reason,
+            "値引きで合意"
+        );
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        let writes: Vec<_> = rows
+            .iter()
+            .filter(|r| r.resource == "project_closeouts" && r.action == "settle")
+            .collect();
+        assert_eq!(writes.len(), 1);
+        let detail = writes[0].detail.clone().unwrap_or_default();
+        assert!(detail.contains("revenue_difference"));
+        assert!(!detail.contains("1000000"));
+        assert!(rows.iter().any(|r| r.resource == "project_closeouts"
+            && r.action == "denied"
+            && r.origin == "tauri"));
     }
 
     #[tokio::test]

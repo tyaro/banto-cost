@@ -66,6 +66,12 @@ impl ProjectStatus {
         matches!(self, Self::Ordered | Self::InProgress | Self::WorkDone)
     }
 
+    /// 精算完了にできる状態か。作業完了の案件だけを、精算完了の検査（T17、
+    /// `closeout::check_closeout`）を通して精算完了にする。
+    pub fn settleable(self) -> bool {
+        self == Self::WorkDone
+    }
+
     /// 案件の編集画面から直接選べる状態か。受注済みの側へは受注転換（P3b）で、
     /// 精算完了へは精算完了の検査（T17）で移すため、ここでは選ばせない。
     pub fn settable_directly(self) -> bool {
@@ -149,6 +155,18 @@ pub fn validate_project(input: &ProjectInput<'_>) -> Vec<ProjectIssue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn t17_精算完了にできるのは作業完了の案件だけ() {
+        let settleable: Vec<_> = ProjectStatus::ALL
+            .into_iter()
+            .filter(|s| s.settleable())
+            .collect();
+        assert_eq!(settleable, vec![ProjectStatus::WorkDone]);
+        // 編集画面からは精算完了へ動かせない。
+        assert!(!ProjectStatus::WorkDone.can_edit_to(ProjectStatus::Settled));
+        assert!(!ProjectStatus::Settled.can_edit_to(ProjectStatus::WorkDone));
+    }
 
     fn input(
         status: ProjectStatus,

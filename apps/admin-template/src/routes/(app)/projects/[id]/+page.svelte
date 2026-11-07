@@ -10,7 +10,8 @@
 	 * its hours by phase (P4b, spec §6.1) are TimeSection.svelte, its budget
 	 * versions (P4c, spec §5.3) BudgetSection.svelte, its direct costs and
 	 * purchase orders (P4d, spec §6.3) CostsSection.svelte, its completion
-	 * forecast versions (P5, spec §6.6) ForecastSection.svelte.
+	 * forecast versions (P5, spec §6.6) ForecastSection.svelte, its settlement
+	 * (精算完了, P6a, spec §5.1, T17) CloseoutSection.svelte.
 	 * Order conversion and ordered revenue (P3b) are OrderSection.svelte; it
 	 * asks this page to reload after a conversion (status and rowVersion change).
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
@@ -42,6 +43,7 @@
 	import BudgetSection from './BudgetSection.svelte';
 	import CostsSection from './CostsSection.svelte';
 	import ForecastSection from './ForecastSection.svelte';
+	import CloseoutSection from './CloseoutSection.svelte';
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -76,6 +78,8 @@
 	let costsBusy = $state(false);
 	let forecastDirty = $state(false);
 	let forecastBusy = $state(false);
+	let closeoutDirty = $state(false);
+	let closeoutBusy = $state(false);
 	const guard = guardUnsavedChanges({
 		isDirty: () =>
 			(store?.isDirty ?? false) ||
@@ -84,7 +88,8 @@
 			calcDirty ||
 			budgetDirty ||
 			costsDirty ||
-			forecastDirty,
+			forecastDirty ||
+			closeoutDirty,
 		isSaving: () =>
 			(formResource?.saving ?? false) ||
 			pipelineBusy ||
@@ -92,7 +97,8 @@
 			calcBusy ||
 			budgetBusy ||
 			costsBusy ||
-			forecastBusy
+			forecastBusy ||
+			closeoutBusy
 	});
 
 	async function loadForm() {
@@ -265,6 +271,19 @@
 					forecastBusy = pending.busy;
 				}}
 			/>
+		{/if}
+		{#if ordered}
+			{#key status}
+				<CloseoutSection
+					projectId={parsedId}
+					{canWrite}
+					onProjectChanged={() => void loadForm()}
+					onPendingChange={(pending) => {
+						closeoutDirty = pending.dirty;
+						closeoutBusy = pending.busy;
+					}}
+				/>
+			{/key}
 		{/if}
 		<CostsSection
 			projectId={parsedId}

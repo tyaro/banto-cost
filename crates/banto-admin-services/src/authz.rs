@@ -240,6 +240,11 @@ pub enum Operation {
     /// orders (banto-cost P4d): its manager (`project.manage`) or accounting
     /// (`finance.close`), with `amount.view`.
     EditPurchaseOrder { project_id: i64 },
+    /// Settle a work-done project (精算完了, banto-cost P6a, spec §5.1, T17):
+    /// accounting (`finance.close`) on any project, with `amount.view` - the
+    /// check lists the remaining amounts and waiving them presupposes seeing
+    /// them. The settler is the approver of the waivers (one operator).
+    SettleProject { project_id: i64 },
     /// Approve hours someone submitted against a common activity. No project
     /// manager owns them, so accounting (`finance.close`) decides (P4b).
     ApproveCommon { submitted_by: i64 },
@@ -299,6 +304,7 @@ impl Operation {
             Operation::ApproveCost { .. } => "approve_cost",
             Operation::AdoptForecast { .. } => "adopt_forecast",
             Operation::EditPurchaseOrder { .. } => "edit_purchase_order",
+            Operation::SettleProject { .. } => "settle_project",
             Operation::ApproveCommon { .. } => "approve_common",
             Operation::ViewRates => "view_rates",
             Operation::EditRates => "edit_rates",
@@ -328,6 +334,7 @@ impl Operation {
             | Operation::ApproveCost { project_id, .. }
             | Operation::AdoptForecast { project_id, .. }
             | Operation::EditPurchaseOrder { project_id }
+            | Operation::SettleProject { project_id }
             | Operation::EditProject { project_id }
             | Operation::EditOrder { project_id }
             | Operation::OverrideCalcBasis { project_id, .. } => Some(project_id),
@@ -504,6 +511,10 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
                 }
                 return Err(Denial::MissingCapability(Capability::ProjectManage));
             }
+        }
+        Operation::SettleProject { .. } => {
+            require(subject, Capability::FinanceClose)?;
+            require(subject, Capability::AmountView)?;
         }
         Operation::EnterCommonTime => require(subject, Capability::TimeEntry)?,
         Operation::ApproveCommon { submitted_by } => {
@@ -1311,6 +1322,31 @@ mod tests {
             deny(&none, Operation::EnterCost { project_id: P1 }),
             Denial::MissingCapability(Capability::TimeEntry)
         );
+    }
+
+    #[test]
+    fn p6a_t17_settling_is_accounting_with_amounts() {
+        let settle = Operation::SettleProject { project_id: P1 };
+        let finance = subject(50, &[Capability::FinanceClose, Capability::AmountView], &[]);
+        allow(&finance, settle);
+        allow(&finance, Operation::SettleProject { project_id: P2 });
+        // The project's manager does not settle.
+        let pm = subject(
+            51,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P1, MemberKind::Manager)],
+        );
+        assert_eq!(
+            deny(&pm, settle),
+            Denial::MissingCapability(Capability::FinanceClose)
+        );
+        let blind = subject(52, &[Capability::FinanceClose], &[]);
+        assert_eq!(
+            deny(&blind, settle),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        assert_eq!(settle.project_id(), Some(P1));
+        assert_eq!(settle.name(), "settle_project");
     }
 
     #[test]
