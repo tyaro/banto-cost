@@ -973,6 +973,13 @@ impl TimeEntriesService {
             "SELECT t.id FROM time_entries t WHERE t.id = ? AND t.status = 'approved' \
              AND t.row_version = ? AND {COUNTS}"
         ));
+        // The entry's version moves, so a settlement or a monthly close that
+        // read its project or month sees the waiting correction (T13).
+        let touch = self.sql(&format!(
+            "UPDATE time_entries SET row_version = row_version + 1, updated_at = {} \
+             WHERE id = ? AND row_version = ?",
+            self.now()
+        ));
         let date = on.to_string();
         let rework = checked.domain.rework.map(Rework::as_str);
         let again =
@@ -993,7 +1000,7 @@ impl TimeEntriesService {
                     Err(existing)
                 } else {
                     let live: Option<(i64,)> = fetch_optional!(&mut *tx, still, id, version)?;
-                    if live.is_none() {
+                    if live.is_none() || execute!(&mut *tx, touch, id, version)? == 0 {
                         return Err(stale_version_error());
                     }
                     let rows: Vec<DayRow> = fetch_all!(&mut *tx, day, user_id, &date, id)?;
@@ -1950,6 +1957,11 @@ mod tests {
         assert_eq!(c.corrects_id, Some(original.id));
         assert_eq!(c.correction_reason.as_deref(), Some("時間の誤り"));
         assert!(svc.get(original.id).await.unwrap().correction_pending);
+        assert_eq!(
+            svc.get(original.id).await.unwrap().row_version,
+            original.row_version + 1,
+            "the request touches the entry, so settlement and closing see it"
+        );
         // Until approved, the entry still counts and the correction is pending.
         let s = svc.project_summary(p).await.unwrap();
         assert_eq!(s.total.approved.minutes, 120);
@@ -2056,9 +2068,13 @@ mod tests {
             .entry;
         assert_eq!(
             fields(
-                svc.correct(2, original.id, correction(&original, 45, Some("y")))
-                    .await
-                    .unwrap_err()
+                svc.correct(
+                    2,
+                    original.id,
+                    correction(&svc.get(original.id).await.unwrap(), 45, Some("y"))
+                )
+                .await
+                .unwrap_err()
             ),
             ["status"],
             "one correction in flight"
@@ -2084,7 +2100,11 @@ mod tests {
         );
         // A new correction can be requested; both stay in the chain.
         let c2 = svc
-            .correct(2, original.id, correction(&original, 45, Some("y")))
+            .correct(
+                2,
+                original.id,
+                correction(&svc.get(original.id).await.unwrap(), 45, Some("y")),
+            )
             .await
             .unwrap()
             .entry;
@@ -2113,6 +2133,20 @@ mod tests {
         let mut moved = correction(&original, 23 * 60 + 30, Some("案件の誤り"));
         moved.entry.project_id = Some(other);
         let c = svc.correct(2, original.id, moved).await.unwrap().entry;
+        // While it waits, the project it moves hours away from cannot be
+        // settled either (PR #24 review).
+        let sql = svc.sql("UPDATE projects SET status = 'work_done' WHERE id = ?");
+        on_pool!(&db, pool => execute!(pool, sql, p)).unwrap();
+        let check = crate::closeouts::CloseoutsService::new(db.clone())
+            .check(p)
+            .await
+            .unwrap();
+        let unapproved = check
+            .blockers
+            .iter()
+            .find(|b| b.kind == "unapproved")
+            .expect("the waiting correction blocks the settlement");
+        assert_eq!(unapproved.time_entries, Some(1));
         svc.decide(&c, decision(c.row_version, true), Some(1))
             .await
             .unwrap();
@@ -2177,7 +2211,16 @@ mod tests {
             .await
             .unwrap();
         let c = svc.correct(2, original.id, moved).await.unwrap().entry;
-        // A correction in flight blocks closing the month again.
+        // A correction in flight blocks closing both months: the one it
+        // moves the hours to and the one of the entry it replaces (PR #24).
+        assert_eq!(
+            closing
+                .get("2026-10")
+                .await
+                .unwrap()
+                .unapproved_time_entries,
+            1
+        );
         assert_eq!(
             closing
                 .get("2026-11")

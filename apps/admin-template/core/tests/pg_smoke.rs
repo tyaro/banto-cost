@@ -792,7 +792,7 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .expect("approve the correction on Postgres");
         let replaced = time.get(common.id).await.unwrap();
         assert_eq!(replaced.replaced_by_id, Some(c.id));
-        assert_eq!(replaced.row_version, common.row_version + 1);
+        assert_eq!(replaced.row_version, common.row_version + 2);
         assert_eq!(
             time.corrections_of(manager, common.id).await.unwrap().len(),
             1

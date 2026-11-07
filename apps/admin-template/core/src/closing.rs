@@ -236,9 +236,14 @@ const FINGERPRINT_SQL: [&str; 3] = [
 const UNAPPROVED_SQL: [&str; 2] = [
     // A returned correction is not unprocessed: the entry it would replace
     // is still approved (T11).
+    // A waiting correction of an entry dated in the month also counts there,
+    // wherever it moves the hours: closing first would leave it impossible
+    // to approve (PR #24 review).
     concat!(
         "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries t \
-         WHERE t.status <> 'approved' AND t.work_date >= ? AND t.work_date <= ? AND ",
+         WHERE t.status <> 'approved' AND ((t.work_date >= ? AND t.work_date <= ?) \
+         OR (t.status = 'submitted' AND t.corrects_id IN (SELECT o.id FROM time_entries o \
+         WHERE o.work_date >= ? AND o.work_date <= ?))) AND ",
         crate::time_entries::counts_sql!()
     ),
     "SELECT CAST(COUNT(*) AS BIGINT) FROM direct_costs \
@@ -250,7 +255,7 @@ macro_rules! month_reads {
         let a: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[0], $from, $to)?;
         let b: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[1], $from, $to)?;
         let c: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[2], $from, $to)?;
-        let t: i64 = scalar!($exec, $un[0], $from, $to)?;
+        let t: i64 = scalar!($exec, $un[0], $from, $to, $from, $to)?;
         let d: i64 = scalar!($exec, $un[1], $from, $to)?;
         (
             vec![

@@ -413,9 +413,14 @@ impl CloseoutsService {
         // COUNTS: a replaced entry and a returned correction count as
         // nothing (T11) - an entry approved without a rate is resolved by an
         // approved correction, whose approval fixes the rate.
+        // A waiting correction also blocks the project of the entry it would
+        // replace, wherever it moves the hours: settling first would leave
+        // it impossible to approve (PR #24 review).
         let time_sql = self.sql(&format!(
             "SELECT CAST(COUNT(*) AS BIGINT), CAST(COALESCE(SUM(t.minutes), 0) AS BIGINT) \
-             FROM time_entries t WHERE t.project_id = ? AND t.status <> 'approved' AND {COUNTS}"
+             FROM time_entries t WHERE (t.project_id = ? OR (t.status = 'submitted' \
+             AND t.corrects_id IN (SELECT o.id FROM time_entries o WHERE o.project_id = ?))) \
+             AND t.status <> 'approved' AND {COUNTS}"
         ));
         let rate_sql = self.sql(&format!(
             "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries t \
@@ -423,7 +428,7 @@ impl CloseoutsService {
              AND {COUNTS}"
         ));
         let (time, missing): (Option<(i64, i64)>, i64) = on_pool!(&self.db, pool => (
-            fetch_optional!(pool, time_sql, project_id)?,
+            fetch_optional!(pool, time_sql, project_id, project_id)?,
             scalar!(pool, rate_sql, project_id)?,
         ));
         let (time_count, time_minutes) = time.unwrap_or_default();
