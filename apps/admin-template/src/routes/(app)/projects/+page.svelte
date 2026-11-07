@@ -167,6 +167,19 @@
 		...schemaColumns.filter((column) => !['code', 'name'].includes(column.id)),
 		amountColumn('orderAmount', m['portfolio.colOrder'](), (r) => r.orderAmount),
 		amountColumn('budgetTotal', m['portfolio.colBudget'](), (r) => r.budgetTotal),
+		{
+			id: 'funds',
+			header: m['portfolio.colFunds'](),
+			accessor: (row) => row.pf?.funds ?? null,
+			width: 140,
+			align: 'right',
+			// An ordered project with no 目標粗利率 shows 未設定, never a 0% funds.
+			format: (v, row) =>
+				row.pf?.orderAmount != null && row.pf.targetMarginPct === null
+					? m['cost.unset']()
+					: money(v),
+			comparator: numeric
+		},
 		amountColumn('actualCost', m['portfolio.colActual'](), (r) => r.actualCost, actualMark),
 		amountColumn(
 			'forecastCost',

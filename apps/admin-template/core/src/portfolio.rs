@@ -24,6 +24,7 @@ use cost_domain::alerts::{
     REVIEW_DELAY_ITEM,
 };
 use cost_domain::forecast::profit;
+use cost_domain::funds::{funds, TARGET_MARGIN_ITEM};
 use cost_domain::money::ratio_permille;
 use cost_domain::project::ProjectStatus;
 use cost_domain::{Date, YearMonth};
@@ -72,6 +73,10 @@ pub struct PortfolioRow {
     pub forecast_ratio_permille: Option<i64>,
     /// 完了見込超過額 against the current approved budget.
     pub forecast_overrun: Option<i64>,
+    /// 目標粗利率 applied on the business date (`None` = 未設定).
+    pub target_margin_pct: Option<i64>,
+    /// 原資 = confirmed order − order × 目標粗利率 (design §9.4 item 4, T36).
+    pub funds: Option<i64>,
     /// `cost_domain::alerts::Alert` codes.
     pub alerts: Vec<String>,
     /// `cost_domain::forecast::UpdateReason` codes of the latest version.
@@ -224,6 +229,8 @@ impl PortfolioService {
                 forecast_profit: None,
                 forecast_ratio_permille: None,
                 forecast_overrun: None,
+                target_margin_pct: None,
+                funds: None,
                 alerts: Vec::new(),
                 update_reasons: Vec::new(),
             };
@@ -257,6 +264,10 @@ impl PortfolioService {
                 row.forecast_ratio_permille = pr.ratio_permille;
                 row.forecast_overrun = row.budget_total.map(|b| f.cost_total - b);
             }
+            row.target_margin_pct = applied_value(&self.db, TARGET_MARGIN_ITEM, Some(p.id), today)
+                .await?
+                .map(|(v, _)| v);
+            row.funds = funds(order.confirmed_amount, row.target_margin_pct).map(|f| f.funds);
             let low_margin_pct = if status.is_ordered_open() {
                 applied_value(&self.db, LOW_MARGIN_ITEM, Some(p.id), today)
                     .await?
@@ -469,5 +480,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(none.rows.len(), 1);
+    }
+    #[tokio::test]
+    async fn t36_funds_follow_the_target_margin_and_the_project_override() {
+        let db = fixture().await;
+        let (spec, _, _) = spec_project(&db, "P-F01").await;
+        let bare = ordered_project(&db, "P-F02", vec![line(None, 1_000_000)]).await;
+        let lead = pipeline_project(&db, "P-F03", 2_000_000, 40, "2027-01").await;
+        let svc = PortfolioService::new(db.clone());
+        let all = svc
+            .overview(&ProjectScope::All, &ProjectScope::All)
+            .await
+            .unwrap();
+        // 未設定は 0% で計算しない。
+        assert_eq!(row(&all, spec).target_margin_pct, None);
+        assert_eq!(row(&all, spec).funds, None);
+
+        let basis = CalcBasisService::new(db.clone());
+        basis
+            .add(
+                None,
+                value(TARGET_MARGIN_ITEM, "2020-01-01", Some(15), "初期"),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        basis
+            .add(
+                Some(bare),
+                value(TARGET_MARGIN_ITEM, "2020-01-01", Some(20), "この案件だけ"),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let all = svc
+            .overview(&ProjectScope::All, &ProjectScope::All)
+            .await
+            .unwrap();
+        let r = row(&all, spec);
+        assert_eq!(r.target_margin_pct, Some(15));
+        assert_eq!(r.funds, Some(3_400_000), "4,000,000 − 600,000");
+        assert_eq!(r.budget_total, Some(2_600_000), "承認済み予算は変わらない");
+        let b = row(&all, bare);
+        assert_eq!(b.target_margin_pct, Some(20));
+        assert_eq!(b.funds, Some(800_000));
+        // 受注前は確定受注額がないので原資もない。
+        assert_eq!(row(&all, lead).funds, None);
+
+        // 金額を見られない案件は率も原資も出さない（T12）。
+        let some = svc
+            .overview(
+                &ProjectScope::All,
+                &ProjectScope::Only(BTreeSet::from([bare])),
+            )
+            .await
+            .unwrap();
+        assert_eq!(row(&some, spec).target_margin_pct, None);
+        assert_eq!(row(&some, spec).funds, None);
+
+        // 案件詳細の完了見込にも同じ値が並ぶ。
+        let o = ForecastsService::new(db.clone())
+            .overview(spec)
+            .await
+            .unwrap();
+        assert_eq!(o.target_margin_pct, Some(15));
+        assert_eq!(o.target_profit, Some(600_000));
+        assert_eq!(o.funds, Some(3_400_000));
     }
 }

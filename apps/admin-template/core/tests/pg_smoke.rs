@@ -353,7 +353,7 @@ async fn app_layer_crud_round_trips_on_postgres() {
             }))
             .unwrap()
         };
-        assert_eq!(basis.items().await.unwrap().len(), 12);
+        assert_eq!(basis.items().await.unwrap().len(), 13);
         let v1 = basis
             .add(
                 None,
