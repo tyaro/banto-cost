@@ -14,6 +14,7 @@ import { getBantoMode } from './setup';
 import { demoModeError, httpRequest, invokeCommand, isPipelineAvailable } from './pipelineAdmin';
 
 export type MonthStatus = 'open' | 'closed' | 'reopened';
+export type WarningCode = 'missing_rate' | 'provisional' | 'fixed_unposted';
 
 /** Mirrors `admin_template_core::closing::MonthRow`. */
 export interface MonthRow {
@@ -62,7 +63,7 @@ export interface MonthClosing {
 	unapprovedTimeEntries: number;
 	unapprovedCosts: number;
 	canClose: boolean;
-	warnings: { code: 'missing_rate' | 'provisional'; count: number }[];
+	warnings: { code: WarningCode; count: number }[];
 	total: Figures;
 	history: ClosingEvent[];
 	comparison: Comparison | null;

@@ -5824,3 +5824,182 @@ async fn t12_t15_rest_monthly_figures_and_csv_follow_scope() {
         assert!(!detail.contains("P-M01"), "{detail}");
     }
 }
+
+#[tokio::test]
+async fn t37_rest_fixed_costs_need_finance_rate_and_post_a_month_once() {
+    let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["project.manage", "amount.view", "finance.close"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-F01", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": project["rowVersion"],
+                "convertedOn": "2026-06-01",
+                "confirmedAmount": 3_600_000,
+                "basis": "年間契約",
+                "plannedStart": "2026-06-01",
+                "plannedEnd": "2027-05-31",
+                "revenuePlan": [{ "month": "2026-06", "amount": 3_600_000 }],
+                "scope": "whole"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/vendors",
+            &admin,
+            json!({ "name": "架空外注" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let vendor = body_json(response).await["id"].as_i64().unwrap();
+    let contract = json!({
+        "projectId": id,
+        "payeeKind": "vendor",
+        "vendorId": vendor,
+        "monthlyAmount": 300_000,
+        "fromMonth": "2026-06"
+    });
+
+    // finance.close without finance.rate: per-person amounts stay hidden.
+    for request in [
+        get_auth("/api/fixed-costs/contracts", &editor),
+        get_auth("/api/fixed-costs/months/2026-06", &editor),
+        post_json_auth("/api/fixed-costs/contracts", &editor, contract.clone()),
+        post_json_auth("/api/fixed-costs/months/2026-06/post", &editor, json!({})),
+    ] {
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "fixed_costs"));
+
+    grant(&router, &admin, 1, json!(["finance.rate", "amount.view"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/fixed-costs/contracts",
+            &admin,
+            contract,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = body_json(response).await;
+    assert_eq!(created["costType"], "outsource");
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/fixed-costs/months/2026-06/post",
+            &admin,
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let posted = body_json(response).await;
+    assert_eq!(posted["posted"], 1);
+    assert_eq!(posted["view"]["postedTotal"], 300_000);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/fixed-costs/months/2026-06/post",
+            &admin,
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["posted"], 0, "二度計上しない");
+
+    // The amount changes later months only.
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/fixed-costs/contracts/{}", created["id"]),
+            &admin,
+            json!({
+                "projectId": id,
+                "payeeKind": "vendor",
+                "vendorId": vendor,
+                "monthlyAmount": 200_000,
+                "fromMonth": "2026-06",
+                "rowVersion": created["rowVersion"]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/fixed-costs/months/2026-06", &admin))
+        .await
+        .unwrap();
+    let june = body_json(response).await;
+    assert_eq!(june["postedTotal"], 300_000);
+
+    // Cancelling needs a reason; the audit keeps no amount nor reason.
+    let posting = june["lines"][0]["posting"]["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/fixed-costs/postings/{posting}/cancel"),
+            &admin,
+            json!({ "reason": "" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/fixed-costs/postings/{posting}/cancel"),
+            &admin,
+            json!({ "reason": "二重払いの訂正" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["postedTotal"], 0);
+    let entries = audit.list(ListParams::default()).await.unwrap().rows;
+    let writes: Vec<_> = entries
+        .iter()
+        .filter(|e| e.resource == "fixed_costs" && e.action != "denied")
+        .collect();
+    let actions: Vec<&str> = writes.iter().map(|e| e.action.as_str()).collect();
+    for action in ["create", "update", "post", "cancel"] {
+        assert!(actions.contains(&action), "{actions:?}");
+    }
+    for e in writes {
+        let detail = format!("{:?}", e.detail);
+        assert!(
+            !detail.contains("300000") && !detail.contains("200000"),
+            "{detail}"
+        );
+        assert!(!detail.contains("二重払い"), "{detail}");
+    }
+}

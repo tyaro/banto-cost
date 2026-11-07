@@ -92,6 +92,12 @@
 //! | GET    | `/api/closing/{month}` | - | `MonthClosing` (any role + `CloseMonth`: `finance.close` + `amount.view`) |
 //! | POST   | `/api/closing/{month}/close` | `CloseInput` | `MonthClosing` (editor+ + `CloseMonth`; 月次締め, T11) |
 //! | POST   | `/api/closing/{month}/reopen` | `ReopenInput` | `MonthClosing` (editor+ + `CloseMonth`; 再開, reason required) |
+//! | GET    | `/api/fixed-costs/contracts` | - | `Contract[]` (any role + `ManageFixedCosts`: `finance.rate` + `amount.view`; 月額固定原価, T37) |
+//! | POST   | `/api/fixed-costs/contracts` | `ContractInput` | `Contract` (editor+ + `ManageFixedCosts`) |
+//! | PUT    | `/api/fixed-costs/contracts/{id}` | `ContractInput` | `Contract` (editor+ + `ManageFixedCosts`; amount → later postings only) |
+//! | GET    | `/api/fixed-costs/months/{month}` | - | `MonthView` (any role + `ManageFixedCosts`) |
+//! | POST   | `/api/fixed-costs/months/{month}/post` | - | `PostResult` (editor+ + `ManageFixedCosts`; once per contract and month) |
+//! | POST   | `/api/fixed-costs/postings/{id}/cancel` | `CancelInput` | `MonthView` (editor+ + `ManageFixedCosts`; reason required) |
 //! | GET    | `/api/projects/{id}/monthly` | - | `ProjectMonthly` (any role + `ViewProjectAmounts`; 月別・期別・累計, T15) |
 //! | GET    | `/api/projects/{id}/monthly.csv` | - | `CsvExport` (any role + `ViewProjectAmounts`; audited `export`) |
 //! | GET    | `/api/reports/portfolio.csv` | - | `CsvExport` (any role; rows `visible_projects` (admin all), amounts `amount_projects`; audited) |
@@ -282,6 +288,7 @@ mod budgets;
 mod closeouts;
 mod closing;
 mod costs;
+mod fixed_costs;
 mod forecasts;
 mod projects;
 mod reports;
@@ -487,6 +494,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(closing::closing_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(fixed_costs::fixed_costs_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(fixed_costs::fixed_costs_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

@@ -23,6 +23,7 @@ use banto_admin_services::authz::ProjectScope;
 use banto_core::BantoError;
 use banto_storage::{Db, Dialect};
 use cost_domain::csv::{Cell, CsvTable};
+use cost_domain::forecast::CostType;
 use cost_domain::report::{deltas, monthly, Amounts, MonthLine, MonthlyReport};
 use cost_domain::{FiscalCalendar, YearMonth, Yen};
 use serde::{Deserialize, Serialize};
@@ -265,31 +266,38 @@ impl ReportsService {
             }
         }
         // Direct costs: each project's ledger total at every month end of
-        // the ledger, then the month-to-month differences.
+        // the ledger, then the month-to-month differences. A monthly fixed
+        // cost of an employee is labor (P7b, T37), kept in its own series.
         let ledger = DirectCostsService::new(self.db.clone()).ledger().await?;
-        let mut series: BTreeMap<i64, BTreeMap<YearMonth, Yen>> = BTreeMap::new();
-        let mut seen: BTreeSet<i64> = BTreeSet::new();
+        let mut series: BTreeMap<(i64, bool), BTreeMap<YearMonth, Yen>> = BTreeMap::new();
+        let mut seen: BTreeSet<(i64, bool)> = BTreeSet::new();
         for m in ledger.months() {
-            let mut at_end: BTreeMap<i64, Yen> = BTreeMap::new();
+            let mut at_end: BTreeMap<(i64, bool), Yen> = BTreeMap::new();
             for p in ledger.until(m.last_day())? {
                 if let Ok(id) = p.project.parse::<i64>() {
                     if project.is_none_or(|only| only == id) {
-                        *at_end.entry(id).or_default() += p.amount;
+                        let labor = p.cost_type == CostType::Labor;
+                        *at_end.entry((id, labor)).or_default() += p.amount;
                     }
                 }
             }
             seen.extend(at_end.keys().copied());
-            for id in &seen {
+            for key in &seen {
                 series
-                    .entry(*id)
+                    .entry(*key)
                     .or_default()
-                    .insert(m, at_end.get(id).copied().unwrap_or(0));
+                    .insert(m, at_end.get(key).copied().unwrap_or(0));
             }
         }
-        for (id, s) in series {
+        for ((id, labor), s) in series {
             for (m, d) in deltas(&s) {
                 if d != 0 {
-                    out.entry(id).or_default().entry(m).or_default().direct += d;
+                    let a = out.entry(id).or_default().entry(m).or_default();
+                    if labor {
+                        a.labor += d;
+                    } else {
+                        a.direct += d;
+                    }
                 }
             }
         }

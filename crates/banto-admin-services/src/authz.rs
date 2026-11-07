@@ -265,6 +265,12 @@ pub enum Operation {
     /// and reopen it. Accounting (`finance.close`), with `amount.view` - the
     /// month's company-wide labor, direct costs and revenue are shown.
     CloseMonth,
+    /// Monthly fixed costs (月額固定原価, banto-cost P7b, T37): view and
+    /// change the contracts (one person's fixed monthly amount on a
+    /// monthly-contract project), post a month and cancel a posting. The
+    /// amounts are per person like personal rates (`finance.rate`), and
+    /// seeing them presupposes `amount.view`.
+    ManageFixedCosts,
     /// Company-wide aggregates and every project's details.
     ViewAllReports,
     /// Read masters (customers, phases): any company member.
@@ -322,6 +328,7 @@ impl Operation {
             Operation::EditRates => "edit_rates",
             Operation::FinanceClose => "finance_close",
             Operation::CloseMonth => "close_month",
+            Operation::ManageFixedCosts => "manage_fixed_costs",
             Operation::ViewAllReports => "view_all_reports",
             Operation::ViewMasters => "view_masters",
             Operation::EditMasters => "edit_masters",
@@ -358,6 +365,7 @@ impl Operation {
             | Operation::EditRates
             | Operation::FinanceClose
             | Operation::CloseMonth
+            | Operation::ManageFixedCosts
             | Operation::ViewAllReports
             | Operation::ViewMasters
             | Operation::EditMasters
@@ -555,6 +563,10 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         Operation::FinanceClose => require(subject, Capability::FinanceClose)?,
         Operation::CloseMonth => {
             require(subject, Capability::FinanceClose)?;
+            require(subject, Capability::AmountView)?;
+        }
+        Operation::ManageFixedCosts => {
+            require(subject, Capability::FinanceRate)?;
             require(subject, Capability::AmountView)?;
         }
         Operation::ViewAllReports => {
@@ -1612,6 +1624,24 @@ mod tests {
         assert_eq!(
             deny(&viewer, Operation::CloseMonth),
             Denial::MissingCapability(Capability::FinanceClose)
+        );
+    }
+
+    #[test]
+    fn t37_fixed_costs_need_finance_rate_and_amount_view() {
+        let finance = subject(1, &[Capability::FinanceRate, Capability::AmountView], &[]);
+        allow(&finance, Operation::ManageFixedCosts);
+        // Per-person amounts: finance.close alone (accounting without the
+        // personal rates) is not enough.
+        let closer = subject(2, &[Capability::FinanceClose, Capability::AmountView], &[]);
+        assert_eq!(
+            deny(&closer, Operation::ManageFixedCosts),
+            Denial::MissingCapability(Capability::FinanceRate)
+        );
+        let blind = subject(3, &[Capability::FinanceRate], &[]);
+        assert_eq!(
+            deny(&blind, Operation::ManageFixedCosts),
+            Denial::MissingCapability(Capability::AmountView)
         );
     }
 

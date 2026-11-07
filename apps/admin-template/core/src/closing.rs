@@ -30,6 +30,7 @@ use cost_domain::closing::{
     check_close, check_reopen, compare, warnings, CloseIssue, MonthFigures, MonthState,
     MonthStatus, ReopenIssue,
 };
+use cost_domain::forecast::CostType;
 use cost_domain::{Date, YearMonth};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -220,7 +221,7 @@ type Fingerprint = Vec<(i64, i64, i64)>;
 /// Labor (project, cost, rows without a rate) and revenue (project, amount).
 type LaborRevenue = (Vec<(i64, i64, i64)>, Vec<(i64, i64)>);
 
-const FINGERPRINT_SQL: [&str; 3] = [
+const FINGERPRINT_SQL: [&str; 4] = [
     "SELECT CAST(COUNT(*) AS BIGINT), CAST(COALESCE(SUM(row_version), 0) AS BIGINT), \
      CAST(COALESCE(MAX(id), 0) AS BIGINT) FROM time_entries \
      WHERE work_date >= ? AND work_date <= ?",
@@ -231,6 +232,11 @@ const FINGERPRINT_SQL: [&str; 3] = [
      CAST(COALESCE(SUM(CASE WHEN cancelled_at IS NULL THEN 0 ELSE 1 END), 0) AS BIGINT), \
      CAST(COALESCE(MAX(id), 0) AS BIGINT) FROM revenue_recognitions \
      WHERE recognized_on >= ? AND recognized_on <= ?",
+    // Monthly fixed costs (P7b): a posting or a cancellation.
+    "SELECT CAST(COUNT(*) AS BIGINT), \
+     CAST(COALESCE(SUM(CASE WHEN cancelled_at IS NULL THEN 0 ELSE 1 END), 0) AS BIGINT), \
+     CAST(COALESCE(MAX(id), 0) AS BIGINT) FROM fixed_cost_postings \
+     WHERE booked_on >= ? AND booked_on <= ?",
 ];
 
 const UNAPPROVED_SQL: [&str; 2] = [
@@ -255,6 +261,7 @@ macro_rules! month_reads {
         let a: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[0], $from, $to)?;
         let b: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[1], $from, $to)?;
         let c: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[2], $from, $to)?;
+        let f: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[3], $from, $to)?;
         let t: i64 = scalar!($exec, $un[0], $from, $to, $from, $to)?;
         let d: i64 = scalar!($exec, $un[1], $from, $to)?;
         (
@@ -262,6 +269,7 @@ macro_rules! month_reads {
                 a.unwrap_or_default(),
                 b.unwrap_or_default(),
                 c.unwrap_or_default(),
+                f.unwrap_or_default(),
             ],
             (t, d),
         )
@@ -383,20 +391,30 @@ impl ClosingService {
         // ledger at the previous month's end, so a provisional confirmed in
         // a later month stays in the month it was booked (翌月調整).
         let ledger = DirectCostsService::new(self.db.clone()).ledger().await?;
-        let mut direct: BTreeMap<i64, i64> = BTreeMap::new();
+        // A monthly fixed cost of an employee is labor (P7b, T37).
+        let mut direct: BTreeMap<(i64, bool), i64> = BTreeMap::new();
         for p in ledger.until(m.last_day())? {
             if let Ok(id) = p.project.parse::<i64>() {
-                *direct.entry(id).or_default() += p.amount;
+                *direct
+                    .entry((id, p.cost_type == CostType::Labor))
+                    .or_default() += p.amount;
             }
         }
         for p in ledger.until(m.previous().last_day())? {
             if let Ok(id) = p.project.parse::<i64>() {
-                *direct.entry(id).or_default() -= p.amount;
+                *direct
+                    .entry((id, p.cost_type == CostType::Labor))
+                    .or_default() -= p.amount;
             }
         }
-        for (p, amount) in direct {
+        for ((p, labor), amount) in direct {
             if amount != 0 {
-                out.entry(p).or_default().direct_cost = amount;
+                let f = out.entry(p).or_default();
+                if labor {
+                    f.labor_cost += amount;
+                } else {
+                    f.direct_cost = amount;
+                }
             }
         }
         out.retain(|_, f| *f != MonthFigures::default());
@@ -457,6 +475,7 @@ impl ClosingService {
             unapproved_costs: count(costs),
             missing_rate_entries: count(missing),
             provisional_entries: count(provisional),
+            unposted_fixed_costs: crate::fixed_costs::unposted_count(&self.db, m).await?,
         };
         let current = self.figures(m).await?;
         let total = |f: &BTreeMap<i64, MonthFigures>| {

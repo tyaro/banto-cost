@@ -505,6 +505,15 @@ impl ForecastsService {
     }
 
     /// 月次締め (P6b) over the same database and event channel.
+    /// 月額固定原価 (P7b) over the same database and event channel.
+    pub fn fixed_costs(&self) -> crate::fixed_costs::FixedCostsService {
+        let svc = crate::fixed_costs::FixedCostsService::new(self.db.clone());
+        match &self.events {
+            Some(events) => svc.with_events(events.clone()),
+            None => svc,
+        }
+    }
+
     pub fn closing(&self) -> crate::closing::ClosingService {
         let svc = crate::closing::ClosingService::new(self.db.clone());
         match &self.events {

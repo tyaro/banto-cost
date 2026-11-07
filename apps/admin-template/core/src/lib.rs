@@ -16,6 +16,7 @@ pub mod db;
 pub mod direct_costs;
 pub mod events;
 pub mod first_boot;
+pub mod fixed_costs;
 pub mod forecasts;
 pub mod orders;
 pub mod pipeline;

@@ -824,6 +824,56 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .period_monthly_csv(14, &all)
             .await
             .expect("period CSV on Postgres");
+
+        // banto-cost P7b: 月額固定原価 on Postgres (the partial unique
+        // index's ON CONFLICT ... WHERE, the ledger's UNION ALL with negated
+        // ids, the close's fingerprint of the postings).
+        use admin_template_core::fixed_costs::{CancelInput, ContractInput};
+        let fixed = forecasts.fixed_costs();
+        let contract = fixed
+            .create(
+                ContractInput {
+                    project_id: Some(project.id),
+                    payee_kind: "employee".into(),
+                    user_id: Some(manager),
+                    monthly_amount: Some(450_000),
+                    from_month: "2026-08".into(),
+                    ..Default::default()
+                },
+                Some(manager),
+            )
+            .await
+            .expect("fixed-cost contract on Postgres");
+        assert_eq!(contract.cost_type, "labor");
+        let posted = fixed
+            .post_month("2026-08", Some(manager))
+            .await
+            .expect("post on Postgres");
+        assert_eq!(posted.posted, 1);
+        let again = fixed.post_month("2026-08", Some(manager)).await.unwrap();
+        assert_eq!(again.posted, 0, "once per contract and month");
+        let monthly = reports.project_monthly(project.id).await.unwrap();
+        let aug = monthly
+            .lines
+            .iter()
+            .find(|l| l.month == "2026-08")
+            .expect("August figures");
+        assert!(aug.amounts.labor >= 450_000);
+        let month = closing.get("2026-09").await.unwrap();
+        assert!(month.warnings.iter().any(|w| w.code == "fixed_unposted"));
+        let posting = again.view.lines[0].posting.clone().unwrap();
+        let view = fixed
+            .cancel(
+                posting.id,
+                CancelInput {
+                    reason: "架空の訂正".into(),
+                },
+                Some(manager),
+            )
+            .await
+            .expect("cancel on Postgres");
+        assert_eq!(view.posted_total, 0);
+        assert_eq!(fixed.list().await.unwrap()[0].posted_count, 0);
     }
 }
 
