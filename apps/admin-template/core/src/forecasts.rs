@@ -488,6 +488,15 @@ impl ForecastsService {
         }
     }
 
+    /// 月次締め (P6b) over the same database and event channel.
+    pub fn closing(&self) -> crate::closing::ClosingService {
+        let svc = crate::closing::ClosingService::new(self.db.clone());
+        match &self.events {
+            Some(events) => svc.with_events(events.clone()),
+            None => svc,
+        }
+    }
+
     fn sql(&self, s: &str) -> String {
         placeholders(self.db.dialect(), s)
     }

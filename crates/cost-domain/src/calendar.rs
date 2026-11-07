@@ -82,6 +82,30 @@ impl YearMonth {
         }
         Self::new(y.parse().ok()?, m.parse().ok()?)
     }
+
+    /// その月の末日。
+    pub fn last_day(self) -> Date {
+        Date {
+            year: self.year,
+            month: self.month,
+            day: days_in_month(self.year, self.month),
+        }
+    }
+
+    /// 前の月。
+    pub fn previous(self) -> Self {
+        if self.month == 1 {
+            Self {
+                year: self.year - 1,
+                month: 12,
+            }
+        } else {
+            Self {
+                year: self.year,
+                month: self.month - 1,
+            }
+        }
+    }
 }
 
 impl fmt::Display for YearMonth {
@@ -189,6 +213,14 @@ mod tests {
             base_start_year: 2026,
         };
         assert_eq!(fc.period_range(1), (ym("2026-01"), ym("2026-12")));
+    }
+
+    #[test]
+    fn 月末日と前の月() {
+        assert_eq!(ym("2028-02").last_day().to_string(), "2028-02-29");
+        assert_eq!(ym("2026-11").last_day().to_string(), "2026-11-30");
+        assert_eq!(ym("2027-01").previous(), ym("2026-12"));
+        assert_eq!(ym("2026-11").previous(), ym("2026-10"));
     }
 
     #[test]

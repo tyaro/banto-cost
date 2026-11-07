@@ -512,7 +512,10 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'project_closeout_reopen',
 			rest: 'POST /api/projects/{id}/closeout/reopen',
 			role: 'Editor'
-		}
+		},
+		// banto-cost P6b: 月次締め・再開。editor 床＋authorize_audited（FinanceClose）。
+		{ tauri: 'closing_close', rest: 'POST /api/closing/{month}/close', role: 'Editor' },
+		{ tauri: 'closing_reopen', rest: 'POST /api/closing/{month}/reopen', role: 'Editor' }
 	];
 
 	// ロール床を照合したい読み取り系の対（CR-6）。読み取りは rule 8 の存在対称の
@@ -577,7 +580,10 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'project_forecast', rest: 'GET /api/projects/{id}/forecast', role: 'Viewer' },
 		{ tauri: 'portfolio_overview', rest: 'GET /api/portfolio', role: 'Viewer' },
 		// banto-cost P6a の読み取り。
-		{ tauri: 'project_closeout_get', rest: 'GET /api/projects/{id}/closeout', role: 'Viewer' }
+		{ tauri: 'project_closeout_get', rest: 'GET /api/projects/{id}/closeout', role: 'Viewer' },
+		// banto-cost P6b の読み取り。
+		{ tauri: 'closing_months', rest: 'GET /api/closing', role: 'Viewer' },
+		{ tauri: 'closing_get', rest: 'GET /api/closing/{month}', role: 'Viewer' }
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -654,6 +660,8 @@ const isAllowedPackageImport = (spec) =>
 		'project_forecast',
 		'portfolio_overview',
 		'project_closeout_get',
+		'closing_months',
+		'closing_get',
 		'vendors_list',
 		'direct_costs_list',
 		'direct_costs_approvals',
@@ -701,6 +709,8 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/projects/{id}/costs',
 		'GET /api/projects/{id}/forecast',
 		'GET /api/projects/{id}/closeout',
+		'GET /api/closing',
+		'GET /api/closing/{month}',
 		'GET /api/portfolio',
 		'GET /api/vendors',
 		'GET /api/direct-costs',

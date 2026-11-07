@@ -693,6 +693,48 @@ async fn app_layer_crud_round_trips_on_postgres() {
         assert!(reopened.closeout.is_none());
         assert_eq!(reopened.history.len(), 1);
         assert!(reopened.history[0].reopening.is_some());
+
+        // banto-cost P6b: 月次締め on Postgres (the month gate's ON CONFLICT
+        // and FOR SHARE, the closer's FOR UPDATE, the snapshot rows).
+        use admin_template_core::closing::{CloseInput, ReopenInput};
+        let closing = forecasts.closing();
+        let month = closing.get("2026-07").await.expect("month on Postgres");
+        assert!(month.can_close);
+        let closed = closing
+            .close(
+                "2026-07",
+                CloseInput {
+                    row_version: month.row_version,
+                },
+                Some(manager),
+            )
+            .await
+            .expect("close on Postgres");
+        assert_eq!(closed.status, "closed");
+        let refused = admin_template_core::time_entries::TimeEntriesService::new(db.clone())
+            .create(
+                manager,
+                serde_json::from_value(serde_json::json!({
+                    "workDate": "2026-07-10", "activityId": 1, "minutes": 60
+                }))
+                .unwrap(),
+            )
+            .await;
+        assert!(refused.is_err(), "a closed month refuses hours");
+        let reopened = closing
+            .reopen(
+                "2026-07",
+                ReopenInput {
+                    row_version: closed.row_version,
+                    reason: "訂正".into(),
+                },
+                Some(manager),
+            )
+            .await
+            .expect("reopen month on Postgres");
+        assert_eq!(reopened.status, "reopened");
+        assert!(reopened.comparison.is_some());
+        assert_eq!(closing.months().await.unwrap().len(), 1);
     }
 }
 

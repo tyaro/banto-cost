@@ -48,6 +48,7 @@ use cost_domain::revenue::{
 use cost_domain::{Date, YearMonth};
 use serde::{Deserialize, Serialize};
 
+use crate::closing::{refuse_closed, MonthGate};
 use crate::customers::{clean_optional, field_error, now_expr, stale_version_error};
 use crate::pipeline::{PipelineVersionInput, PlanLine};
 use crate::projects::{MAX_CODE_LEN, MAX_NAME_LEN};
@@ -1325,6 +1326,7 @@ impl OrdersService {
         );
         let version = state.project.revenue_version;
         let recognized_on = on.to_string();
+        let gate = MonthGate::new(self.db.dialect());
         let clears: Vec<(i64, i64)> = clears
             .iter()
             .filter_map(|c| c.plan_id.parse().ok().map(|id| (id, c.amount)))
@@ -1333,6 +1335,7 @@ impl OrdersService {
             if execute!(&mut *tx, guard, project_id, version)? == 0 {
                 return Err(stale_version_error());
             }
+            refuse_closed!(&mut *tx, gate, &recognized_on, "recognizedOn");
             let id: i64 = scalar!(&mut *tx, insert, project_id, &recognized_on, input.amount,
                 &basis, actor_user_id)?;
             for (plan_id, amount) in &clears {
@@ -1386,6 +1389,8 @@ impl OrdersService {
             self.now()
         ));
         let version = state.project.revenue_version;
+        let gate = MonthGate::new(self.db.dialect());
+        let recognized_on = row.recognized_on.clone();
         in_tx!(&self.db, tx => {
             if execute!(&mut *tx, guard, project_id, version)? == 0 {
                 return Err(stale_version_error());
@@ -1393,6 +1398,7 @@ impl OrdersService {
             if execute!(&mut *tx, cancel, actor_user_id, &reason, recognition_id, project_id)? == 0 {
                 return Err(stale_version_error());
             }
+            refuse_closed!(&mut *tx, gate, &recognized_on, "reason");
         });
         self.notify_changed();
         self.summary(project_id).await

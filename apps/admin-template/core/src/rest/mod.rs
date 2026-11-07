@@ -85,6 +85,10 @@
 //! | GET    | `/api/projects/{id}/closeout` | - | `CloseoutCheck` (any role + `ViewProjectAmounts`) |
 //! | POST   | `/api/projects/{id}/closeout` | `SettleInput` | `CloseoutCheck` (editor+ + `SettleProject`; 精算完了, T17) |
 //! | POST   | `/api/projects/{id}/closeout/reopen` | `ReopenInput` | `CloseoutCheck` (editor+ + `SettleProject`; 精算完了の取消, back to 作業完了) |
+//! | GET    | `/api/closing` | - | `MonthRow[]` (any role + `FinanceClose`; 締め済み・再開中の月) |
+//! | GET    | `/api/closing/{month}` | - | `MonthClosing` (any role + `FinanceClose`) |
+//! | POST   | `/api/closing/{month}/close` | `CloseInput` | `MonthClosing` (editor+ + `FinanceClose`; 月次締め, T11) |
+//! | POST   | `/api/closing/{month}/reopen` | `ReopenInput` | `MonthClosing` (editor+ + `FinanceClose`; 再開, reason required) |
 //! | GET    | `/api/portfolio` | - | `Portfolio` (any role; rows `visible_projects` (admin all), amounts and alerts `amount_projects`) |
 //! | GET    | `/api/vendors` | - | `WorkMaster[]` (any role; admin or `ViewMasters`) |
 //! | POST   | `/api/vendors` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`) |
@@ -269,6 +273,7 @@ use crate::users::{Role, UsersService};
 mod authz;
 mod budgets;
 mod closeouts;
+mod closing;
 mod costs;
 mod forecasts;
 mod projects;
@@ -464,6 +469,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(closeouts::closeout_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(closing::closing_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(closing::closing_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

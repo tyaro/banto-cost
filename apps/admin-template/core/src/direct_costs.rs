@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::closeouts::{refuse_settled, settled_check_sql};
+use crate::closing::{refuse_closed, MonthGate};
 use crate::customers::{clean_optional, field_error, now_expr, stale_version_error};
 use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, MAX_TEXT_LEN,
@@ -1328,6 +1329,7 @@ impl DirectCostsService {
         );
         let date = r.booked_on.to_string();
         let settled = settled_check_sql(self.db.dialect());
+        let gate = MonthGate::new(self.db.dialect());
         let result: Result<i64, BantoError> = async {
             Ok(in_tx!(&self.db, tx => {
                 let id: i64 = scalar!(&mut *tx, insert, user_id, r.kind.as_str(), r.ref_id,
@@ -1338,6 +1340,7 @@ impl DirectCostsService {
                 for (n, (project, amount)) in r.allocations.iter().enumerate() {
                     execute!(&mut *tx, alloc, id, n as i64 + 1, *project, *amount)?;
                 }
+                refuse_closed!(&mut *tx, gate, &date, "bookedOn");
                 if let Some(p) = r.project_id {
                     refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
                 }
@@ -1411,6 +1414,7 @@ impl DirectCostsService {
         let date = r.booked_on.to_string();
         let version = cost.row_version;
         let settled = settled_check_sql(self.db.dialect());
+        let gate = MonthGate::new(self.db.dialect());
         in_tx!(&self.db, tx => {
             if execute!(&mut *tx, update, r.adjustment_kind.map(AdjustmentKind::as_str),
                 r.project_id, r.phase_id, r.cost_type.as_str(), r.vendor_id,
@@ -1424,6 +1428,8 @@ impl DirectCostsService {
             for (n, (project, amount)) in r.allocations.iter().enumerate() {
                 execute!(&mut *tx, alloc, id, n as i64 + 1, *project, *amount)?;
             }
+            refuse_closed!(&mut *tx, gate, &cost.booked_on, "bookedOn");
+            refuse_closed!(&mut *tx, gate, &date, "bookedOn");
             if let Some(p) = r.project_id {
                 refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
             }
@@ -1441,7 +1447,8 @@ impl DirectCostsService {
 
     /// Delete a draft or returned record of `user_id` (never an approved one).
     pub async fn delete(&self, user_id: i64, id: i64, row_version: i64) -> Result<(), BantoError> {
-        self.editable(user_id, id, Some(row_version)).await?;
+        let cost = self.editable(user_id, id, Some(row_version)).await?;
+        let gate = MonthGate::new(self.db.dialect());
         let allocs = self.sql("DELETE FROM cost_allocations WHERE direct_cost_id = ?");
         let sql = self.sql(
             "DELETE FROM direct_costs WHERE id = ? AND row_version = ? \
@@ -1452,6 +1459,7 @@ impl DirectCostsService {
             if execute!(&mut *tx, sql, id, row_version)? == 0 {
                 return Err(stale_version_error());
             }
+            refuse_closed!(&mut *tx, gate, &cost.booked_on, "bookedOn");
         });
         self.notify(RESOURCE);
         Ok(())
@@ -1474,9 +1482,13 @@ impl DirectCostsService {
              WHERE id = ? AND row_version = ? AND status IN ('draft','returned')",
             now = self.now()
         ));
-        if on_pool!(&self.db, pool => execute!(pool, sql, id, row_version))? == 0 {
-            return Err(stale_version_error());
-        }
+        let gate = MonthGate::new(self.db.dialect());
+        in_tx!(&self.db, tx => {
+            if execute!(&mut *tx, sql, id, row_version)? == 0 {
+                return Err(stale_version_error());
+            }
+            refuse_closed!(&mut *tx, gate, &cost.booked_on, "bookedOn");
+        });
         self.notify(RESOURCE);
         self.get(id).await
     }
@@ -1519,12 +1531,13 @@ impl DirectCostsService {
                  updated_at = {now} WHERE id = ? AND row_version = ? AND status = 'submitted'",
                 now = self.now()
             ));
-            if on_pool!(&self.db, pool => execute!(pool, sql, &reason, actor_user_id, id,
-                input.row_version))?
-                == 0
-            {
-                return Err(stale_version_error());
-            }
+            let gate = MonthGate::new(self.db.dialect());
+            in_tx!(&self.db, tx => {
+                if execute!(&mut *tx, sql, &reason, actor_user_id, id, input.row_version)? == 0 {
+                    return Err(stale_version_error());
+                }
+                refuse_closed!(&mut *tx, gate, &cost.booked_on, "bookedOn");
+            });
             self.notify(RESOURCE);
             return self.get(id).await;
         }
@@ -1573,6 +1586,8 @@ impl DirectCostsService {
         let ledger_sql = LEDGER_SQL.to_string();
         let alloc_sql = LEDGER_ALLOC_SQL.to_string();
         let ref_id = cost.ref_id;
+        let gate = MonthGate::new(self.db.dialect());
+        let booked_on = cost.booked_on.clone();
         let result: Result<(), BantoError> = async {
             in_tx!(&self.db, tx => {
                 if let (Some(lock), Some(o)) = (&lock_order, order_id) {
@@ -1584,6 +1599,7 @@ impl DirectCostsService {
                 if execute!(&mut *tx, approve, actor_user_id, id, input.row_version)? == 0 {
                     return Err(stale_version_error());
                 }
+                refuse_closed!(&mut *tx, gate, &booked_on, "bookedOn");
                 let rows: Vec<LedgerRow> = fetch_all!(&mut *tx, ledger_sql)?;
                 let allocs: Vec<(i64, i64, i64)> = fetch_all!(&mut *tx, alloc_sql)?;
                 let others: Vec<LedgerRow> = rows.into_iter().filter(|r| r.0 != id).collect();
