@@ -447,7 +447,18 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'project_calc_basis_add',
 			rest: 'POST /api/projects/{id}/calc-basis',
 			role: 'Editor'
-		}
+		},
+		// banto-cost P4b: 工程・共通活動マスタと工数。editor 床＋authorize_audited
+		// （工数の本人確認はサービス、承認は APPROVAL_POLICY）。
+		{ tauri: 'phases_create', rest: 'POST /api/phases', role: 'Editor' },
+		{ tauri: 'phases_update', rest: 'PUT /api/phases/{id}', role: 'Editor' },
+		{ tauri: 'common_activities_create', rest: 'POST /api/common-activities', role: 'Editor' },
+		{ tauri: 'common_activities_update', rest: 'PUT /api/common-activities/{id}', role: 'Editor' },
+		{ tauri: 'time_entries_create', rest: 'POST /api/time-entries', role: 'Editor' },
+		{ tauri: 'time_entries_update', rest: 'PUT /api/time-entries/{id}', role: 'Editor' },
+		{ tauri: 'time_entries_delete', rest: 'DELETE /api/time-entries/{id}', role: 'Editor' },
+		{ tauri: 'time_entries_submit', rest: 'POST /api/time-entries/{id}/submit', role: 'Editor' },
+		{ tauri: 'time_entries_decide', rest: 'POST /api/time-entries/{id}/decide', role: 'Editor' }
 	];
 
 	// ロール床を照合したい読み取り系の対（CR-6）。読み取りは rule 8 の存在対称の
@@ -489,6 +500,16 @@ const isAllowedPackageImport = (spec) =>
 		{
 			tauri: 'project_calc_basis_preview',
 			rest: 'POST /api/projects/{id}/calc-basis/preview',
+			role: 'Viewer'
+		},
+		// banto-cost P4b の読み取り。
+		{ tauri: 'phases_list', rest: 'GET /api/phases', role: 'Viewer' },
+		{ tauri: 'common_activities_list', rest: 'GET /api/common-activities', role: 'Viewer' },
+		{ tauri: 'time_entries_list', rest: 'GET /api/time-entries', role: 'Viewer' },
+		{ tauri: 'time_entries_approvals', rest: 'GET /api/time-entries/approvals', role: 'Viewer' },
+		{
+			tauri: 'project_time_summary',
+			rest: 'GET /api/projects/{id}/time-summary',
 			role: 'Viewer'
 		}
 	];
@@ -548,17 +569,22 @@ const isAllowedPackageImport = (spec) =>
 		'ping',
 		'calc_basis_get',
 		'calc_basis_preview',
+		'common_activities_list',
 		'order_get',
 		'outlook_get',
 		'outlook_snapshot_get',
 		'outlook_snapshots_list',
 		'pipeline_overview',
+		'phases_list',
 		'pipeline_versions_list',
 		'project_calc_basis_get',
 		'project_calc_basis_preview',
 		'project_members_list',
 		'projects_get',
 		'projects_list',
+		'project_time_summary',
+		'time_entries_approvals',
+		'time_entries_list',
 		// Issue #219 PR-C2: the reach check of the live listener (admin, like
 		// server_status). Desktop-only by nature - no REST twin.
 		'reach_check_status',
@@ -592,6 +618,11 @@ const isAllowedPackageImport = (spec) =>
 		'POST /api/calc-basis/preview',
 		'GET /api/projects/{id}/calc-basis',
 		'POST /api/projects/{id}/calc-basis/preview',
+		'GET /api/phases',
+		'GET /api/common-activities',
+		'GET /api/time-entries',
+		'GET /api/time-entries/approvals',
+		'GET /api/projects/{id}/time-summary',
 		'POST /api/customers/list',
 		'POST /api/projects/list',
 		'GET /api/ui-settings/{key}',

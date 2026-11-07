@@ -23,8 +23,16 @@ export type AppPath = `/${Path}`;
  * app as a URL.
  */
 export function resolveAppPath(path: AppPath): ResolvedPathname {
-	return resolve(path.slice(1) as Path);
+	return resolvePath(path.slice(1) as Path);
 }
+
+/**
+ * `resolve` typed for one plain `Path`. SvelteKit types `resolve` as a union
+ * of one-tuple parameter lists, one per route; past 25 routes TypeScript
+ * stops matching a `Path` union argument against that union (banto-cost P4b
+ * crossed it), although every member is accepted on its own.
+ */
+const resolvePath = resolve as (path: Path) => ResolvedPathname;
 
 /**
  * Does `pathname` (a `page.url.pathname` / `navigation.to.url.pathname`, which

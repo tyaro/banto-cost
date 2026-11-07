@@ -4,6 +4,7 @@
 //! `tauri::command` adapters in `src-tauri` call into this crate; the same
 //! services back the embedded REST server in M6.
 
+pub mod approval;
 pub mod assets;
 pub mod calc_basis;
 pub mod customers;
@@ -14,6 +15,9 @@ pub mod orders;
 pub mod pipeline;
 pub mod projects;
 pub mod rest;
+pub mod time_access;
+pub mod time_entries;
+pub mod work_masters;
 
 // Theme C (docs/template-scope.md §7): the domain-agnostic services moved to
 // the shared `banto-admin-services` crate to shrink the surface a template

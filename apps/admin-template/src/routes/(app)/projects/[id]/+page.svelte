@@ -6,7 +6,8 @@
 	 * the update carries it back; a stale one is a `rowVersion` field error
 	 * that no field owns, listed above the form.
 	 *
-	 * The calc basis of the project (P4a, design 10.6) is CalcBasisSection.svelte.
+	 * The calc basis of the project (P4a, design 10.6) is CalcBasisSection.svelte;
+	 * its hours by phase (P4b, spec §6.1) are TimeSection.svelte.
 	 * Order conversion and ordered revenue (P3b) are OrderSection.svelte; it
 	 * asks this page to reload after a conversion (status and rowVersion change).
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
@@ -34,6 +35,7 @@
 	import PipelineSection from './PipelineSection.svelte';
 	import OrderSection from './OrderSection.svelte';
 	import CalcBasisSection from './CalcBasisSection.svelte';
+	import TimeSection from './TimeSection.svelte';
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -218,6 +220,7 @@
 				calcBusy = pending.busy;
 			}}
 		/>
+		<TimeSection projectId={parsedId} />
 	{/if}
 </div>
 

@@ -226,6 +226,8 @@ export async function httpRequest<T>(path: string, init: HttpInit): Promise<T> {
 		});
 	}
 
+	// 204 No Content (a DELETE): nothing to parse.
+	if (response.status === 204) return undefined as T;
 	return (await response.json()) as T;
 }
 

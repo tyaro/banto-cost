@@ -13,8 +13,8 @@
 //! (T31). A project row with `value: null` reverts to the company basis from
 //! its date on (T34). Values already used by approved records are never
 //! rewritten here: the impact preview lists them as correction candidates
-//! instead (T33, design §10.5). Hours and costs do not exist yet (P4b), so
-//! the preview's record counts are 0 until those ledgers report their usages.
+//! instead (T33, design §10.5). Time entries report their usages of
+//! `emp_rate` (P4b); direct costs and outlooks will add theirs.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -191,7 +191,7 @@ const ROW_SELECT: &str = "SELECT v.id, v.item_key, v.scope, v.project_id, v.vali
 const ITEM_SELECT: &str = "SELECT key, item_group, label, unit, value_type, project_overridable, \
      managers_may_override, edit_capability, sort_order FROM calc_items";
 
-fn domain_row(row: &CalcValueRow) -> Option<CalcValue> {
+pub(crate) fn domain_row(row: &CalcValueRow) -> Option<CalcValue> {
     Some(CalcValue {
         item: row.item_key.clone(),
         scope: match row.project_id {
@@ -501,10 +501,16 @@ impl CalcBasisService {
             .collect())
     }
 
-    /// Records that use the item (hours, costs, outlooks). None exist before
-    /// P4b; those ledgers add their rows here so the preview counts them.
-    async fn usages(&self, _item_key: &str) -> Result<Vec<Usage>, BantoError> {
-        Ok(Vec::new())
+    /// Every saved row of an item (newest effective date first), for the
+    /// ledgers that fix an applied value at approval (time entries, P4b).
+    pub(crate) async fn value_rows(&self, item_key: &str) -> Result<Vec<CalcValueRow>, BantoError> {
+        self.rows_of(Some(item_key)).await
+    }
+
+    /// Records that use the item, so the preview counts them (design §10.5).
+    /// Time entries use `emp_rate` (P4b); costs and outlooks add theirs later.
+    async fn usages(&self, item_key: &str) -> Result<Vec<Usage>, BantoError> {
+        crate::time_entries::usages(&self.db, item_key).await
     }
 
     /// The item a request names, for the wiring layer's authorization.

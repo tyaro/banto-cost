@@ -58,6 +58,20 @@
 //! | GET    | `/api/projects/{id}/calc-basis?on` | - | `ProjectBasis` (any role + `ViewProjectAmounts`) |
 //! | POST   | `/api/projects/{id}/calc-basis/preview` | `CalcValueInput` | `ImpactPreview` (any role + `OverrideCalcBasis`) |
 //! | POST   | `/api/projects/{id}/calc-basis` | `CalcValueInput` | `CalcValueRow` (editor+ + `OverrideCalcBasis`) |
+//! | GET    | `/api/phases` | -              | `WorkMaster[]` (any role + admin or `ViewMasters`; P4b) |
+//! | POST   | `/api/phases` | `WorkMasterInput` | `WorkMaster` (editor+ + admin or `EditMasters`) |
+//! | PUT    | `/api/phases/{id}` | `WorkMasterInput` | `WorkMaster` (editor+ + admin or `EditMasters`; `rowVersion`) |
+//! | GET    | `/api/common-activities` | -   | `WorkMaster[]` (as phases) |
+//! | POST   | `/api/common-activities` | `WorkMasterInput` | `WorkMaster` (as phases) |
+//! | PUT    | `/api/common-activities/{id}` | `WorkMasterInput` | `WorkMaster` (as phases) |
+//! | GET    | `/api/time-entries?from&to` | - | `TimeEntry[]` (any role; the caller's own; rate/cost only with `finance.rate`) |
+//! | POST   | `/api/time-entries` | `TimeEntryInput` | `TimeEntrySaved` (editor+ + `EnterTime` / `EnterCommonTime`; `clientRequestId`) |
+//! | PUT    | `/api/time-entries/{id}` | `TimeEntryInput` | `TimeEntrySaved` (as create; own draft/returned; `rowVersion`) |
+//! | DELETE | `/api/time-entries/{id}?rowVersion` | - | 204 (editor+; own draft/returned) |
+//! | POST   | `/api/time-entries/{id}/submit` | `{rowVersion}` | `TimeEntry` (editor+; own draft/returned) |
+//! | GET    | `/api/time-entries/approvals` | - | `TimeEntry[]` (any role; scope `approval_projects`, activities with `finance.close`) |
+//! | POST   | `/api/time-entries/{id}/decide` | `DecisionInput` | `TimeEntry` (editor+ + `Approve` / `ApproveCommon`, self-approval allowed and audited) |
+//! | GET    | `/api/projects/{id}/time-summary` | - | `ProjectTimeSummary` (any role + `ViewProjectAmounts`) |
 //! | GET    | `/api/ui-settings/{key}` | -          | `{value: string \| null}` (any role) |
 //! | PUT    | `/api/ui-settings/{key}` | `{value}`  | 204 (any role)          |
 //! | POST   | `/api/audit-log/list?asOfId=` | `ListParams` | `AuditLogList` (`ListResult` + `asOfId`/`deletionEpoch`, admin; #248) |
@@ -228,6 +242,7 @@ mod authz;
 mod projects;
 #[cfg(test)]
 mod tests;
+mod time;
 
 // Theme C PR-C4 (docs/template-scope.md §7 移行順 ④): re-exported so
 // `admin_template_core::rest::audited_credential_verifier` - the path
@@ -266,6 +281,9 @@ pub struct Services {
     pub orders: crate::orders::OrdersService,
     /// banto-cost P4a: calc basis (company values and project overrides).
     pub calc_basis: crate::calc_basis::CalcBasisService,
+    /// banto-cost P4b: phase / common-activity masters and time entries.
+    pub work_masters: crate::work_masters::WorkMastersService,
+    pub time_entries: crate::time_entries::TimeEntriesService,
     /// CPU/memory probe (ADR-0013, Issue #185), or `None` when the
     /// `system-metrics` feature is off (or the host platform is
     /// unsupported) - the app layer builds the `Some` case, see
@@ -304,6 +322,8 @@ pub fn api_router(
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics,
     } = services;
     let business = projects::BusinessServices {
@@ -312,6 +332,8 @@ pub fn api_router(
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         authz: authz.clone(),
         users: users.clone(),
     };
@@ -368,6 +390,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(projects::business_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(time::time_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(time::time_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

@@ -26,8 +26,8 @@ mod keyring_store;
 use admin_template_core::assets::FrontendAssets;
 use admin_template_core::audit::{AuditEntry, AuditLogList, AuditLogService};
 use admin_template_core::authz::{
-    amount_projects, visible_projects, Actor, Allowed, AuthzService, Capability, MemberKind,
-    Operation, Policy, ProjectMember, ProjectScope, Subject,
+    amount_projects, approval_projects, visible_projects, Actor, Allowed, AuthzService, Capability,
+    MemberKind, Operation, Policy, ProjectMember, ProjectScope, Subject,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
 use admin_template_core::calc_basis::{
@@ -41,7 +41,7 @@ use admin_template_core::first_boot::seed_first_boot_settings;
 use admin_template_core::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use admin_template_core::orders::{
     CancelInput, ChangeDecision, ChangeRequest, ConversionRequest, OrderSummary, OrdersService,
-    RecognitionInput, ReplanInput, ORDER_CHANGE_POLICY,
+    RecognitionInput, ReplanInput,
 };
 use admin_template_core::pipeline::{
     PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
@@ -54,7 +54,15 @@ use admin_template_core::settings::{
 use admin_template_core::system_info::SystemInfoService;
 #[cfg(feature = "system-metrics")]
 use admin_template_core::system_metrics::SystemMetricsSampler;
+use admin_template_core::time_access::{approve_op, enter_op as enter_time_op, shown, shown_saved};
+use admin_template_core::time_entries::{
+    DecisionInput, ProjectTimeSummary, TimeEntriesService, TimeEntry, TimeEntryInput,
+    TimeEntrySaved, VersionInput,
+};
 use admin_template_core::users::{Role, UserIdentity, UserSummary, UsersService};
+use admin_template_core::work_masters::{
+    MasterKind, WorkMaster, WorkMasterInput, WorkMastersService,
+};
 use banto_core::{BantoError, FieldError, ListParams, ListResult};
 use banto_server::routes::{MetricsProbe, SystemInfo};
 use banto_server::{
@@ -195,6 +203,9 @@ struct AppState {
     orders: OrdersService,
     /// banto-cost P4a: calc basis (company values and project overrides).
     calc_basis: CalcBasisService,
+    /// banto-cost P4b: phase / common-activity masters and time entries.
+    work_masters: WorkMastersService,
+    time_entries: TimeEntriesService,
     /// CPU/memory probe (ADR-0013, Issue #185): `Some` when the
     /// `system-metrics` feature is on and the host platform is supported;
     /// `None` otherwise, in which case the `system_info` command reports
@@ -1915,6 +1926,8 @@ async fn start_embedded_server(
     pipeline: PipelineService,
     orders: OrdersService,
     calc_basis: CalcBasisService,
+    work_masters: WorkMastersService,
+    time_entries: TimeEntriesService,
     metrics: Option<MetricsProbe>,
     auth: AuthState,
     events: broadcast::Sender<ServerEvent>,
@@ -1941,6 +1954,8 @@ async fn start_embedded_server(
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics,
     };
     // Issue #219 (`docs/design/lan-reach-check-design.md` §5.2): the one
@@ -2539,6 +2554,8 @@ async fn server_apply_body(
             state.pipeline.clone(),
             state.orders.clone(),
             state.calc_basis.clone(),
+            state.work_masters.clone(),
+            state.time_entries.clone(),
             state.metrics.clone(),
             state.rest_auth.clone(),
             state.events.clone(),
@@ -3726,7 +3743,7 @@ async fn order_change_decide_body(
             // A request without a requester (deleted user) is nobody's own.
             submitted_by: requester.unwrap_or(0),
         },
-        ORDER_CHANGE_POLICY,
+        admin_template_core::approval::APPROVAL_POLICY,
         "orders",
     )
     .await?;
@@ -4095,6 +4112,346 @@ async fn project_calc_basis_add_body(
     )
     .await;
     Ok(row)
+}
+
+// --- banto-cost P4b: phases / common activities / time entries -------------
+//
+// Tauri twins of `/api/phases*`, `/api/common-activities*`,
+// `/api/time-entries*` and `/api/projects/{id}/time-summary`
+// (`admin_template_core::rest::time`): the same role floors, the same
+// `Operation`s through `authorize_audited`, the same audit actions and
+// detail (`TimeEntry::audit_detail`, no rate), and the same masking
+// (`time_access::shown`).
+
+const TIME_RESOURCE: &str = "time_entries";
+
+/// `ViewMasters` (or the `admin` role) for the caller the command resolved.
+async fn masters_list(
+    state: &AppState,
+    identity: &UserIdentity,
+    kind: MasterKind,
+) -> Result<Vec<WorkMaster>, BantoError> {
+    business_guard_or_admin(state, identity, Operation::ViewMasters, kind.resource()).await?;
+    state.work_masters.list(kind).await
+}
+
+/// `EditMasters` (or the `admin` role), then create (`id: None`) or update.
+async fn masters_write(
+    state: &AppState,
+    actor: &UserIdentity,
+    kind: MasterKind,
+    id: Option<i64>,
+    values: WorkMasterInput,
+) -> Result<WorkMaster, BantoError> {
+    business_guard_or_admin(state, actor, Operation::EditMasters, kind.resource()).await?;
+    let (row, action) = match id {
+        None => (state.work_masters.create(kind, values).await?, "create"),
+        Some(id) => (state.work_masters.update(kind, id, values).await?, "update"),
+    };
+    record_ok(
+        &state.audit,
+        actor,
+        action,
+        kind.resource(),
+        Some(&row.id.to_string()),
+        Some(serde_json::json!({ "name": row.name, "active": row.active })),
+    )
+    .await;
+    Ok(row)
+}
+
+#[tauri::command]
+async fn phases_list(state: State<'_, AppState>) -> Result<Vec<WorkMaster>, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "phases").await?;
+    masters_list(&state, &identity, MasterKind::Phases).await
+}
+
+#[tauri::command]
+async fn phases_create(
+    state: State<'_, AppState>,
+    values: WorkMasterInput,
+) -> Result<WorkMaster, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    masters_write(&state, &actor, MasterKind::Phases, None, values).await
+}
+
+#[tauri::command]
+async fn phases_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: WorkMasterInput,
+) -> Result<WorkMaster, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    masters_write(&state, &actor, MasterKind::Phases, Some(id), values).await
+}
+
+#[tauri::command]
+async fn common_activities_list(state: State<'_, AppState>) -> Result<Vec<WorkMaster>, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "common_activities").await?;
+    masters_list(&state, &identity, MasterKind::Activities).await
+}
+
+#[tauri::command]
+async fn common_activities_create(
+    state: State<'_, AppState>,
+    values: WorkMasterInput,
+) -> Result<WorkMaster, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    masters_write(&state, &actor, MasterKind::Activities, None, values).await
+}
+
+#[tauri::command]
+async fn common_activities_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: WorkMasterInput,
+) -> Result<WorkMaster, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    masters_write(&state, &actor, MasterKind::Activities, Some(id), values).await
+}
+
+/// Authorize `op` for an entry operation; the caller must have a user row.
+async fn time_guard(
+    state: &AppState,
+    identity: &UserIdentity,
+    op: Operation,
+) -> Result<(Subject, i64), BantoError> {
+    let (subject, user_id) = business_guard(state, identity, op, TIME_RESOURCE).await?;
+    Ok((subject, user_id.ok_or(BantoError::Forbidden)?))
+}
+
+/// The caller's own entry; someone else's reads as not found (as on REST).
+async fn own_time_entry(state: &AppState, id: i64) -> Result<TimeEntry, BantoError> {
+    let session = current_session(state)
+        .await?
+        .ok_or(BantoError::Unauthorized)?;
+    let entry = state.time_entries.get(id).await?;
+    if Some(entry.user_id) != session_user_id(&session) {
+        return Err(BantoError::NotFound {
+            resource: TIME_RESOURCE.into(),
+            id: id.to_string(),
+        });
+    }
+    Ok(entry)
+}
+
+#[tauri::command]
+async fn time_entries_list(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<Vec<TimeEntry>, BantoError> {
+    time_entries_list_body(&state, from, to).await
+}
+
+async fn time_entries_list_body(
+    state: &AppState,
+    from: String,
+    to: String,
+) -> Result<Vec<TimeEntry>, BantoError> {
+    let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
+    let (subject, user_id) = time_guard(state, &identity, Operation::EnterCommonTime).await?;
+    let rows = state.time_entries.list_own(user_id, &from, &to).await?;
+    Ok(rows.into_iter().map(|e| shown(&subject, e)).collect())
+}
+
+#[tauri::command]
+async fn time_entries_create(
+    state: State<'_, AppState>,
+    values: TimeEntryInput,
+) -> Result<TimeEntrySaved, BantoError> {
+    time_entries_create_body(&state, values).await
+}
+
+async fn time_entries_create_body(
+    state: &AppState,
+    values: TimeEntryInput,
+) -> Result<TimeEntrySaved, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (subject, user_id) = time_guard(state, &actor, enter_time_op(values.project_id)).await?;
+    let saved = state.time_entries.create(user_id, values).await?;
+    if !saved.replayed {
+        record_ok(
+            &state.audit,
+            &actor,
+            "create",
+            TIME_RESOURCE,
+            Some(&saved.entry.id.to_string()),
+            Some(saved.entry.audit_detail()),
+        )
+        .await;
+    }
+    Ok(shown_saved(&subject, saved))
+}
+
+#[tauri::command]
+async fn time_entries_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: TimeEntryInput,
+) -> Result<TimeEntrySaved, BantoError> {
+    time_entries_update_body(&state, id, values).await
+}
+
+async fn time_entries_update_body(
+    state: &AppState,
+    id: i64,
+    values: TimeEntryInput,
+) -> Result<TimeEntrySaved, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    own_time_entry(state, id).await?;
+    let (subject, user_id) = time_guard(state, &actor, enter_time_op(values.project_id)).await?;
+    let saved = state.time_entries.update(user_id, id, values).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        TIME_RESOURCE,
+        Some(&id.to_string()),
+        Some(saved.entry.audit_detail()),
+    )
+    .await;
+    Ok(shown_saved(&subject, saved))
+}
+
+#[tauri::command]
+async fn time_entries_delete(
+    state: State<'_, AppState>,
+    id: i64,
+    row_version: i64,
+) -> Result<(), BantoError> {
+    time_entries_delete_body(&state, id, row_version).await
+}
+
+async fn time_entries_delete_body(
+    state: &AppState,
+    id: i64,
+    row_version: i64,
+) -> Result<(), BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let entry = own_time_entry(state, id).await?;
+    let (_, user_id) = time_guard(state, &actor, enter_time_op(entry.project_id)).await?;
+    state.time_entries.delete(user_id, id, row_version).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "delete",
+        TIME_RESOURCE,
+        Some(&id.to_string()),
+        Some(entry.audit_detail()),
+    )
+    .await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn time_entries_submit(
+    state: State<'_, AppState>,
+    id: i64,
+    values: VersionInput,
+) -> Result<TimeEntry, BantoError> {
+    time_entries_submit_body(&state, id, values).await
+}
+
+async fn time_entries_submit_body(
+    state: &AppState,
+    id: i64,
+    values: VersionInput,
+) -> Result<TimeEntry, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let entry = own_time_entry(state, id).await?;
+    let (subject, user_id) = time_guard(state, &actor, enter_time_op(entry.project_id)).await?;
+    let entry = state
+        .time_entries
+        .submit(user_id, id, values.row_version)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "submit",
+        TIME_RESOURCE,
+        Some(&id.to_string()),
+        Some(entry.audit_detail()),
+    )
+    .await;
+    Ok(shown(&subject, entry))
+}
+
+#[tauri::command]
+async fn time_entries_approvals(state: State<'_, AppState>) -> Result<Vec<TimeEntry>, BantoError> {
+    time_entries_approvals_body(&state).await
+}
+
+async fn time_entries_approvals_body(state: &AppState) -> Result<Vec<TimeEntry>, BantoError> {
+    require_role(state, Role::Viewer, TIME_RESOURCE).await?;
+    let subject = caller_subject(state).await?;
+    let scope = approval_projects(&subject);
+    let common = subject.is_company_member() && subject.has(Capability::FinanceClose);
+    let rows = state.time_entries.approvals(&scope, common).await?;
+    Ok(rows.into_iter().map(|e| shown(&subject, e)).collect())
+}
+
+#[tauri::command]
+async fn time_entries_decide(
+    state: State<'_, AppState>,
+    id: i64,
+    values: DecisionInput,
+) -> Result<TimeEntry, BantoError> {
+    time_entries_decide_body(&state, id, values).await
+}
+
+async fn time_entries_decide_body(
+    state: &AppState,
+    id: i64,
+    values: DecisionInput,
+) -> Result<TimeEntry, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let entry = state.time_entries.get(id).await?;
+    let (subject, user_id, allowed) = business_guard_with(
+        state,
+        &actor,
+        approve_op(&entry),
+        admin_template_core::approval::APPROVAL_POLICY,
+        TIME_RESOURCE,
+    )
+    .await?;
+    let approve = values.approve;
+    let entry = state.time_entries.decide(&entry, values, user_id).await?;
+    let mut detail = entry.audit_detail();
+    detail["selfApproval"] = serde_json::json!(allowed.self_approval_exception);
+    record_ok(
+        &state.audit,
+        &actor,
+        if approve { "approve" } else { "return" },
+        TIME_RESOURCE,
+        Some(&id.to_string()),
+        Some(detail),
+    )
+    .await;
+    Ok(shown(&subject, entry))
+}
+
+#[tauri::command]
+async fn project_time_summary(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<ProjectTimeSummary, BantoError> {
+    project_time_summary_body(&state, project_id).await
+}
+
+async fn project_time_summary_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<ProjectTimeSummary, BantoError> {
+    let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        TIME_RESOURCE,
+    )
+    .await?;
+    state.time_entries.project_summary(project_id).await
 }
 
 /// `admin`-only (spec M10): the user-management screen's account list.
@@ -4571,6 +4928,9 @@ pub fn run() {
             let orders = OrdersService::new(db.clone()).with_events(events.clone());
             // banto-cost P4a.
             let calc_basis = CalcBasisService::new(db.clone());
+            // banto-cost P4b.
+            let work_masters = WorkMastersService::new(db.clone()).with_events(events.clone());
+            let time_entries = TimeEntriesService::new(db.clone()).with_events(events.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
             // same "share one stateful sampler" reasoning as `banto-serve`'s
             // main() - see `SystemMetricsSampler::sample`'s doc comment for
@@ -4796,6 +5156,8 @@ pub fn run() {
                     pipeline.clone(),
                     orders.clone(),
                     calc_basis.clone(),
+                    work_masters.clone(),
+                    time_entries.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
                     events.clone(),
@@ -4865,6 +5227,8 @@ pub fn run() {
                 pipeline,
                 orders,
                 calc_basis,
+                work_masters,
+                time_entries,
                 metrics,
                 started_at,
             });
@@ -4935,6 +5299,20 @@ pub fn run() {
             project_calc_basis_get,
             project_calc_basis_preview,
             project_calc_basis_add,
+            phases_list,
+            phases_create,
+            phases_update,
+            common_activities_list,
+            common_activities_create,
+            common_activities_update,
+            time_entries_list,
+            time_entries_create,
+            time_entries_update,
+            time_entries_delete,
+            time_entries_submit,
+            time_entries_approvals,
+            time_entries_decide,
+            project_time_summary,
             users_update,
             users_reset_password,
             users_delete,
@@ -5007,6 +5385,8 @@ mod tests {
             pipeline: PipelineService::new(pool.clone()).with_events(events.clone()),
             orders: OrdersService::new(pool.clone()).with_events(events.clone()),
             calc_basis: CalcBasisService::new(pool.clone()),
+            work_masters: WorkMastersService::new(pool.clone()),
+            time_entries: TimeEntriesService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
             metrics: None,
@@ -5066,6 +5446,8 @@ mod tests {
             pipeline: PipelineService::new(pool.clone()).with_events(events.clone()),
             orders: OrdersService::new(pool.clone()).with_events(events.clone()),
             calc_basis: CalcBasisService::new(pool.clone()),
+            work_masters: WorkMastersService::new(pool.clone()),
+            time_entries: TimeEntriesService::new(pool.clone()),
             metrics: None,
             started_at: std::time::Instant::now(),
         }
@@ -9729,5 +10111,225 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.resource == "calc_basis" && r.action == "denied" && r.origin == "tauri"));
+    }
+
+    // --- banto-cost P4b ----------------------------------------------------
+    // Tauri twin of `rest::tests::t02_t04_t12_rest_time_entries_follow_ownership_scope_and_approval`.
+
+    #[tokio::test]
+    async fn t02_t04_t12_tauri_time_entries_follow_ownership_scope_and_approval() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        let entry = |project: i64, request: &str| -> TimeEntryInput {
+            serde_json::from_value(serde_json::json!({
+                "workDate": "2026-11-09",
+                "projectId": project,
+                "phaseId": 1,
+                "minutes": 420,
+                "clientRequestId": request
+            }))
+            .expect("input")
+        };
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[
+                Capability::TimeEntry,
+                Capability::ProjectManage,
+                Capability::AmountView,
+            ],
+        )
+        .await
+        .expect("grant editor");
+        authz_capabilities_set_body(
+            &state,
+            admin.id,
+            &[
+                Capability::TimeEntry,
+                Capability::FinanceRate,
+                Capability::AmountView,
+            ],
+        )
+        .await
+        .expect("grant admin");
+        calc_basis_add_body(
+            &state,
+            serde_json::from_value(serde_json::json!({
+                "itemKey": "emp_rate",
+                "validFrom": "2026-06-01",
+                "value": 5_000,
+                "reason": "標準"
+            }))
+            .expect("input"),
+        )
+        .await
+        .expect("rate");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let project = projects_create_body(&state, project_input("P-T01", editor.id))
+            .await
+            .expect("manager registers a project")
+            .id;
+        let first = time_entries_create_body(&state, entry(project, "e-1"))
+            .await
+            .expect("create");
+        let again = time_entries_create_body(&state, entry(project, "e-1"))
+            .await
+            .expect("retry");
+        assert!(again.replayed);
+        assert_eq!(first.entry.id, again.entry.id);
+        let id = first.entry.id;
+
+        // Not a member: no hours on the project; someone else's entry is not found.
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        assert!(matches!(
+            time_entries_create_body(&state, entry(project, "a-1")).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            time_entries_submit_body(&state, id, VersionInput { row_version: 1 }).await,
+            Err(BantoError::NotFound { .. })
+        ));
+        assert!(time_entries_approvals_body(&state)
+            .await
+            .expect("approvals")
+            .is_empty());
+        assert!(matches!(
+            project_time_summary_body(&state, project).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let submitted = time_entries_submit_body(&state, id, VersionInput { row_version: 1 })
+            .await
+            .expect("submit");
+        assert_eq!(
+            time_entries_approvals_body(&state)
+                .await
+                .expect("list")
+                .len(),
+            1
+        );
+        let approved = time_entries_decide_body(
+            &state,
+            id,
+            serde_json::from_value(serde_json::json!({
+                "rowVersion": submitted.row_version,
+                "approve": true
+            }))
+            .expect("decision"),
+        )
+        .await
+        .expect("self-approval");
+        assert_eq!(approved.status, "approved");
+        assert_eq!(approved.labor_cost, None, "rate hidden from the manager");
+        let summary = project_time_summary_body(&state, project)
+            .await
+            .expect("summary");
+        assert_eq!(summary.total.labor_cost, 35_000);
+
+        // A common activity is accounting's to approve.
+        let common = time_entries_create_body(
+            &state,
+            serde_json::from_value(serde_json::json!({
+                "workDate": "2026-11-10",
+                "activityId": 1,
+                "minutes": 60
+            }))
+            .expect("input"),
+        )
+        .await
+        .expect("common");
+        let common =
+            time_entries_submit_body(&state, common.entry.id, VersionInput { row_version: 1 })
+                .await
+                .expect("submit");
+        assert!(matches!(
+            time_entries_decide_body(
+                &state,
+                common.id,
+                serde_json::from_value(serde_json::json!({
+                    "rowVersion": common.row_version,
+                    "approve": true
+                }))
+                .expect("decision"),
+            )
+            .await,
+            Err(BantoError::Forbidden)
+        ));
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        let writes: Vec<_> = rows
+            .iter()
+            .filter(|r| r.resource == "time_entries" && r.action != "denied")
+            .collect();
+        assert_eq!(writes.iter().filter(|r| r.action == "create").count(), 2);
+        let approval = writes
+            .iter()
+            .find(|r| r.action == "approve")
+            .expect("approve");
+        let detail = approval.detail.clone().unwrap_or_default();
+        assert!(detail.contains("\"selfApproval\":true"));
+        assert!(!detail.contains("5000"));
+        assert!(rows
+            .iter()
+            .any(|r| r.resource == "time_entries" && r.action == "denied" && r.origin == "tauri"));
+    }
+
+    #[tokio::test]
+    async fn p4b_tauri_work_masters_follow_the_master_rights() {
+        let state = admin_app_state().await;
+        let admin = require_role(&state, Role::Viewer, "phases")
+            .await
+            .expect("session");
+        assert_eq!(
+            masters_list(&state, &admin, MasterKind::Phases)
+                .await
+                .expect("admin role reads masters")
+                .len(),
+            6
+        );
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(&state, editor.id, &[Capability::TimeEntry])
+            .await
+            .expect("grant");
+        state.set_session_for_test(Some(DesktopSession::Account(editor)));
+        let editor = require_role(&state, Role::Editor, "business")
+            .await
+            .expect("session");
+        assert_eq!(
+            masters_list(&state, &editor, MasterKind::Activities)
+                .await
+                .expect("member reads")
+                .len(),
+            4
+        );
+        let input: WorkMasterInput =
+            serde_json::from_value(serde_json::json!({ "name": "据付", "sortOrder": 70 }))
+                .expect("input");
+        assert!(matches!(
+            masters_write(&state, &editor, MasterKind::Phases, None, input).await,
+            Err(BantoError::Forbidden)
+        ));
     }
 }

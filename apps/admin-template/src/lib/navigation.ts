@@ -23,9 +23,24 @@ export type NavLabelKey = 'nav.dashboard' | 'nav.users' | 'nav.auditLog' | 'nav.
 
 /** banto-cost business screens (P3a). A separate union rather than more members in
  *  the two above: scaffold's removers edit those by exact text (scripts/scaffold.mjs). */
-export type CostNavIconKey = 'pipeline' | 'outlook' | 'projects' | 'customers' | 'calc-basis';
+export type CostNavIconKey =
+	| 'pipeline'
+	| 'outlook'
+	| 'projects'
+	| 'customers'
+	| 'calc-basis'
+	| 'time'
+	| 'approvals'
+	| 'work-masters';
 export type CostNavLabelKey =
-	'nav.pipeline' | 'nav.outlook' | 'nav.projects' | 'nav.customers' | 'nav.calcBasis';
+	| 'nav.pipeline'
+	| 'nav.outlook'
+	| 'nav.projects'
+	| 'nav.customers'
+	| 'nav.calcBasis'
+	| 'nav.time'
+	| 'nav.approvals'
+	| 'nav.workMasters';
 
 /** Keys of the demo-only catalog entry (`NavItem.demoOnly`). Kept out of the unions above on purpose:
  *  scaffold's removers edit those unions by exact text (scripts/scaffold.mjs). */
@@ -102,8 +117,13 @@ const allNavItems: NavItem[] = [
 			'/(app)/customers/[id]': (resource) => m['customers.editTitle']({ resource })
 		}
 	},
+	// banto-cost P4b: 工数入力・承認一覧 (spec §6.1 / §9). Capability-gated by the server.
+	{ path: '/time', labelKey: 'nav.time', icon: 'time' },
+	{ path: '/approvals', labelKey: 'nav.approvals', icon: 'approvals' },
 	// banto-cost P4a: 計算基準 (design 第10章). Amounts: capability-gated by the server.
 	{ path: '/calc-basis', labelKey: 'nav.calcBasis', icon: 'calc-basis' },
+	// banto-cost P4b: 工程・共通活動 masters (spec §5.2).
+	{ path: '/work-masters', labelKey: 'nav.workMasters', icon: 'work-masters' },
 	{ path: '/ui-demo', labelKey: 'nav.uiDemo', icon: 'ui-demo', demoOnly: true },
 	{ path: '/users', labelKey: 'nav.users', icon: 'users', adminOnly: true },
 	{ path: '/audit-log', labelKey: 'nav.auditLog', icon: 'audit-log', adminOnly: true },

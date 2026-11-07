@@ -32,6 +32,7 @@ async fn reset_schema(url: &str) {
         .await
         .expect("connect for schema reset");
     for stmt in [
+        "DROP TABLE IF EXISTS time_entries, phases, common_activities CASCADE",
         "DROP TABLE IF EXISTS calc_values, calc_items CASCADE",
         "DROP TABLE IF EXISTS outlook_snapshot_rows, outlook_snapshots, revenue_clearings, \
          revenue_recognitions, revenue_plan, order_changes, order_conversions CASCADE",
@@ -384,6 +385,54 @@ async fn app_layer_crud_round_trips_on_postgres() {
         assert_eq!(applied.items[0].source, AppliedSource::Project);
         let company = basis.company("2026-12-01").await.unwrap();
         assert_eq!(company.items[0].overriding_projects, 1);
+
+        // banto-cost P4b: masters and time entries on Postgres (seeded rows,
+        // the users-row FOR UPDATE lock, the boolean cost_missing column,
+        // the per-user request-id unique index, the approval's rate lookup).
+        use admin_template_core::time_entries::{
+            DecisionInput, TimeEntriesService, TimeEntryInput,
+        };
+        use admin_template_core::work_masters::{MasterKind, WorkMastersService};
+        let masters = WorkMastersService::new(db.clone());
+        assert_eq!(masters.list(MasterKind::Phases).await.unwrap().len(), 6);
+        assert_eq!(masters.list(MasterKind::Activities).await.unwrap().len(), 4);
+        let time = TimeEntriesService::new(db.clone());
+        let entry: TimeEntryInput = serde_json::from_value(serde_json::json!({
+            "workDate": "2026-12-01", "projectId": project.id, "phaseId": 1,
+            "minutes": 420, "clientRequestId": "pg-1"
+        }))
+        .unwrap();
+        let saved = time
+            .create(manager, entry.clone())
+            .await
+            .expect("create on Postgres");
+        let again = time
+            .create(manager, entry)
+            .await
+            .expect("retry on Postgres");
+        assert!(again.replayed);
+        assert_eq!(saved.entry.id, again.entry.id);
+        let submitted = time
+            .submit(manager, saved.entry.id, saved.entry.row_version)
+            .await
+            .expect("submit on Postgres");
+        let approved = time
+            .decide(
+                &submitted,
+                DecisionInput {
+                    row_version: submitted.row_version,
+                    approve: true,
+                    reason: None,
+                },
+                Some(manager),
+            )
+            .await
+            .expect("approve on Postgres");
+        assert_eq!(approved.applied_rate, Some(5_500), "the project override");
+        assert_eq!(approved.labor_cost, Some(38_500));
+        assert!(!approved.cost_missing);
+        let summary = time.project_summary(project.id).await.unwrap();
+        assert_eq!(summary.total.labor_cost, 38_500);
     }
 }
 
