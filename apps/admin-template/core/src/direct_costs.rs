@@ -369,6 +369,77 @@ pub struct ProjectCosts {
     pub committed: i64,
 }
 
+/// The approved ledger of the company, read once ([`DirectCostsService::ledger`]).
+pub struct Ledger {
+    rows: Vec<LedgerRow>,
+    allocs: Vec<(i64, i64, i64)>,
+    all: Vec<Posting>,
+    /// As-of views already resolved, by cutoff date.
+    cache: std::sync::Mutex<BTreeMap<Date, Vec<Posting>>>,
+}
+
+impl Ledger {
+    /// Every approved record, resolved (today's ledger).
+    pub fn all(&self) -> &[Posting] {
+        &self.all
+    }
+
+    /// The ledger as it stood on `until`: approved records booked up to
+    /// then, resolved among themselves. A confirmation or an adjustment
+    /// booked later is left out with its effect, so a provisional confirmed
+    /// after the date still counts as the provisional it was (spec §6.6: the
+    /// forecast's actuals are those of its base date).
+    pub fn until(&self, until: Date) -> Result<Vec<Posting>, BantoError> {
+        if let Some(hit) = self.cache.lock().ok().and_then(|c| c.get(&until).cloned()) {
+            return Ok(hit);
+        }
+        let rows: Vec<&LedgerRow> = self
+            .rows
+            .iter()
+            .filter(|r| Date::parse(&r.8).is_some_and(|d| d <= until))
+            .collect();
+        let kept: std::collections::BTreeSet<i64> = rows.iter().map(|r| r.0).collect();
+        // A reference to a record booked after the date (not a valid
+        // ledger) is dropped rather than failing the whole read.
+        let rows: Vec<LedgerRow> = rows
+            .into_iter()
+            .filter(|r| r.2.is_none_or(|target| kept.contains(&target)))
+            .cloned()
+            .collect();
+        let kept: std::collections::BTreeSet<i64> = rows.iter().map(|r| r.0).collect();
+        let allocs: Vec<(i64, i64, i64)> = self
+            .allocs
+            .iter()
+            .filter(|(src, _, _)| kept.contains(src))
+            .copied()
+            .collect();
+        let (entries, allocations) = ledger_of(&rows, &allocs);
+        let out = ledger::postings(&entries, &allocations).map_err(|issues| {
+            BantoError::Other(format!("直接費の台帳に不整合があります: {issues:?}"))
+        })?;
+        if let Ok(mut c) = self.cache.lock() {
+            c.insert(until, out.clone());
+        }
+        Ok(out)
+    }
+}
+
+/// What a completion forecast takes from the direct costs
+/// ([`DirectCostsService::snapshot`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CostSnapshot {
+    /// Approved actuals booked up to the date, by phase × cost type.
+    pub actual: Vec<(Option<i64>, CostType, i64)>,
+    /// Every approved actual of the project, whatever its date (最新実績).
+    pub latest_total: i64,
+    /// Order remainders at the date, by phase × cost type (発注済み未実績).
+    pub committed: Vec<(Option<i64>, CostType, i64)>,
+    /// Records booked up to the date that are not approved yet.
+    pub pending: i64,
+    /// Approved provisionals booked up to the date and not confirmed.
+    pub provisional: i64,
+}
+
 /// What the budget comparison takes from the direct costs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectActuals {
@@ -1551,6 +1622,26 @@ impl DirectCostsService {
         })
     }
 
+    /// The approved ledger read once, for computing several as-of views of
+    /// it in memory ([`Ledger::until`]) without reading the company ledger
+    /// again per project (the overall list).
+    pub async fn ledger(&self) -> Result<Ledger, BantoError> {
+        let sql = LEDGER_SQL.to_string();
+        let asql = LEDGER_ALLOC_SQL.to_string();
+        let rows: Vec<LedgerRow> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
+        let allocs: Vec<(i64, i64, i64)> = on_pool!(&self.db, pool => fetch_all!(pool, asql))?;
+        let (entries, allocations) = ledger_of(&rows, &allocs);
+        let all = ledger::postings(&entries, &allocations).map_err(|issues| {
+            BantoError::Other(format!("直接費の台帳に不整合があります: {issues:?}"))
+        })?;
+        Ok(Ledger {
+            rows,
+            allocs,
+            all,
+            cache: std::sync::Mutex::new(BTreeMap::new()),
+        })
+    }
+
     /// Pending (not approved) and provisional tallies of a project.
     async fn tallies(&self, project_id: i64) -> Result<(Tally, Tally), BantoError> {
         let pending_sql = self.sql(
@@ -1597,6 +1688,72 @@ impl DirectCostsService {
         Ok(ProjectActuals {
             by_key: project_actuals(&postings, &project_id.to_string()),
             complete: pending.count == 0 && provisional.count == 0,
+        })
+    }
+
+    /// What a completion forecast takes from the direct costs as of `until`
+    /// (its base date, spec §6.6): approved actuals booked up to then, each
+    /// order's remainder at that date (orders placed by then; realized by
+    /// records booked by then; the amount and cancellation as they stand),
+    /// and whether records up to then wait for approval or are provisional.
+    /// `ledger` is [`Self::ledger`] (read once by the caller).
+    pub async fn snapshot(
+        &self,
+        project_id: i64,
+        until: Date,
+        ledger: &Ledger,
+    ) -> Result<CostSnapshot, BantoError> {
+        let until_postings = ledger.until(until)?;
+        let postings = ledger.all();
+        let key = project_id.to_string();
+        let orders = self.orders_of(project_id, &until_postings).await?;
+        let mut committed: Vec<(Option<i64>, CostType, i64)> = Vec::new();
+        for o in orders
+            .iter()
+            .filter(|o| Date::parse(&o.ordered_on).is_some_and(|d| d <= until) && o.remaining > 0)
+        {
+            let Some(t) = CostType::parse(&o.cost_type) else {
+                continue;
+            };
+            match committed
+                .iter_mut()
+                .find(|(ph, ct, _)| *ph == o.phase_id && *ct == t)
+            {
+                Some(row) => row.2 += o.remaining,
+                None => committed.push((o.phase_id, t, o.remaining)),
+            }
+        }
+        let on = until.to_string();
+        let pending_sql = self.sql(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM direct_costs \
+             WHERE project_id = ? AND status <> 'approved' AND booked_on <= ?",
+        );
+        let pending_alloc_sql = self.sql(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM cost_allocations a \
+             JOIN direct_costs c ON c.id = a.direct_cost_id \
+             WHERE a.project_id = ? AND c.status <> 'approved' AND c.booked_on <= ?",
+        );
+        let provisional_sql = self.sql(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM direct_costs p WHERE p.project_id = ? \
+             AND p.status = 'approved' AND p.entry_kind = 'provisional' AND p.booked_on <= ? \
+             AND NOT EXISTS (SELECT 1 FROM direct_costs f WHERE f.ref_id = p.id \
+             AND f.entry_kind = 'confirms' AND f.status = 'approved' AND f.booked_on <= ?)",
+        );
+        let (a, b, c): (i64, i64, i64) = on_pool!(&self.db, pool => (
+            scalar!(pool, pending_sql, project_id, &on)?,
+            scalar!(pool, pending_alloc_sql, project_id, &on)?,
+            scalar!(pool, provisional_sql, project_id, &on, &on)?,
+        ));
+        Ok(CostSnapshot {
+            actual: project_actuals(&until_postings, &key),
+            latest_total: postings
+                .iter()
+                .filter(|p| p.project == key)
+                .map(|p| p.amount)
+                .sum(),
+            committed,
+            pending: a + b,
+            provisional: c,
         })
     }
 

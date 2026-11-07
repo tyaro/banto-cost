@@ -191,6 +191,24 @@ const ROW_SELECT: &str = "SELECT v.id, v.item_key, v.scope, v.project_id, v.vali
 const ITEM_SELECT: &str = "SELECT key, item_group, label, unit, value_type, project_overridable, \
      managers_may_override, edit_capability, sort_order FROM calc_items";
 
+/// The value of `item` that applies to the project (or the company, with
+/// `project_id: None`) on `on`, with the `calc_values` row it came from
+/// (design §10.2). `None` = 未設定 (never 0).
+pub(crate) async fn applied_value(
+    db: &Db,
+    item: &str,
+    project_id: Option<i64>,
+    on: Date,
+) -> Result<Option<(i64, Option<i64>)>, BantoError> {
+    let rows = CalcBasisService::new(db.clone()).value_rows(item).await?;
+    let values: Vec<CalcValue> = rows.iter().filter_map(domain_row).collect();
+    let pid = project_id.map(|p| p.to_string());
+    Ok(resolve(&values, item, pid.as_deref(), on, None).map(|r| {
+        let row = crate::time_entries::row_of(&rows, &r.source, project_id);
+        (r.value, row)
+    }))
+}
+
 pub(crate) fn domain_row(row: &CalcValueRow) -> Option<CalcValue> {
     Some(CalcValue {
         item: row.item_key.clone(),
@@ -513,6 +531,7 @@ impl CalcBasisService {
     async fn usages(&self, item_key: &str) -> Result<Vec<Usage>, BantoError> {
         let mut found = crate::time_entries::usages(&self.db, item_key).await?;
         found.extend(crate::budgets::usages(&self.db, item_key).await?);
+        found.extend(crate::forecasts::usages(&self.db, item_key).await?);
         Ok(found)
     }
 

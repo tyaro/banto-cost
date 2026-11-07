@@ -77,6 +77,12 @@
 //! | PUT    | `/api/budget-versions/{id}` | `BudgetDraftInput` | `BudgetVersion` (editor+ + `ManageProject`, draft only) |
 //! | DELETE | `/api/budget-versions/{id}?rowVersion=` | - | 204 (editor+ + `ManageProject`, draft only) |
 //! | POST   | `/api/budget-versions/{id}/approve` | `BudgetVersionInput` | `BudgetVersion` (editor+ + `ApproveBudget`, self-approval allowed and audited) |
+//! | GET    | `/api/projects/{id}/forecast` | - | `ForecastOverview` (any role + `ViewProjectAmounts`) |
+//! | POST   | `/api/projects/{id}/forecast/draft` | - | `ForecastDraftCreated` (editor+ + `ManageProject`; the existing draft when there is one) |
+//! | PUT    | `/api/forecast-versions/{id}` | `ForecastDraftInput` | `ForecastVersion` (editor+ + `ManageProject`, draft only) |
+//! | DELETE | `/api/forecast-versions/{id}?rowVersion=` | - | 204 (editor+ + `ManageProject`, draft only) |
+//! | POST   | `/api/forecast-versions/{id}/adopt` | `ForecastVersionInput` | `ForecastVersion` (editor+ + `AdoptForecast`, self-adoption allowed and audited) |
+//! | GET    | `/api/portfolio` | - | `Portfolio` (any role; rows `visible_projects` (admin all), amounts and alerts `amount_projects`) |
 //! | GET    | `/api/vendors` | - | `WorkMaster[]` (any role; admin or `ViewMasters`) |
 //! | POST   | `/api/vendors` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`) |
 //! | PUT    | `/api/vendors/{id}` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`; `rowVersion`) |
@@ -260,6 +266,7 @@ use crate::users::{Role, UsersService};
 mod authz;
 mod budgets;
 mod costs;
+mod forecasts;
 mod projects;
 #[cfg(test)]
 mod tests;
@@ -309,6 +316,8 @@ pub struct Services {
     pub budgets: crate::budgets::BudgetsService,
     /// banto-cost P4d: vendors, purchase orders and direct costs.
     pub direct_costs: crate::direct_costs::DirectCostsService,
+    /// banto-cost P5: completion forecast versions (and the overall list).
+    pub forecasts: crate::forecasts::ForecastsService,
     /// CPU/memory probe (ADR-0013, Issue #185), or `None` when the
     /// `system-metrics` feature is off (or the host platform is
     /// unsupported) - the app layer builds the `Some` case, see
@@ -350,6 +359,7 @@ pub fn api_router(
         work_masters,
         time_entries,
         budgets,
+        forecasts,
         direct_costs,
         metrics,
     } = services;
@@ -362,6 +372,7 @@ pub fn api_router(
         work_masters,
         time_entries,
         budgets,
+        forecasts,
         direct_costs,
         authz: authz.clone(),
         users: users.clone(),
@@ -439,6 +450,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(budgets::budget_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(forecasts::forecast_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(forecasts::forecast_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

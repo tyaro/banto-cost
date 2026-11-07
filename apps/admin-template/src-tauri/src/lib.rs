@@ -51,6 +51,10 @@ use admin_template_core::direct_costs::{
 };
 use admin_template_core::events::event_channel;
 use admin_template_core::first_boot::seed_first_boot_settings;
+use admin_template_core::forecasts::{
+    ForecastDraftCreated, ForecastDraftInput, ForecastOverview, ForecastVersion,
+    ForecastVersionInput, ForecastsService, RESOURCE as FORECAST_RESOURCE,
+};
 use admin_template_core::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use admin_template_core::orders::{
     CancelInput, ChangeDecision, ChangeRequest, ConversionRequest, OrderSummary, OrdersService,
@@ -59,6 +63,7 @@ use admin_template_core::orders::{
 use admin_template_core::pipeline::{
     PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
 };
+use admin_template_core::portfolio::Portfolio;
 use admin_template_core::projects::{Project, ProjectInput, ProjectsService};
 use admin_template_core::rest::{api_router, user_auth_state, Services};
 use admin_template_core::settings::{
@@ -220,6 +225,8 @@ struct AppState {
     work_masters: WorkMastersService,
     time_entries: TimeEntriesService,
     budgets: BudgetsService,
+    /// banto-cost P5: completion forecast versions and the overall list.
+    forecasts: ForecastsService,
     /// banto-cost P4d: vendors, purchase orders and direct costs.
     direct_costs: DirectCostsService,
     /// CPU/memory probe (ADR-0013, Issue #185): `Some` when the
@@ -1945,6 +1952,7 @@ async fn start_embedded_server(
     work_masters: WorkMastersService,
     time_entries: TimeEntriesService,
     budgets: BudgetsService,
+    forecasts: ForecastsService,
     direct_costs: DirectCostsService,
     metrics: Option<MetricsProbe>,
     auth: AuthState,
@@ -1975,6 +1983,7 @@ async fn start_embedded_server(
         work_masters,
         time_entries,
         budgets,
+        forecasts,
         direct_costs,
         metrics,
     };
@@ -2577,6 +2586,7 @@ async fn server_apply_body(
             state.work_masters.clone(),
             state.time_entries.clone(),
             state.budgets.clone(),
+            state.forecasts.clone(),
             state.direct_costs.clone(),
             state.metrics.clone(),
             state.rest_auth.clone(),
@@ -4662,6 +4672,215 @@ async fn budget_draft_approve_body(
     Ok(approved)
 }
 
+// --- banto-cost P5: completion forecasts and the overall list ---------------
+// Twins of `/api/projects/{id}/forecast*`, `/api/forecast-versions/*` and
+// `/api/portfolio` (`admin_template_core::rest::forecasts`): the same role
+// floors, the same `Operation`s through `authorize_audited`
+// (`ViewProjectAmounts`, `ManageProject`, `AdoptForecast` with
+// `APPROVAL_POLICY`), the same scopes for the overall list (rows: admin all,
+// others `visible_projects`; amounts: `amount_projects`), the same audit
+// actions and detail (`ForecastVersion::audit_detail`, no amounts).
+
+#[tauri::command]
+async fn project_forecast(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<ForecastOverview, BantoError> {
+    project_forecast_body(&state, project_id).await
+}
+
+async fn project_forecast_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<ForecastOverview, BantoError> {
+    let identity = require_role(state, Role::Viewer, FORECAST_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        FORECAST_RESOURCE,
+    )
+    .await?;
+    state.forecasts.overview(project_id).await
+}
+
+#[tauri::command]
+async fn portfolio_overview(state: State<'_, AppState>) -> Result<Portfolio, BantoError> {
+    portfolio_overview_body(&state).await
+}
+
+async fn portfolio_overview_body(state: &AppState) -> Result<Portfolio, BantoError> {
+    let identity = require_role(state, Role::Viewer, "projects").await?;
+    let subject = caller_subject(state).await?;
+    let visible = if identity.role.is_admin() {
+        ProjectScope::All
+    } else {
+        visible_projects(&subject)
+    };
+    let amounts = amount_projects(&subject);
+    state
+        .forecasts
+        .portfolio()
+        .overview(&visible, &amounts)
+        .await
+}
+
+#[tauri::command]
+async fn forecast_draft_create(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<ForecastDraftCreated, BantoError> {
+    forecast_draft_create_body(&state, project_id).await
+}
+
+async fn forecast_draft_create_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<ForecastDraftCreated, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageProject { project_id },
+        FORECAST_RESOURCE,
+    )
+    .await?;
+    let created = state.forecasts.create_draft(project_id, user_id).await?;
+    if !created.replayed {
+        record_ok(
+            &state.audit,
+            &actor,
+            "create",
+            FORECAST_RESOURCE,
+            Some(&created.draft.id.to_string()),
+            Some(created.draft.audit_detail()),
+        )
+        .await;
+    }
+    Ok(created)
+}
+
+#[tauri::command]
+async fn forecast_draft_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: ForecastDraftInput,
+) -> Result<ForecastVersion, BantoError> {
+    forecast_draft_update_body(&state, id, values).await
+}
+
+async fn forecast_draft_update_body(
+    state: &AppState,
+    id: i64,
+    values: ForecastDraftInput,
+) -> Result<ForecastVersion, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let version = state.forecasts.get(id).await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageProject {
+            project_id: version.project_id,
+        },
+        FORECAST_RESOURCE,
+    )
+    .await?;
+    let saved = state.forecasts.update_draft(id, values, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        FORECAST_RESOURCE,
+        Some(&id.to_string()),
+        Some(saved.audit_detail()),
+    )
+    .await;
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn forecast_draft_delete(
+    state: State<'_, AppState>,
+    id: i64,
+    row_version: i64,
+) -> Result<(), BantoError> {
+    forecast_draft_delete_body(&state, id, row_version).await
+}
+
+async fn forecast_draft_delete_body(
+    state: &AppState,
+    id: i64,
+    row_version: i64,
+) -> Result<(), BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let version = state.forecasts.get(id).await?;
+    business_guard(
+        state,
+        &actor,
+        Operation::ManageProject {
+            project_id: version.project_id,
+        },
+        FORECAST_RESOURCE,
+    )
+    .await?;
+    state.forecasts.delete_draft(id, row_version).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "delete",
+        FORECAST_RESOURCE,
+        Some(&id.to_string()),
+        Some(version.audit_detail()),
+    )
+    .await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn forecast_draft_adopt(
+    state: State<'_, AppState>,
+    id: i64,
+    values: ForecastVersionInput,
+) -> Result<ForecastVersion, BantoError> {
+    forecast_draft_adopt_body(&state, id, values).await
+}
+
+async fn forecast_draft_adopt_body(
+    state: &AppState,
+    id: i64,
+    values: ForecastVersionInput,
+) -> Result<ForecastVersion, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let version = state.forecasts.get(id).await?;
+    let (_, user_id, allowed) = business_guard_with(
+        state,
+        &actor,
+        Operation::AdoptForecast {
+            project_id: version.project_id,
+            submitted_by: version.updated_by.unwrap_or(0),
+        },
+        admin_template_core::approval::APPROVAL_POLICY,
+        FORECAST_RESOURCE,
+    )
+    .await?;
+    let adopted = state
+        .forecasts
+        .adopt(&version, values.row_version, user_id)
+        .await?;
+    let mut detail = adopted.audit_detail();
+    detail["selfApproval"] = serde_json::json!(allowed.self_approval_exception);
+    record_ok(
+        &state.audit,
+        &actor,
+        "adopt",
+        FORECAST_RESOURCE,
+        Some(&id.to_string()),
+        Some(detail),
+    )
+    .await;
+    Ok(adopted)
+}
+
 // --- banto-cost P4d: vendors, direct costs and purchase orders ---------------
 // Twins of `/api/vendors/*`, `/api/direct-costs/*`, `/api/purchase-orders/*`
 // and `/api/projects/{id}/costs` (`admin_template_core::rest::costs`): the
@@ -5564,6 +5783,8 @@ pub fn run() {
             let time_entries = TimeEntriesService::new(db.clone()).with_events(events.clone());
             // banto-cost P4c.
             let budgets = BudgetsService::new(db.clone()).with_events(events.clone());
+            // banto-cost P5.
+            let forecasts = ForecastsService::new(db.clone()).with_events(events.clone());
             // banto-cost P4d.
             let direct_costs = DirectCostsService::new(db.clone()).with_events(events.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
@@ -5794,6 +6015,7 @@ pub fn run() {
                     work_masters.clone(),
                     time_entries.clone(),
                     budgets.clone(),
+                    forecasts.clone(),
                     direct_costs.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
@@ -5867,6 +6089,7 @@ pub fn run() {
                 work_masters,
                 time_entries,
                 budgets,
+                forecasts,
                 direct_costs,
                 metrics,
                 started_at,
@@ -5957,6 +6180,12 @@ pub fn run() {
             budget_draft_update,
             budget_draft_delete,
             budget_draft_approve,
+            project_forecast,
+            forecast_draft_create,
+            forecast_draft_update,
+            forecast_draft_delete,
+            forecast_draft_adopt,
+            portfolio_overview,
             vendors_list,
             vendors_create,
             vendors_update,
@@ -6046,6 +6275,7 @@ mod tests {
             work_masters: WorkMastersService::new(pool.clone()),
             time_entries: TimeEntriesService::new(pool.clone()),
             budgets: BudgetsService::new(pool.clone()),
+            forecasts: ForecastsService::new(pool.clone()),
             direct_costs: DirectCostsService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
@@ -6109,6 +6339,7 @@ mod tests {
             work_masters: WorkMastersService::new(pool.clone()),
             time_entries: TimeEntriesService::new(pool.clone()),
             budgets: BudgetsService::new(pool.clone()),
+            forecasts: ForecastsService::new(pool.clone()),
             direct_costs: DirectCostsService::new(pool.clone()),
             metrics: None,
             started_at: std::time::Instant::now(),

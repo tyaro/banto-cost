@@ -61,6 +61,11 @@ impl ProjectStatus {
         )
     }
 
+    /// 受注済みで精算前（受注・進行中・作業完了）。予算の承認・完了見込の採用ができる状態。
+    pub fn is_ordered_open(self) -> bool {
+        matches!(self, Self::Ordered | Self::InProgress | Self::WorkDone)
+    }
+
     /// 案件の編集画面から直接選べる状態か。受注済みの側へは受注転換（P3b）で、
     /// 精算完了へは精算完了の検査（T17）で移すため、ここでは選ばせない。
     pub fn settable_directly(self) -> bool {

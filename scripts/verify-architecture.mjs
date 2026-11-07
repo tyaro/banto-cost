@@ -487,6 +487,19 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'purchase_orders_revise',
 			rest: 'POST /api/purchase-orders/{id}/revise',
 			role: 'Editor'
+		},
+		// banto-cost P5: 完了見込版。editor 床＋authorize_audited（採用は APPROVAL_POLICY）。
+		{
+			tauri: 'forecast_draft_create',
+			rest: 'POST /api/projects/{id}/forecast/draft',
+			role: 'Editor'
+		},
+		{ tauri: 'forecast_draft_update', rest: 'PUT /api/forecast-versions/{id}', role: 'Editor' },
+		{ tauri: 'forecast_draft_delete', rest: 'DELETE /api/forecast-versions/{id}', role: 'Editor' },
+		{
+			tauri: 'forecast_draft_adopt',
+			rest: 'POST /api/forecast-versions/{id}/adopt',
+			role: 'Editor'
 		}
 	];
 
@@ -547,7 +560,10 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'vendors_list', rest: 'GET /api/vendors', role: 'Viewer' },
 		{ tauri: 'direct_costs_list', rest: 'GET /api/direct-costs', role: 'Viewer' },
 		{ tauri: 'direct_costs_approvals', rest: 'GET /api/direct-costs/approvals', role: 'Viewer' },
-		{ tauri: 'project_costs', rest: 'GET /api/projects/{id}/costs', role: 'Viewer' }
+		{ tauri: 'project_costs', rest: 'GET /api/projects/{id}/costs', role: 'Viewer' },
+		// banto-cost P5 の読み取り。
+		{ tauri: 'project_forecast', rest: 'GET /api/projects/{id}/forecast', role: 'Viewer' },
+		{ tauri: 'portfolio_overview', rest: 'GET /api/portfolio', role: 'Viewer' }
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -621,6 +637,8 @@ const isAllowedPackageImport = (spec) =>
 		'project_time_summary',
 		'project_budget',
 		'project_costs',
+		'project_forecast',
+		'portfolio_overview',
 		'vendors_list',
 		'direct_costs_list',
 		'direct_costs_approvals',
@@ -666,6 +684,8 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/projects/{id}/time-summary',
 		'GET /api/projects/{id}/budget',
 		'GET /api/projects/{id}/costs',
+		'GET /api/projects/{id}/forecast',
+		'GET /api/portfolio',
 		'GET /api/vendors',
 		'GET /api/direct-costs',
 		'GET /api/direct-costs/approvals',
