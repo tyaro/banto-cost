@@ -9,7 +9,8 @@
 	 * The calc basis of the project (P4a, design 10.6) is CalcBasisSection.svelte;
 	 * its hours by phase (P4b, spec §6.1) are TimeSection.svelte, its budget
 	 * versions (P4c, spec §5.3) BudgetSection.svelte, its direct costs and
-	 * purchase orders (P4d, spec §6.3) CostsSection.svelte.
+	 * purchase orders (P4d, spec §6.3) CostsSection.svelte, its completion
+	 * forecast versions (P5, spec §6.6) ForecastSection.svelte.
 	 * Order conversion and ordered revenue (P3b) are OrderSection.svelte; it
 	 * asks this page to reload after a conversion (status and rowVersion change).
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
@@ -40,6 +41,7 @@
 	import TimeSection from './TimeSection.svelte';
 	import BudgetSection from './BudgetSection.svelte';
 	import CostsSection from './CostsSection.svelte';
+	import ForecastSection from './ForecastSection.svelte';
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -72,6 +74,8 @@
 	let budgetBusy = $state(false);
 	let costsDirty = $state(false);
 	let costsBusy = $state(false);
+	let forecastDirty = $state(false);
+	let forecastBusy = $state(false);
 	const guard = guardUnsavedChanges({
 		isDirty: () =>
 			(store?.isDirty ?? false) ||
@@ -79,14 +83,16 @@
 			ordersDirty ||
 			calcDirty ||
 			budgetDirty ||
-			costsDirty,
+			costsDirty ||
+			forecastDirty,
 		isSaving: () =>
 			(formResource?.saving ?? false) ||
 			pipelineBusy ||
 			ordersBusy ||
 			calcBusy ||
 			budgetBusy ||
-			costsBusy
+			costsBusy ||
+			forecastBusy
 	});
 
 	async function loadForm() {
@@ -250,6 +256,16 @@
 				budgetBusy = pending.busy;
 			}}
 		/>
+		{#if ordered}
+			<ForecastSection
+				projectId={parsedId}
+				{canWrite}
+				onPendingChange={(pending) => {
+					forecastDirty = pending.dirty;
+					forecastBusy = pending.busy;
+				}}
+			/>
+		{/if}
 		<CostsSection
 			projectId={parsedId}
 			projectLabel={`${projectCode} ${projectName}`.trim()}
