@@ -697,7 +697,7 @@ pub(crate) mod tests {
     async fn items_are_seeded_without_values() {
         let (svc, _, _) = setup().await;
         let items = svc.items().await.unwrap();
-        assert_eq!(items.len(), 12);
+        assert_eq!(items.len(), 13);
         assert_eq!(items[0].key, "emp_rate");
         let basis = svc.company("2026-11-06").await.unwrap();
         assert!(
@@ -707,6 +707,11 @@ pub(crate) mod tests {
         let tax = items.iter().find(|i| i.key == "tax_rate").unwrap();
         assert!(!tax.project_overridable);
         assert_eq!(tax.capability().unwrap(), Capability::FinanceClose);
+        // 目標粗利率（T36）：案件で上書きできるが、責任者は上書きできない。
+        let target = items.iter().find(|i| i.key == "target_margin_pct").unwrap();
+        assert!(target.project_overridable);
+        assert!(!target.managers_may_override);
+        assert_eq!(target.capability().unwrap(), Capability::FinanceClose);
     }
 
     #[tokio::test]
