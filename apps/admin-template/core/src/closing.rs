@@ -860,6 +860,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn t14_a_provisional_confirmed_next_month_keeps_the_closed_month_figures() {
+        let db = fixture().await;
+        let p = ordered_project(&db, "P-C03", vec![line(Some("2026-11"), 1_000_000)]).await;
+        let svc = ClosingService::new(db.clone());
+        let costs = DirectCostsService::new(db.clone());
+        let prov = crate::direct_costs::tests::approved(
+            &costs,
+            DirectCostInput {
+                entry_kind: Some("provisional".into()),
+                project_id: Some(p),
+                cost_type: Some("outsource".into()),
+                booked_on: "2026-10-31".into(),
+                amount: 300_000,
+                ..Default::default()
+            },
+        )
+        .await;
+        let m = svc.get("2026-10").await.unwrap();
+        assert_eq!(m.warnings[0].code, "provisional");
+        let closed = svc
+            .close("2026-10", CloseInput { row_version: 1 }, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(closed.total.direct_cost, 300_000);
+
+        // The invoice (320,000) is booked in November (翌月調整): October
+        // keeps the provisional, November carries only the difference.
+        crate::direct_costs::tests::approved(
+            &costs,
+            DirectCostInput {
+                entry_kind: Some("confirms".into()),
+                ref_id: Some(prov.id),
+                booked_on: "2026-11-10".into(),
+                amount: 320_000,
+                reason: Some("請求書到着".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let oct = svc.get("2026-10").await.unwrap();
+        assert_eq!(oct.total.direct_cost, 300_000);
+        assert!(oct.comparison.unwrap().changed.is_empty());
+        assert_eq!(svc.get("2026-11").await.unwrap().total.direct_cost, 20_000);
+    }
+
+    #[tokio::test]
     async fn t13_a_stale_version_or_a_second_close_is_refused() {
         let db = fixture().await;
         let svc = ClosingService::new(db.clone());
