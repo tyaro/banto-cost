@@ -8,6 +8,7 @@ import type { Component } from 'svelte';
 import { LayoutDashboard, Users, ScrollText, Settings } from '@lucide/svelte';
 import { Palette } from '@lucide/svelte';
 import { Building, CalendarRange, Calculator, FolderKanban, TrendingUp } from '@lucide/svelte';
+import { ClipboardCheck, Clock, ListTree } from '@lucide/svelte';
 import type { CostNavIconKey, DemoNavIconKey, NavIconKey } from '#lib/navigation.js';
 
 export const NAV_ICONS: Record<NavIconKey | CostNavIconKey | DemoNavIconKey, Component> = {
@@ -20,5 +21,8 @@ export const NAV_ICONS: Record<NavIconKey | CostNavIconKey | DemoNavIconKey, Com
 	outlook: CalendarRange,
 	projects: FolderKanban,
 	customers: Building,
-	'calc-basis': Calculator
+	'calc-basis': Calculator,
+	time: Clock,
+	approvals: ClipboardCheck,
+	'work-masters': ListTree
 };

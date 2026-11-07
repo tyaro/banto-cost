@@ -22,6 +22,7 @@
 
 ## [Unreleased]
 
+- banto-cost P4b: 工程・共通活動マスタと工数（下書き → 申請 → 承認／差戻し）。承認時に作業日の時間原価単価（計算基準 `emp_rate`、案件の上書きを含む）と労務原価を保存し、単価がなければ原価未確定（0円にしない）。入力単位・1日24時間の検査、重複候補と所定時間との差の警告、再送信の二重登録防止（T02〜T04 T13）。承認方針を `approval::APPROVAL_POLICY` に共通化（自己承認を監査に記録）、計算基準の影響確認に工数の件数を反映。REST `/api/phases*`・`/api/common-activities*`・`/api/time-entries*`・`/api/projects/{id}/time-summary` と Tauri の対、操作 `EnterCommonTime`・`ApproveCommon`、マイグレーション `0014_time_entries.sql`、画面 `/time`・`/approvals`・`/work-masters` と案件詳細の「工数」。
 - banto-cost P4a: 計算基準（時間原価単価・1日の基準時間・注意表示の閾値など12項目）を会社基準の版と案件ごとの上書きで管理（T31〜T35）。変更は適用開始日つきの行の追加だけで、保存前に影響（変更前後の値・上書きで影響しない案件・承認待ち／訂正候補の件数）を確認する。REST `/api/calc-basis*`・`/api/projects/{id}/calc-basis*` と Tauri `calc_basis_*`・`project_calc_basis_*`、操作 `ViewCalcBasis`・`EditCalcBasis`・`OverrideCalcBasis`、マイグレーション `0013_calc_basis.sql`、画面 `/calc-basis` と案件詳細の「計算基準」。
 - banto-cost P3b: 受注転換（全部・一部）、受注変更（未確定追加売上と承認）、受注済み売上予定の組み替え、売上計上と予定の消し込み・取消、月次売上見通しとスナップショット（T23 T24 T26 T27）。REST `/api/projects/{id}/order/*`・`/api/outlook*` と Tauri `order_*`・`revenue_*`・`outlook_*`、操作 `EditOrder`、マイグレーション `0011_orders.sql`、案件詳細の「受注・売上」と画面 `/outlook`。
 - CI の軽量化: visual 回帰を4並列に、smoke と viewer-public を1回の実行に、i18n の CDN 遮断検査を frontend ジョブへ統合（旧ジョブはリネーム後に対象パッケージが無く何も検査していなかったので `--fail-if-no-match` で直す）、Tauri check の apt パッケージをキャッシュし手順に時間制限。
