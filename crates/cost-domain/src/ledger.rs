@@ -42,6 +42,10 @@ pub struct CostEntry {
     pub id: String,
     /// 帰属する案件。`None` は配分待ち（複数案件の旅費など）。調整・確定は元明細の案件を引き継ぐ。
     pub project: Option<String>,
+    /// 工程（`None` は工程指定なし）。調整・確定は元明細の工程を引き継ぐ。
+    pub phase: Option<i64>,
+    /// 対応する発注。調整・確定は元明細の発注を引き継ぐ。
+    pub purchase_order: Option<String>,
     pub cost_type: CostType,
     /// 管理計上日。
     pub booked_on: Date,
@@ -104,6 +108,8 @@ pub enum LedgerIssue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Posting {
     pub project: String,
+    pub phase: Option<i64>,
+    pub purchase_order: Option<String>,
     pub cost_type: CostType,
     pub booked_on: Date,
     pub amount: Yen,
@@ -154,8 +160,8 @@ pub fn history<'a>(entries: &'a [CostEntry], id: &str) -> Vec<&'a CostEntry> {
 }
 
 /// 台帳を検査し、集計用の計上行に変換する。不整合があれば計上行を返さない。
-pub fn postings(
-    entries: &[CostEntry],
+pub fn postings<'a>(
+    entries: &'a [CostEntry],
     allocations: &[Allocation],
 ) -> Result<Vec<Posting>, Vec<LedgerIssue>> {
     let mut issues = Vec::new();
@@ -261,7 +267,7 @@ pub fn postings(
 
     // 帰属案件と費目の解決（確定・調整は元明細のものを引き継ぐ）。
     // 不正な参照の循環でも止まるよう、たどる回数を記録数で打ち切る。
-    let root = |e: &'_ CostEntry| -> Option<(Option<String>, CostType)> {
+    let root = |e: &'a CostEntry| -> Option<&'a CostEntry> {
         let mut cur = e;
         for _ in 0..=entries.len() {
             match &cur.kind {
@@ -269,7 +275,7 @@ pub fn postings(
                 | EntryKind::Adjustment { corrects_id: t, .. } => {
                     cur = by_id.get(t.as_str())?;
                 }
-                _ => return Some((cur.project.clone(), cur.cost_type)),
+                _ => return Some(cur),
             }
         }
         None
@@ -281,6 +287,8 @@ pub fn postings(
             for a in &allocated[e.id.as_str()] {
                 out.push(Posting {
                     project: a.project.clone(),
+                    phase: e.phase,
+                    purchase_order: e.purchase_order.clone(),
                     cost_type: e.cost_type,
                     booked_on: e.booked_on,
                     amount: a.amount,
@@ -301,9 +309,11 @@ pub fn postings(
             _ => e.amount,
         };
         match root(e) {
-            Some((Some(project), cost_type)) => out.push(Posting {
-                project,
-                cost_type,
+            Some(r) if r.project.is_some() => out.push(Posting {
+                project: r.project.clone().expect("checked"),
+                phase: r.phase,
+                purchase_order: r.purchase_order.clone(),
+                cost_type: r.cost_type,
                 booked_on: e.booked_on,
                 amount,
                 entry_id: e.id.clone(),
@@ -353,6 +363,8 @@ mod tests {
         CostEntry {
             id: id.into(),
             project: project.map(Into::into),
+            phase: None,
+            purchase_order: None,
             cost_type: t,
             booked_on: d(on),
             amount,
@@ -363,6 +375,8 @@ mod tests {
         CostEntry {
             id: id.into(),
             project: None,
+            phase: None,
+            purchase_order: None,
             cost_type: CostType::Material,
             booked_on: d(on),
             amount,

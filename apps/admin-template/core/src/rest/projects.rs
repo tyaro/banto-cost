@@ -57,6 +57,7 @@ use crate::calc_basis::{
     ProjectBasis,
 };
 use crate::customers::{Customer, CustomerInput, CustomersService};
+use crate::direct_costs::DirectCostsService;
 use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use crate::orders::{
     CancelInput, ChangeDecision, ChangeRequest, ConversionRequest, OrderSummary, OrdersService,
@@ -79,6 +80,7 @@ pub(super) struct BusinessState {
     pub(super) work_masters: WorkMastersService,
     pub(super) time_entries: TimeEntriesService,
     pub(super) budgets: BudgetsService,
+    pub(super) direct_costs: DirectCostsService,
     pub(super) authz: AuthzService,
     pub(super) users: UsersService,
     pub(super) audit: AuditLogService,
@@ -808,6 +810,7 @@ pub(super) struct BusinessServices {
     pub work_masters: WorkMastersService,
     pub time_entries: TimeEntriesService,
     pub budgets: BudgetsService,
+    pub direct_costs: DirectCostsService,
     pub authz: AuthzService,
     pub users: UsersService,
 }
@@ -826,6 +829,7 @@ pub(super) fn state(
         work_masters: services.work_masters,
         time_entries: services.time_entries,
         budgets: services.budgets,
+        direct_costs: services.direct_costs,
         authz: services.authz,
         users: services.users,
         audit,

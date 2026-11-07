@@ -493,6 +493,84 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .find(|t| t.cost_type == "labor")
             .unwrap();
         assert_eq!(labor.actual, Some(38_500));
+
+        // banto-cost P4d: orders and direct costs on Postgres (the CHECKs on
+        // entry_kind / ref_id, the one-confirmation partial index, the
+        // FOR UPDATE locks of the approval and the revision, the CASTs).
+        use admin_template_core::direct_costs::{
+            DirectCostInput, DirectCostsService, OrderRevisionInput, PurchaseOrderInput,
+        };
+        let costs = DirectCostsService::new(db.clone());
+        let order: PurchaseOrderInput = serde_json::from_value(serde_json::json!({
+            "projectId": project.id,
+            "costType": "outsource",
+            "orderedOn": "2026-11-01",
+            "amount": 500_000,
+            "clientRequestId": "pg-po"
+        }))
+        .unwrap();
+        let po = costs
+            .create_order(order, Some(manager))
+            .await
+            .expect("order on Postgres")
+            .order;
+        let decide = |row_version| admin_template_core::time_entries::DecisionInput {
+            row_version,
+            approve: true,
+            reason: None,
+        };
+        let mut approved_ids = Vec::new();
+        for body in [
+            serde_json::json!({
+                "entryKind": "provisional", "purchaseOrderId": po.id,
+                "bookedOn": "2026-11-30", "amount": 300_000
+            }),
+            serde_json::json!({
+                "entryKind": "confirms", "refId": 0, "bookedOn": "2026-11-30",
+                "amount": 300_000, "reason": "請求書到着"
+            }),
+        ] {
+            let mut input: DirectCostInput = serde_json::from_value(body).unwrap();
+            if input.ref_id == Some(0) {
+                input.ref_id = approved_ids.first().copied();
+            }
+            let c = costs
+                .create(manager, input)
+                .await
+                .expect("cost on Postgres")
+                .cost;
+            let c = costs.submit(manager, c.id, c.row_version).await.unwrap();
+            let c = costs
+                .decide(&c, decide(c.row_version), Some(manager))
+                .await
+                .expect("approve cost on Postgres");
+            approved_ids.push(c.id);
+        }
+        let pc = costs.project_costs(project.id).await.unwrap();
+        assert_eq!(pc.orders[0].realized, 300_000);
+        assert_eq!(pc.orders[0].remaining, 200_000);
+        assert!(pc.complete);
+        let revised = costs
+            .revise_order(
+                po.id,
+                OrderRevisionInput {
+                    kind: "cancel".into(),
+                    amount: 200_000,
+                    reason: Some("残りは不要".into()),
+                    row_version: pc.orders[0].row_version,
+                },
+                Some(manager),
+            )
+            .await
+            .expect("cancel on Postgres");
+        assert_eq!(revised.remaining, 0);
+        let overview = budgets.overview(project.id).await.unwrap();
+        let outsource = overview
+            .totals
+            .iter()
+            .find(|t| t.cost_type == "outsource")
+            .unwrap();
+        assert_eq!(outsource.actual, Some(300_000));
     }
 }
 

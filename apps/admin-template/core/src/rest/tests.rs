@@ -74,6 +74,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let budgets = crate::budgets::BudgetsService::new(pool.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -134,6 +135,7 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: None,
     };
     (
@@ -160,6 +162,7 @@ async fn router_with_token() -> (Router, String) {
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let budgets = crate::budgets::BudgetsService::new(pool.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth
@@ -181,6 +184,7 @@ async fn router_with_token() -> (Router, String) {
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: None,
     };
     (api_router(services, auth, tx, false), token)
@@ -239,6 +243,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let budgets = crate::budgets::BudgetsService::new(pool.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
@@ -256,6 +261,7 @@ async fn router_with_setup(allow_setup: bool) -> Router {
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: None,
     };
     api_router(services, auth, tx, allow_setup)
@@ -464,6 +470,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let budgets = crate::budgets::BudgetsService::new(pool.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -484,6 +491,7 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: None,
     };
     (api_router(services, auth, tx, allow_setup), audit)
@@ -835,6 +843,7 @@ async fn router_with_role_tokens_audit_and_events() -> (
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let budgets = crate::budgets::BudgetsService::new(pool.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(pool.clone());
     let audit = AuditLogService::new(pool.clone());
 
     users
@@ -884,6 +893,7 @@ async fn router_with_role_tokens_audit_and_events() -> (
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: None,
     };
     let router = api_router(services, auth, tx.clone(), false);
@@ -935,6 +945,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
     let work_masters = crate::work_masters::WorkMastersService::new(db.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(db.clone());
     let budgets = crate::budgets::BudgetsService::new(db.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(db.clone());
     let audit = AuditLogService::new(db);
 
     users
@@ -982,6 +993,7 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1345,6 +1357,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let budgets = crate::budgets::BudgetsService::new(pool.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -1379,6 +1392,7 @@ async fn system_info_reports_metrics_when_probe_is_present() {
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: Some(metrics),
     };
     let router = api_router(services, auth, tx, false);
@@ -1999,6 +2013,7 @@ async fn router_with_viewer_public(
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let budgets = crate::budgets::BudgetsService::new(pool.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     settings
@@ -2028,6 +2043,7 @@ async fn router_with_viewer_public(
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: None,
     };
     (
@@ -2683,6 +2699,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
     let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
     let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let budgets = crate::budgets::BudgetsService::new(pool.clone());
+    let direct_costs = crate::direct_costs::DirectCostsService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -2714,6 +2731,7 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics: None,
     };
     (api_router(services, auth, tx, false), users)
@@ -4648,4 +4666,234 @@ async fn t09_t12_rest_budget_versions_keep_the_original_and_follow_scope() {
         .await
         .iter()
         .any(|row| row.resource == "budgets"));
+}
+
+#[tokio::test]
+async fn t05_t12_t14_rest_direct_costs_and_orders_follow_scope_and_do_not_double() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["project.manage", "amount.view", "time.entry"]),
+    )
+    .await;
+    grant(&router, &admin, 1, json!(["finance.rate"])).await;
+    grant(&router, &admin, VIEWER_ID, json!(["time.entry"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-C01", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let id = body_json(response).await["id"].as_i64().unwrap();
+
+    // Orders: the manager registers; someone outside the project cannot (T12).
+    let order = json!({
+        "projectId": id,
+        "costType": "outsource",
+        "orderedOn": "2026-11-01",
+        "amount": 500_000,
+        "clientRequestId": "po-1"
+    });
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/purchase-orders",
+            &admin,
+            order.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/purchase-orders", &editor, order))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let po = body_json(response).await["order"]["id"].as_i64().unwrap();
+
+    // The viewer role cannot write, whatever its capabilities.
+    let provisional = json!({
+        "entryKind": "provisional",
+        "purchaseOrderId": po,
+        "bookedOn": "2026-11-30",
+        "amount": 300_000,
+        "clientRequestId": "c-1"
+    });
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/direct-costs",
+            &viewer,
+            provisional.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // Acceptance as a provisional, then the invoice replaces it (T05).
+    let approve_cost = |body: serde_json::Value| {
+        let router = router.clone();
+        let editor = editor.clone();
+        async move {
+            let response = router
+                .clone()
+                .oneshot(post_json_auth("/api/direct-costs", &editor, body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let cost = body_json(response).await["cost"].clone();
+            let cid = cost["id"].as_i64().unwrap();
+            let response = router
+                .clone()
+                .oneshot(post_json_auth(
+                    &format!("/api/direct-costs/{cid}/submit"),
+                    &editor,
+                    json!({ "rowVersion": cost["rowVersion"] }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let cost = body_json(response).await;
+            let response = router
+                .clone()
+                .oneshot(post_json_auth(
+                    &format!("/api/direct-costs/{cid}/decide"),
+                    &editor,
+                    json!({ "rowVersion": cost["rowVersion"], "approve": true }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            cid
+        }
+    };
+    let prov = approve_cost(provisional).await;
+    approve_cost(json!({
+        "entryKind": "confirms",
+        "refId": prov,
+        "bookedOn": "2026-11-30",
+        "amount": 300_000,
+        "reason": "請求書到着"
+    }))
+    .await;
+
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/costs"), &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let costs = body_json(response).await;
+    let outsource = costs["totals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["costType"] == "outsource")
+        .unwrap()
+        .clone();
+    assert_eq!(outsource["amount"], 300_000);
+    assert_eq!(costs["orders"][0]["realized"], 300_000);
+    assert_eq!(costs["orders"][0]["remaining"], 200_000);
+    assert_eq!(costs["committed"], 200_000);
+    // The budget comparison now carries the direct-cost actuals.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/budget"), &editor))
+        .await
+        .unwrap();
+    let budget = body_json(response).await;
+    assert_eq!(budget["directActualComplete"], true);
+    let row = budget["totals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["costType"] == "outsource")
+        .unwrap()
+        .clone();
+    assert_eq!(row["actual"], 300_000);
+
+    // Out of scope: no project costs, no deciding, no approvals listed (T12).
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/costs"), &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // A worker without membership cannot enter on the project.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/direct-costs",
+            &admin,
+            json!({ "projectId": id, "costType": "travel", "bookedOn": "2026-11-30", "amount": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/direct-costs/approvals", &admin))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await, json!([]));
+    // The own list shows the caller's records only.
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/direct-costs?from=2026-11-01&to=2026-11-30",
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await.as_array().unwrap().len(), 2);
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/direct-costs?from=2026-11-01&to=2026-11-30",
+            &viewer,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await, json!([]));
+
+    // Cancelling the remainder keeps the reason (T14 / spec §6.5).
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/purchase-orders/{po}/revise"),
+            &editor,
+            json!({ "kind": "cancel", "amount": 200_000, "reason": "残りは不要", "rowVersion": costs["orders"][0]["rowVersion"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let revised = body_json(response).await;
+    assert_eq!(revised["remaining"], 0);
+    assert_eq!(revised["changes"][0]["reason"], "残りは不要");
+
+    // Audit: approvals carry the self-approval flag and no amounts.
+    let writes: Vec<_> = audit
+        .list(ListParams::default())
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter(|row| row.resource == "direct_costs" && row.action == "approve")
+        .collect();
+    assert_eq!(writes.len(), 2);
+    for row in &writes {
+        let detail = row.detail.clone().unwrap_or_default();
+        assert!(detail.contains("\"selfApproval\":true"), "{detail}");
+        assert!(!detail.contains("300000"), "{detail}");
+    }
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "purchase_orders"));
 }

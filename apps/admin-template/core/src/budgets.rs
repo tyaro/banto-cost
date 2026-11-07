@@ -38,6 +38,7 @@ use tokio::sync::broadcast;
 
 use crate::calc_basis::{domain_row, CalcBasisService};
 use crate::customers::{clean_optional, field_error, now_expr, stale_version_error};
+use crate::direct_costs::DirectCostsService;
 use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, MAX_TEXT_LEN,
 };
@@ -45,9 +46,9 @@ use crate::time_entries::row_of;
 use crate::work_masters::{MasterKind, WorkMastersService};
 
 pub const RESOURCE: &str = "budgets";
-/// Cost types whose actuals are summed today: labor from approved hours
-/// (P4b). Direct costs arrive with P4d.
-const TRACKED: [CostType; 1] = [CostType::Labor];
+/// Cost types whose actuals are summed: labor from approved hours (P4b),
+/// the others from approved direct costs (P4d).
+const TRACKED: [CostType; 5] = CostType::ALL;
 
 /// One line of a budget version.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -152,7 +153,7 @@ pub struct ComparisonRow {
     pub cost_type: String,
     pub original: Option<i64>,
     pub current: Option<i64>,
-    /// `None` = not summed yet for this cost type (直接費は P4d).
+    /// Approved actuals (labor from hours, the rest from direct costs).
     pub actual: Option<i64>,
     /// actual − current; plus = over budget.
     pub variance: Option<i64>,
@@ -187,6 +188,9 @@ pub struct BudgetOverview {
     /// The labor actuals are final: no approved hour without a rate and no
     /// hour waiting for approval (otherwise 暫定・不足あり, T04).
     pub labor_actual_complete: bool,
+    /// The direct-cost actuals are final: nothing waiting for approval and
+    /// no provisional left (otherwise 暫定・不足あり, P4d).
+    pub direct_actual_complete: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -800,7 +804,7 @@ impl BudgetsService {
             .sql("SELECT COUNT(*) FROM time_entries WHERE project_id = ? AND status <> 'approved'");
         let pending: i64 = on_pool!(&self.db, pool => scalar!(pool, pending_sql, project_id))?;
         let missing: i64 = actual_rows.iter().map(|r| r.2).sum();
-        let actual: Vec<(LineKey, i64)> = actual_rows
+        let mut actual: Vec<(LineKey, i64)> = actual_rows
             .iter()
             .map(|(phase, cost, _)| {
                 (
@@ -812,6 +816,18 @@ impl BudgetsService {
                 )
             })
             .collect();
+        let direct = DirectCostsService::new(self.db.clone())
+            .project_actuals(project_id)
+            .await?;
+        actual.extend(direct.by_key.iter().map(|(phase, cost_type, amount)| {
+            (
+                LineKey {
+                    phase: *phase,
+                    cost_type: *cost_type,
+                },
+                *amount,
+            )
+        }));
 
         let keyed = |v: &BudgetVersion| -> Vec<(LineKey, i64)> {
             v.lines
@@ -909,6 +925,7 @@ impl BudgetsService {
             comparison,
             totals,
             labor_actual_complete: missing == 0 && pending == 0,
+            direct_actual_complete: direct.complete,
         })
     }
 }
@@ -1135,9 +1152,33 @@ pub(crate) mod tests {
         assert_eq!(labor_total.current, Some(1_320_000));
         assert_eq!(labor_total.actual, Some(0));
         assert_eq!(labor_total.variance, Some(-1_320_000));
+        // P4d: the direct costs are compared too (no record yet = 0 yen actual).
         let material = o.totals.iter().find(|t| t.cost_type == "material").unwrap();
-        assert_eq!((material.actual, material.variance), (None, None));
+        assert_eq!(
+            (material.actual, material.variance),
+            (Some(0), Some(-900_000))
+        );
         assert!(o.labor_actual_complete);
+        assert!(o.direct_actual_complete);
+        let approved = crate::direct_costs::tests::approved;
+        let svc_costs = DirectCostsService::new(db.clone());
+        approved(
+            &svc_costs,
+            crate::direct_costs::tests::cost(pid, "material", 950_000),
+        )
+        .await;
+        let o = svc.overview(pid).await.unwrap();
+        let material = o.totals.iter().find(|t| t.cost_type == "material").unwrap();
+        assert_eq!(
+            (material.actual, material.variance),
+            (Some(950_000), Some(50_000))
+        );
+        let row = o
+            .comparison
+            .iter()
+            .find(|r| r.cost_type == "material" && r.phase_id.is_none())
+            .unwrap();
+        assert_eq!(row.variance, Some(50_000));
     }
 
     #[tokio::test]

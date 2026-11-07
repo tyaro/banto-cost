@@ -471,6 +471,22 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'budget_draft_approve',
 			rest: 'POST /api/budget-versions/{id}/approve',
 			role: 'Editor'
+		},
+		// banto-cost P4d: 取引先・直接費・発注。editor 床＋authorize_audited
+		// （直接費の本人確認はサービス、承認は APPROVAL_POLICY）。
+		{ tauri: 'vendors_create', rest: 'POST /api/vendors', role: 'Editor' },
+		{ tauri: 'vendors_update', rest: 'PUT /api/vendors/{id}', role: 'Editor' },
+		{ tauri: 'direct_costs_create', rest: 'POST /api/direct-costs', role: 'Editor' },
+		{ tauri: 'direct_costs_update', rest: 'PUT /api/direct-costs/{id}', role: 'Editor' },
+		{ tauri: 'direct_costs_delete', rest: 'DELETE /api/direct-costs/{id}', role: 'Editor' },
+		{ tauri: 'direct_costs_submit', rest: 'POST /api/direct-costs/{id}/submit', role: 'Editor' },
+		{ tauri: 'direct_costs_decide', rest: 'POST /api/direct-costs/{id}/decide', role: 'Editor' },
+		{ tauri: 'purchase_orders_create', rest: 'POST /api/purchase-orders', role: 'Editor' },
+		{ tauri: 'purchase_orders_update', rest: 'PUT /api/purchase-orders/{id}', role: 'Editor' },
+		{
+			tauri: 'purchase_orders_revise',
+			rest: 'POST /api/purchase-orders/{id}/revise',
+			role: 'Editor'
 		}
 	];
 
@@ -526,7 +542,12 @@ const isAllowedPackageImport = (spec) =>
 			role: 'Viewer'
 		},
 		// banto-cost P4c の読み取り。
-		{ tauri: 'project_budget', rest: 'GET /api/projects/{id}/budget', role: 'Viewer' }
+		{ tauri: 'project_budget', rest: 'GET /api/projects/{id}/budget', role: 'Viewer' },
+		// banto-cost P4d の読み取り。
+		{ tauri: 'vendors_list', rest: 'GET /api/vendors', role: 'Viewer' },
+		{ tauri: 'direct_costs_list', rest: 'GET /api/direct-costs', role: 'Viewer' },
+		{ tauri: 'direct_costs_approvals', rest: 'GET /api/direct-costs/approvals', role: 'Viewer' },
+		{ tauri: 'project_costs', rest: 'GET /api/projects/{id}/costs', role: 'Viewer' }
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -599,6 +620,10 @@ const isAllowedPackageImport = (spec) =>
 		'projects_list',
 		'project_time_summary',
 		'project_budget',
+		'project_costs',
+		'vendors_list',
+		'direct_costs_list',
+		'direct_costs_approvals',
 		'time_entries_approvals',
 		'time_entries_list',
 		// Issue #219 PR-C2: the reach check of the live listener (admin, like
@@ -640,6 +665,10 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/time-entries/approvals',
 		'GET /api/projects/{id}/time-summary',
 		'GET /api/projects/{id}/budget',
+		'GET /api/projects/{id}/costs',
+		'GET /api/vendors',
+		'GET /api/direct-costs',
+		'GET /api/direct-costs/approvals',
 		'POST /api/customers/list',
 		'POST /api/projects/list',
 		'GET /api/ui-settings/{key}',

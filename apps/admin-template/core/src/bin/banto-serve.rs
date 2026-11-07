@@ -156,6 +156,8 @@ async fn main() {
         .with_events(events.clone());
     let budgets =
         admin_template_core::budgets::BudgetsService::new(db.clone()).with_events(events.clone());
+    let direct_costs = admin_template_core::direct_costs::DirectCostsService::new(db.clone())
+        .with_events(events.clone());
     // ADR-0013 (Issue #185): the sampler is stateful (CPU% needs a delta
     // between refreshes, see `SystemMetricsSampler::sample`'s doc comment),
     // so it is built once here and shared - same lifetime as `system_info`
@@ -260,6 +262,7 @@ async fn main() {
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics,
     };
     let app = with_security_headers(
