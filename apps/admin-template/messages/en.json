@@ -1283,6 +1283,8 @@
   "forecast.funds": "Funds (target margin {pct})",
   "forecast.fundsLabel": "Funds",
   "forecast.fundsUnsetRate": "Target margin not set",
+  "forecast.fundsRateOn": "Rate on the acceptance date {date}",
+  "forecast.fundsRateToday": "Not accepted yet (today's rate)",
   "forecast.costTotal": "Forecast cost at completion",
   "forecast.baseDateShort": "base date {date}",
   "forecast.profit": "Forecast direct profit",

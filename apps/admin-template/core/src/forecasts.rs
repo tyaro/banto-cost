@@ -37,7 +37,7 @@ use cost_domain::forecast::{
     summarize, update_reasons, validate_remaining, AdoptedFacts, AdoptionIssue, CostType,
     KeyedLine, PricedForecastLine, RemainingInput, RemainingIssue, UpdateReason, RATE_ITEM,
 };
-use cost_domain::funds::{funds, TARGET_MARGIN_ITEM};
+use cost_domain::funds::{funds, rate_date, TARGET_MARGIN_ITEM};
 use cost_domain::project::ProjectStatus;
 use cost_domain::Date;
 use serde::{Deserialize, Serialize};
@@ -257,6 +257,9 @@ pub struct ForecastOverview {
     /// 目標粗利率 applied on the business date (the project's override or
     /// the company basis); `None` = 未設定 (design §9.4 item 4, T36).
     pub target_margin_pct: Option<i64>,
+    /// The acceptance date (first revenue recognition) the rate was read
+    /// on; `None` = not accepted yet, read on the business date.
+    pub target_margin_on: Option<String>,
     /// 目標粗利 = confirmed order × rate (円未満切り捨て).
     pub target_profit: Option<i64>,
     /// 原資 = confirmed order − 目標粗利: a ceiling to read the budget and
@@ -1387,14 +1390,8 @@ impl ForecastsService {
         let latest_cost = latest.as_ref().and_then(|v| v.cost_total);
         let current_profit = latest_cost.map(|c| profit(order, c));
         let current_total = budget.current.as_ref().and_then(|b| b.total);
-        let target_margin_pct = applied_value(
-            &self.db,
-            TARGET_MARGIN_ITEM,
-            Some(project_id),
-            self.today().await?,
-        )
-        .await?
-        .map(|(v, _)| v);
+        let (target_margin_pct, target_margin_on) =
+            target_margin(&self.db, project_id, self.today().await?).await?;
         let funds = funds(order, target_margin_pct);
         Ok(ForecastOverview {
             project_id,
@@ -1421,11 +1418,36 @@ impl ForecastsService {
             current_profit_ratio_permille: current_profit.and_then(|p| p.ratio_permille),
             current_overrun: latest_cost.zip(current_total).map(|(c, b)| overrun(c, b)),
             target_margin_pct,
+            target_margin_on,
             target_profit: funds.map(|f| f.target_profit),
             funds: funds.map(|f| f.funds),
             comparison,
         })
     }
+}
+
+/// 目標粗利率 of a project: its override or the company basis on its
+/// acceptance date (the first revenue recognition not cancelled), or on
+/// `today` before it is accepted (2026-11-07 decision, design §9.4.1).
+/// Returns the rate and the acceptance date used.
+pub(crate) async fn target_margin(
+    db: &Db,
+    project_id: i64,
+    today: Date,
+) -> Result<(Option<i64>, Option<String>), BantoError> {
+    let sql = placeholders(
+        db.dialect(),
+        "SELECT MIN(recognized_on) FROM revenue_recognitions \
+         WHERE project_id = ? AND cancelled_at IS NULL",
+    );
+    let first: Option<(Option<String>,)> =
+        on_pool!(db, pool => fetch_optional!(pool, sql, project_id))?;
+    let accepted = first.and_then(|(d,)| d).and_then(|d| Date::parse(&d));
+    let on = rate_date(accepted, today);
+    let rate = applied_value(db, TARGET_MARGIN_ITEM, Some(project_id), on)
+        .await?
+        .map(|(v, _)| v);
+    Ok((rate, accepted.map(|d| d.to_string())))
 }
 
 struct DraftFigures {

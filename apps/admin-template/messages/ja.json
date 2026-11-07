@@ -1283,6 +1283,8 @@
   "forecast.funds": "原資（目標粗利率 {pct}）",
   "forecast.fundsLabel": "原資",
   "forecast.fundsUnsetRate": "目標粗利率が未設定",
+  "forecast.fundsRateOn": "検収日 {date} の率",
+  "forecast.fundsRateToday": "未検収（今日の率）",
   "forecast.costTotal": "完了見込原価",
   "forecast.baseDateShort": "基準日 {date}",
   "forecast.profit": "完了見込直接利益",

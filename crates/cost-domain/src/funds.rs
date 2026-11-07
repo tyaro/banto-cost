@@ -7,7 +7,11 @@
 //! - 原資 ＝ 確定受注額 − 目標粗利
 //!
 //! 受注前（確定受注額なし）と目標粗利率の未設定は `None`（0%・0円で計算しない）。
+//!
+//! 率は案件ごとに検収日の時点の値を使う（2026-11-07 ユーザー決定）。検収日は案件の最初の
+//! 売上計上日（取消を除く）で、まだ検収していない案件は業務日付の値を使う（[`rate_date`]）。
 
+use crate::calendar::Date;
 use crate::money::Yen;
 
 /// 目標粗利率の計算基準の項目。
@@ -19,6 +23,11 @@ pub struct Funds {
     pub target_profit: Yen,
     /// 原資（確定受注額 − 目標粗利）。
     pub funds: Yen,
+}
+
+/// 目標粗利率を読む日。検収日（最初の売上計上日）があればその日、なければ業務日付。
+pub fn rate_date(first_acceptance: Option<Date>, today: Date) -> Date {
+    first_acceptance.unwrap_or(today)
 }
 
 /// 原資。確定受注額か目標粗利率が未設定なら `None`。
@@ -36,6 +45,14 @@ pub fn funds(order_amount: Option<Yen>, target_margin_pct: Option<i64>) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn t36_the_rate_is_read_on_the_acceptance_date_or_today() {
+        let today = Date::parse("2026-11-07").unwrap();
+        let accepted = Date::parse("2026-08-31").unwrap();
+        assert_eq!(rate_date(Some(accepted), today), accepted);
+        assert_eq!(rate_date(None, today), today);
+    }
 
     #[test]
     fn t36_funds_is_the_order_minus_its_target_margin() {

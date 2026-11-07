@@ -329,6 +329,10 @@
 				>
 				{#if overview.targetMarginPct === null}
 					<span class="label">{m['forecast.fundsUnsetRate']()}</span>
+				{:else if overview.targetMarginOn}
+					<span class="label">{m['forecast.fundsRateOn']({ date: overview.targetMarginOn })}</span>
+				{:else}
+					<span class="label">{m['forecast.fundsRateToday']()}</span>
 				{/if}
 			</div>
 			<div>
