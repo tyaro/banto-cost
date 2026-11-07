@@ -79,23 +79,29 @@
 	const money = (v: unknown) => (typeof v === 'number' ? formatYen(v) : '—');
 	const numeric = (a: unknown, b: unknown) =>
 		(typeof a === 'number' ? a : -Infinity) - (typeof b === 'number' ? b : -Infinity);
-	/** A provisional adopted forecast (暫定・不足あり) is marked, never shown as final. */
-	const provisional = (row: Row) =>
+	/**
+	 * A figure built on incomplete records is marked, never shown as final: the
+	 * actual cost while approved hours lack a rate or records are unapproved or
+	 * provisional (`actualComplete`), a forecast adopted as 暫定・不足あり
+	 * (`forecastActualComplete`).
+	 */
+	const actualMark = (row: Row) =>
+		row.pf?.actualComplete === false ? m['forecast.provisionalShort']() : '';
+	const forecastMark = (row: Row) =>
 		row.pf?.forecastActualComplete === false ? m['forecast.provisionalShort']() : '';
 	function amountColumn(
 		id: string,
 		header: string,
 		pick: (r: PortfolioRow) => number | null,
-		forecast = false
+		mark?: (row: Row) => string
 	): GridColumn<Row> {
 		return {
 			id,
 			header,
 			accessor: (row) => (row.pf ? pick(row.pf) : null),
-			width: forecast ? 170 : 140,
+			width: mark ? 170 : 140,
 			align: 'right',
-			format: (v, row) =>
-				forecast && typeof v === 'number' ? `${money(v)}${provisional(row)}` : money(v),
+			format: (v, row) => (mark && typeof v === 'number' ? `${money(v)}${mark(row)}` : money(v)),
 			comparator: numeric
 		};
 	}
@@ -149,13 +155,18 @@
 		...schemaColumns.filter((column) => !['code', 'name'].includes(column.id)),
 		amountColumn('orderAmount', m['portfolio.colOrder'](), (r) => r.orderAmount),
 		amountColumn('budgetTotal', m['portfolio.colBudget'](), (r) => r.budgetTotal),
-		amountColumn('actualCost', m['portfolio.colActual'](), (r) => r.actualCost),
-		amountColumn('forecastCost', m['portfolio.colForecastCost'](), (r) => r.forecastCost, true),
+		amountColumn('actualCost', m['portfolio.colActual'](), (r) => r.actualCost, actualMark),
+		amountColumn(
+			'forecastCost',
+			m['portfolio.colForecastCost'](),
+			(r) => r.forecastCost,
+			forecastMark
+		),
 		amountColumn(
 			'forecastProfit',
 			m['portfolio.colForecastProfit'](),
 			(r) => r.forecastProfit,
-			true
+			forecastMark
 		),
 		{
 			id: 'forecastRatio',

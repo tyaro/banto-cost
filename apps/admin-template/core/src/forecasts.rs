@@ -37,7 +37,6 @@ use cost_domain::forecast::{
     summarize, update_reasons, validate_remaining, AdoptedFacts, AdoptionIssue, CostType,
     KeyedLine, PricedForecastLine, RemainingInput, RemainingIssue, UpdateReason, RATE_ITEM,
 };
-use cost_domain::ledger::Posting;
 use cost_domain::project::ProjectStatus;
 use cost_domain::Date;
 use serde::{Deserialize, Serialize};
@@ -45,7 +44,7 @@ use tokio::sync::broadcast;
 
 use crate::calc_basis::applied_value;
 use crate::customers::{clean_optional, field_error, now_expr, stale_version_error};
-use crate::direct_costs::DirectCostsService;
+use crate::direct_costs::{DirectCostsService, Ledger};
 use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, OrdersService,
     MAX_TEXT_LEN,
@@ -554,7 +553,7 @@ impl ForecastsService {
         &self,
         project_id: i64,
         until: Date,
-        postings: &[Posting],
+        ledger: &Ledger,
     ) -> Result<Actuals, BantoError> {
         let on = until.to_string();
         // CAST: Postgres sums BIGINT to NUMERIC.
@@ -573,7 +572,7 @@ impl ForecastsService {
             scalar!(pool, pending_sql, project_id, &on)?,
         ));
         let costs = DirectCostsService::new(self.db.clone())
-            .snapshot(project_id, until, postings)
+            .snapshot(project_id, until, ledger)
             .await?;
         let mut by_key: Vec<(LineKey, i64)> = labor
             .iter()
@@ -674,9 +673,9 @@ impl ForecastsService {
         project_id: i64,
         base: Date,
         inputs: &[RemainingInput],
-        postings: &[Posting],
+        ledger: &Ledger,
     ) -> Result<DraftFigures, BantoError> {
-        let actuals = self.actuals(project_id, base, postings).await?;
+        let actuals = self.actuals(project_id, base, ledger).await?;
         let rate = self.rate(project_id, base).await?;
         let merged = merge_lines(&actuals.by_key, &actuals.committed, inputs);
         let priced = price_lines(&merged, rate.map(|(v, _)| v));
@@ -690,7 +689,7 @@ impl ForecastsService {
     async fn views(
         &self,
         rows: Vec<VersionRow>,
-        postings: &[Posting],
+        ledger: &Ledger,
     ) -> Result<Vec<ForecastVersion>, BantoError> {
         let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
         let mut lines = self.lines_of(&ids).await?;
@@ -725,7 +724,7 @@ impl ForecastsService {
                     })
                     .collect();
                 let figures = self
-                    .priced_draft(r.project_id, base, &domain, postings)
+                    .priced_draft(r.project_id, base, &domain, ledger)
                     .await?;
                 let (order, _) = self.order_now(r.project_id).await?;
                 let budget = self.current_budget(r.project_id).await?;
@@ -849,8 +848,8 @@ impl ForecastsService {
         Ok(out)
     }
 
-    async fn postings(&self) -> Result<Vec<Posting>, BantoError> {
-        DirectCostsService::new(self.db.clone()).postings().await
+    async fn ledger(&self) -> Result<Ledger, BantoError> {
+        DirectCostsService::new(self.db.clone()).ledger().await
     }
 
     /// One version (any status). The wiring authorizes against its project.
@@ -858,8 +857,8 @@ impl ForecastsService {
         let sql = self.sql(&format!("{SELECT} WHERE f.id = ?"));
         let row: Option<VersionRow> = on_pool!(&self.db, pool => fetch_optional!(pool, sql, id))?;
         let row = row.ok_or_else(|| not_found(id))?;
-        let postings = self.postings().await?;
-        Ok(self.views(vec![row], &postings).await?.remove(0))
+        let ledger = self.ledger().await?;
+        Ok(self.views(vec![row], &ledger).await?.remove(0))
     }
 
     async fn draft_id(&self, project_id: i64) -> Result<Option<i64>, BantoError> {
@@ -1127,9 +1126,9 @@ impl ForecastsService {
                 })
             })
             .collect();
-        let postings = self.postings().await?;
+        let ledger = self.ledger().await?;
         let figures = self
-            .priced_draft(project_id, base, &inputs, &postings)
+            .priced_draft(project_id, base, &inputs, &ledger)
             .await?;
         check_adoption(
             &figures.priced,
@@ -1221,15 +1220,15 @@ impl ForecastsService {
     }
 
     /// 見込更新要 for the latest adopted version and what the overall list
-    /// needs. `postings` is the company ledger (read once by the caller).
+    /// needs. `ledger` is the company ledger (read once by the caller).
     pub async fn summary(
         &self,
         project_id: i64,
-        postings: &[Posting],
+        ledger: &Ledger,
         order_now: Option<i64>,
     ) -> Result<ForecastSummary, BantoError> {
         let far = Date::new(9999, 12, 31).expect("valid date");
-        let latest_actuals = self.actuals(project_id, far, postings).await?;
+        let latest_actuals = self.actuals(project_id, far, ledger).await?;
         // Up to a far date = every record, whatever its date.
         let unapproved = latest_actuals.pending;
         let committed: i64 = latest_actuals.committed.iter().map(|(_, v)| *v).sum();
@@ -1251,7 +1250,7 @@ impl ForecastsService {
         };
         let base = Date::parse(&row.base_date)
             .ok_or_else(|| BantoError::Other(format!("不明な基準日です: {}", row.base_date)))?;
-        let at_base = self.actuals(project_id, base, postings).await?;
+        let at_base = self.actuals(project_id, base, ledger).await?;
         let rate_now = self.rate(project_id, base).await?.map(|(v, _)| v);
         let minutes_sql = self.sql(
             "SELECT CAST(COUNT(*) AS BIGINT) FROM forecast_lines \
@@ -1286,13 +1285,13 @@ impl ForecastsService {
     /// Every version of the project, the comparison and 見込更新要.
     pub async fn overview(&self, project_id: i64) -> Result<ForecastOverview, BantoError> {
         let (status, _) = self.project(project_id).await?;
-        let postings = self.postings().await?;
+        let ledger = self.ledger().await?;
         let sql = self.sql(&format!(
             "{SELECT} WHERE f.project_id = ? ORDER BY f.status DESC, f.version_no DESC"
         ));
         let rows: Vec<VersionRow> = on_pool!(&self.db, pool => fetch_all!(pool, sql, project_id))?;
         // `status DESC` puts the draft first ('draft' > 'adopted').
-        let mut versions = self.views(rows, &postings).await?;
+        let mut versions = self.views(rows, &ledger).await?;
         let draft = versions
             .iter()
             .position(|v| v.status == "draft")
@@ -1301,7 +1300,7 @@ impl ForecastsService {
         let latest = history.first().cloned();
         let previous = history.get(1).cloned();
         let (order, pending) = self.order_now(project_id).await?;
-        let summary = self.summary(project_id, &postings, order).await?;
+        let summary = self.summary(project_id, &ledger, order).await?;
         let budget = crate::budgets::BudgetsService::new(self.db.clone())
             .overview(project_id)
             .await?;
@@ -1843,7 +1842,10 @@ pub(crate) mod tests {
         let v = svc.adopt(&d, d.row_version, Some(1)).await.unwrap();
         assert!(!v.actual_complete, "暫定・不足あり として残る");
         assert_eq!(v.cost_total, Some(100_000));
-        let s = svc.summary(pid, &[], Some(1_000_000)).await.unwrap();
+        let s = svc
+            .summary(pid, &svc.ledger().await.unwrap(), Some(1_000_000))
+            .await
+            .unwrap();
         assert_eq!(s.unapproved, 1);
         assert!(s.update_reasons.is_empty());
         // The overall list keeps it marked provisional (not as final figures).
@@ -1851,6 +1853,7 @@ pub(crate) mod tests {
         let p = svc.portfolio().overview(&all, &all).await.unwrap();
         let row = p.rows.iter().find(|r| r.project_id == pid).unwrap();
         assert_eq!(row.forecast_actual_complete, Some(false));
+        assert_eq!(row.actual_complete, Some(false), "最新実績も暫定");
         assert_eq!(p.totals.provisional_forecasts, vec![pid]);
     }
 

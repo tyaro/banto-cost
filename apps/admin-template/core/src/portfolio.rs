@@ -196,7 +196,7 @@ impl PortfolioService {
                 )
             })
             .collect();
-        let postings = DirectCostsService::new(self.db.clone()).postings().await?;
+        let ledger = DirectCostsService::new(self.db.clone()).ledger().await?;
         let orders = OrdersService::new(self.db.clone());
 
         let mut rows = Vec::with_capacity(projects.len());
@@ -234,7 +234,7 @@ impl PortfolioService {
             let order = orders.summary(p.id).await?;
             let budget = self.budget(p.id).await?;
             let summary = forecasts
-                .summary(p.id, &postings, order.confirmed_amount)
+                .summary(p.id, &ledger, order.confirmed_amount)
                 .await?;
             row.order_amount = order.confirmed_amount;
             row.pending_addition = Some(order.pending_total);
