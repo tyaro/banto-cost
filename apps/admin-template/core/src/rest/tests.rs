@@ -5467,3 +5467,185 @@ async fn t11_rest_closing_is_accounting_only_and_refuses_hours_in_a_closed_month
     assert!(detail.contains("2026-10"), "{detail}");
     assert!(!detail.contains("工数の追加"), "{detail}");
 }
+
+// Tauri twin: `t11_tauri_time_corrections_are_requested_by_the_owner_and_approved_by_accounting`.
+#[tokio::test]
+async fn t11_rest_time_corrections_are_requested_by_the_owner_and_approved_by_accounting() {
+    let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["time.entry", "project.manage", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/time-entries",
+            &editor,
+            json!({ "workDate": "2026-11-09", "projectId": project, "phaseId": 1, "minutes": 120 }),
+        ))
+        .await
+        .unwrap();
+    let id = body_json(response).await["entry"]["id"].as_i64().unwrap();
+    for (path, body) in [
+        ("submit", json!({ "rowVersion": 1 })),
+        ("decide", json!({ "rowVersion": 2, "approve": true })),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_json_auth(
+                &format!("/api/time-entries/{id}/{path}"),
+                &editor,
+                body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+    let correction = |reason: &str| {
+        json!({
+            "workDate": "2026-11-09", "projectId": project, "phaseId": 2, "minutes": 90,
+            "rowVersion": 3, "reason": reason
+        })
+    };
+    // Someone else's entry reads as not found; a reason is required.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/correct"),
+            &admin,
+            correction("工程の誤り"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/correct"),
+            &editor,
+            correction(""),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/correct"),
+            &editor,
+            correction("工程の誤り"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = body_json(response).await;
+    let cid = saved["entry"]["id"].as_i64().unwrap();
+    assert_eq!(saved["entry"]["status"], "submitted");
+    assert_eq!(saved["entry"]["correctsId"], id);
+
+    // The project's manager approves hours but not their corrections (訂正承認).
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{cid}/decide"),
+            &editor,
+            json!({ "rowVersion": 1, "approve": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/time-entries/corrections", &editor))
+        .await
+        .unwrap();
+    assert!(body_json(response).await.as_array().unwrap().is_empty());
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/time-entries/approvals", &editor))
+        .await
+        .unwrap();
+    assert!(
+        body_json(response).await.as_array().unwrap().is_empty(),
+        "a correction is not in the manager's list"
+    );
+
+    grant(&router, &admin, 1, json!(["finance.close"])).await;
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/time-entries/corrections", &admin))
+        .await
+        .unwrap();
+    let queue = body_json(response).await;
+    assert_eq!(queue.as_array().unwrap().len(), 1);
+    assert_eq!(queue[0]["original"]["minutes"], 120);
+    assert_eq!(queue[0]["correction"]["minutes"], 90);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{cid}/decide"),
+            &admin,
+            json!({ "rowVersion": 1, "approve": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The replaced entry left the figures; the owner sees the chain.
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/projects/{project}/time-summary"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        body_json(response).await["total"]["approved"]["minutes"],
+        90
+    );
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/time-entries/{id}/corrections"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    let chain = body_json(response).await;
+    assert_eq!(chain.as_array().unwrap().len(), 1);
+    assert_eq!(chain[0]["correctionReason"], "工程の誤り");
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/time-entries/{id}/corrections"),
+            &admin,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // The audit keeps the action, never the free-text reason.
+    let logged = audit.list(ListParams::default()).await.unwrap();
+    let correct = logged
+        .rows
+        .iter()
+        .find(|e| e.action == "correct")
+        .expect("correct is audited");
+    let detail = correct.detail.clone().unwrap_or_default();
+    assert!(!detail.contains("工程の誤り"));
+    assert!(detail.contains("correctsId"));
+}

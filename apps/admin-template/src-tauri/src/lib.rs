@@ -74,10 +74,12 @@ use admin_template_core::settings::{
 use admin_template_core::system_info::SystemInfoService;
 #[cfg(feature = "system-metrics")]
 use admin_template_core::system_metrics::SystemMetricsSampler;
-use admin_template_core::time_access::{approve_op, enter_op as enter_time_op, shown, shown_saved};
+use admin_template_core::time_access::{
+    approve_op, enter_op as enter_time_op, shown, shown_pair, shown_saved,
+};
 use admin_template_core::time_entries::{
-    DecisionInput, ProjectTimeSummary, TimeEntriesService, TimeEntry, TimeEntryInput,
-    TimeEntrySaved, VersionInput,
+    CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntriesService,
+    TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
 };
 use admin_template_core::users::{Role, UserIdentity, UserSummary, UsersService};
 use admin_template_core::work_masters::{
@@ -4465,6 +4467,81 @@ async fn time_entries_decide_body(
     Ok(shown(&subject, entry))
 }
 
+/// Tauri twin of `POST /api/time-entries/{id}/correct` (P6b-2, T11).
+#[tauri::command]
+async fn time_entries_correct(
+    state: State<'_, AppState>,
+    id: i64,
+    values: CorrectionInput,
+) -> Result<TimeEntrySaved, BantoError> {
+    time_entries_correct_body(&state, id, values).await
+}
+
+async fn time_entries_correct_body(
+    state: &AppState,
+    id: i64,
+    values: CorrectionInput,
+) -> Result<TimeEntrySaved, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    own_time_entry(state, id).await?;
+    let (subject, user_id) =
+        time_guard(state, &actor, enter_time_op(values.entry.project_id)).await?;
+    let saved = state.time_entries.correct(user_id, id, values).await?;
+    if !saved.replayed {
+        // The reason is free text: kept on the row, not in the audit log.
+        record_ok(
+            &state.audit,
+            &actor,
+            "correct",
+            TIME_RESOURCE,
+            Some(&saved.entry.id.to_string()),
+            Some(saved.entry.audit_detail()),
+        )
+        .await;
+    }
+    Ok(shown_saved(&subject, saved))
+}
+
+/// Tauri twin of `GET /api/time-entries/{id}/corrections`.
+#[tauri::command]
+async fn time_entries_corrections(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Vec<TimeEntry>, BantoError> {
+    time_entries_corrections_body(&state, id).await
+}
+
+async fn time_entries_corrections_body(
+    state: &AppState,
+    id: i64,
+) -> Result<Vec<TimeEntry>, BantoError> {
+    let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
+    own_time_entry(state, id).await?;
+    let (subject, user_id) = time_guard(state, &identity, Operation::EnterCommonTime).await?;
+    let rows = state.time_entries.corrections_of(user_id, id).await?;
+    Ok(rows.into_iter().map(|e| shown(&subject, e)).collect())
+}
+
+/// Tauri twin of `GET /api/time-entries/corrections`: accounting's queue.
+#[tauri::command]
+async fn time_entries_pending_corrections(
+    state: State<'_, AppState>,
+) -> Result<Vec<CorrectionPair>, BantoError> {
+    time_entries_pending_corrections_body(&state).await
+}
+
+async fn time_entries_pending_corrections_body(
+    state: &AppState,
+) -> Result<Vec<CorrectionPair>, BantoError> {
+    require_role(state, Role::Viewer, TIME_RESOURCE).await?;
+    let subject = caller_subject(state).await?;
+    if !(subject.is_company_member() && subject.has(Capability::FinanceClose)) {
+        return Ok(Vec::new());
+    }
+    let rows = state.time_entries.pending_corrections().await?;
+    Ok(rows.into_iter().map(|p| shown_pair(&subject, p)).collect())
+}
+
 #[tauri::command]
 async fn project_time_summary(
     state: State<'_, AppState>,
@@ -6378,6 +6455,9 @@ pub fn run() {
             time_entries_submit,
             time_entries_approvals,
             time_entries_decide,
+            time_entries_correct,
+            time_entries_corrections,
+            time_entries_pending_corrections,
             project_time_summary,
             project_budget,
             budget_draft_create,
@@ -11394,6 +11474,149 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.resource == "time_entries" && r.action == "denied" && r.origin == "tauri"));
+    }
+
+    // --- banto-cost P6b-2 --------------------------------------------------
+    // Tauri twin of `rest::tests::t11_rest_time_corrections_are_requested_by_the_owner_and_approved_by_accounting`.
+
+    #[tokio::test]
+    async fn t11_tauri_time_corrections_are_requested_by_the_owner_and_approved_by_accounting() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[
+                Capability::TimeEntry,
+                Capability::ProjectManage,
+                Capability::AmountView,
+            ],
+        )
+        .await
+        .expect("grant editor");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let project = projects_create_body(&state, project_input("P-T11", editor.id))
+            .await
+            .expect("manager registers a project")
+            .id;
+        let created = time_entries_create_body(
+            &state,
+            serde_json::from_value(serde_json::json!({
+                "workDate": "2026-11-09", "projectId": project, "phaseId": 1, "minutes": 120
+            }))
+            .expect("input"),
+        )
+        .await
+        .expect("create");
+        let id = created.entry.id;
+        let submitted = time_entries_submit_body(&state, id, VersionInput { row_version: 1 })
+            .await
+            .expect("submit");
+        let approved = time_entries_decide_body(
+            &state,
+            id,
+            serde_json::from_value(serde_json::json!({
+                "rowVersion": submitted.row_version, "approve": true
+            }))
+            .expect("decision"),
+        )
+        .await
+        .expect("self-approval");
+        let correction = |reason: &str| -> CorrectionInput {
+            serde_json::from_value(serde_json::json!({
+                "workDate": "2026-11-09", "projectId": project, "phaseId": 2, "minutes": 90,
+                "rowVersion": approved.row_version, "reason": reason
+            }))
+            .expect("correction")
+        };
+        assert!(matches!(
+            time_entries_correct_body(&state, id, correction("")).await,
+            Err(BantoError::Validation { .. })
+        ));
+        let saved = time_entries_correct_body(&state, id, correction("工程の誤り"))
+            .await
+            .expect("correct");
+        let cid = saved.entry.id;
+        assert_eq!(saved.entry.corrects_id, Some(id));
+        // The project's manager approves hours but not their corrections.
+        assert!(matches!(
+            time_entries_decide_body(
+                &state,
+                cid,
+                serde_json::from_value(serde_json::json!({ "rowVersion": 1, "approve": true }))
+                    .expect("decision"),
+            )
+            .await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(time_entries_pending_corrections_body(&state)
+            .await
+            .expect("queue")
+            .is_empty());
+
+        // Someone else's entry is not found; accounting decides the correction.
+        authz_capabilities_set_body(&state, admin.id, &[Capability::FinanceClose])
+            .await
+            .expect("grant admin");
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        assert!(matches!(
+            time_entries_correct_body(&state, id, correction("x")).await,
+            Err(BantoError::NotFound { .. })
+        ));
+        assert!(matches!(
+            time_entries_corrections_body(&state, id).await,
+            Err(BantoError::NotFound { .. })
+        ));
+        let queue = time_entries_pending_corrections_body(&state)
+            .await
+            .expect("queue");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].original.minutes, 120);
+        time_entries_decide_body(
+            &state,
+            cid,
+            serde_json::from_value(serde_json::json!({ "rowVersion": 1, "approve": true }))
+                .expect("decision"),
+        )
+        .await
+        .expect("accounting approves");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let summary = project_time_summary_body(&state, project)
+            .await
+            .expect("summary");
+        assert_eq!(summary.total.approved.minutes, 90);
+        let chain = time_entries_corrections_body(&state, id)
+            .await
+            .expect("chain");
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].correction_reason.as_deref(), Some("工程の誤り"));
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        let correct = rows
+            .iter()
+            .find(|r| r.resource == "time_entries" && r.action == "correct")
+            .expect("correct is audited");
+        let detail = correct.detail.clone().unwrap_or_default();
+        assert!(!detail.contains("工程の誤り"));
+        assert!(detail.contains("correctsId"));
     }
 
     // --- banto-cost P4c ----------------------------------------------------

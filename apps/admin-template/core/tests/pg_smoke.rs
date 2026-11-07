@@ -735,6 +735,70 @@ async fn app_layer_crud_round_trips_on_postgres() {
         assert_eq!(reopened.status, "reopened");
         assert!(reopened.comparison.is_some());
         assert_eq!(closing.months().await.unwrap().len(), 1);
+
+        // banto-cost P6b-2: 工数の訂正 on Postgres (the partial unique index
+        // on corrects_id, the EXISTS columns, the COUNTS filter, the touch of
+        // the replaced entry).
+        let time = TimeEntriesService::new(db.clone());
+        let common = time
+            .create(
+                manager,
+                serde_json::from_value(serde_json::json!({
+                    "workDate": "2026-07-11", "activityId": 1, "minutes": 60
+                }))
+                .unwrap(),
+            )
+            .await
+            .expect("hours in the reopened month")
+            .entry;
+        let common = time
+            .submit(manager, common.id, common.row_version)
+            .await
+            .unwrap();
+        let decision = |row_version| DecisionInput {
+            row_version,
+            approve: true,
+            reason: None,
+        };
+        let common = time
+            .decide(&common, decision(common.row_version), Some(manager))
+            .await
+            .expect("approve on Postgres");
+        let correction = |reason: &str| {
+            serde_json::from_value(serde_json::json!({
+                "workDate": "2026-07-11", "activityId": 2, "minutes": 30,
+                "rowVersion": common.row_version, "reason": reason
+            }))
+            .unwrap()
+        };
+        let c = time
+            .correct(manager, common.id, correction("活動の誤り"))
+            .await
+            .expect("correct on Postgres")
+            .entry;
+        assert_eq!(c.corrects_id, Some(common.id));
+        assert!(time.get(common.id).await.unwrap().correction_pending);
+        let second = time
+            .correct(manager, common.id, correction("二重"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(second, banto_core::BantoError::Validation { .. }),
+            "one correction in flight: {second:?}"
+        );
+        assert_eq!(time.pending_corrections().await.unwrap().len(), 1);
+        time.decide(&c, decision(c.row_version), Some(manager))
+            .await
+            .expect("approve the correction on Postgres");
+        let replaced = time.get(common.id).await.unwrap();
+        assert_eq!(replaced.replaced_by_id, Some(c.id));
+        assert_eq!(replaced.row_version, common.row_version + 1);
+        assert_eq!(
+            time.corrections_of(manager, common.id).await.unwrap().len(),
+            1
+        );
+        let month = closing.get("2026-07").await.unwrap();
+        assert_eq!(month.unapproved_time_entries, 0);
     }
 }
 

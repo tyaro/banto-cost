@@ -49,6 +49,7 @@ use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, OrdersService,
     MAX_TEXT_LEN,
 };
+use crate::time_entries::COUNTS;
 use crate::work_masters::{MasterKind, WorkMastersService};
 
 pub const RESOURCE: &str = "forecasts";
@@ -575,16 +576,18 @@ impl ForecastsService {
     ) -> Result<Actuals, BantoError> {
         let on = until.to_string();
         // CAST: Postgres sums BIGINT to NUMERIC.
-        let labor_sql = self.sql(
-            "SELECT phase_id, CAST(COALESCE(SUM(labor_cost), 0) AS BIGINT), \
-             CAST(SUM(CASE WHEN labor_cost IS NULL THEN 1 ELSE 0 END) AS BIGINT) \
-             FROM time_entries WHERE project_id = ? AND status = 'approved' AND work_date <= ? \
-             GROUP BY phase_id",
-        );
-        let pending_sql = self.sql(
-            "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries \
-             WHERE project_id = ? AND status <> 'approved' AND work_date <= ?",
-        );
+        // COUNTS: a replaced entry and a returned correction count as
+        // nothing (T11).
+        let labor_sql = self.sql(&format!(
+            "SELECT t.phase_id, CAST(COALESCE(SUM(t.labor_cost), 0) AS BIGINT), \
+             CAST(SUM(CASE WHEN t.labor_cost IS NULL THEN 1 ELSE 0 END) AS BIGINT) \
+             FROM time_entries t WHERE t.project_id = ? AND t.status = 'approved' \
+             AND t.work_date <= ? AND {COUNTS} GROUP BY t.phase_id"
+        ));
+        let pending_sql = self.sql(&format!(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries t \
+             WHERE t.project_id = ? AND t.status <> 'approved' AND t.work_date <= ? AND {COUNTS}"
+        ));
         let (labor, pending): (Vec<(Option<i64>, i64, i64)>, i64) = on_pool!(&self.db, pool => (
             fetch_all!(pool, labor_sql, project_id, &on)?,
             scalar!(pool, pending_sql, project_id, &on)?,

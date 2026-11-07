@@ -42,7 +42,7 @@ use crate::direct_costs::DirectCostsService;
 use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, MAX_TEXT_LEN,
 };
-use crate::time_entries::row_of;
+use crate::time_entries::{row_of, COUNTS};
 use crate::work_masters::{MasterKind, WorkMastersService};
 
 pub const RESOURCE: &str = "budgets";
@@ -792,16 +792,18 @@ impl BudgetsService {
         let current = history.first().cloned();
 
         // CAST: Postgres sums BIGINT to NUMERIC.
-        let actual_sql = self.sql(
+        let actual_sql = self.sql(&format!(
             "SELECT t.phase_id, CAST(COALESCE(SUM(t.labor_cost), 0) AS BIGINT), \
              CAST(SUM(CASE WHEN t.labor_cost IS NULL THEN 1 ELSE 0 END) AS BIGINT) \
              FROM time_entries t WHERE t.project_id = ? AND t.status = 'approved' \
-             GROUP BY t.phase_id",
-        );
+             AND {COUNTS} GROUP BY t.phase_id"
+        ));
         let actual_rows: Vec<(Option<i64>, i64, i64)> =
             on_pool!(&self.db, pool => fetch_all!(pool, actual_sql, project_id))?;
-        let pending_sql = self
-            .sql("SELECT COUNT(*) FROM time_entries WHERE project_id = ? AND status <> 'approved'");
+        let pending_sql = self.sql(&format!(
+            "SELECT COUNT(*) FROM time_entries t \
+             WHERE t.project_id = ? AND t.status <> 'approved' AND {COUNTS}"
+        ));
         let pending: i64 = on_pool!(&self.db, pool => scalar!(pool, pending_sql, project_id))?;
         let missing: i64 = actual_rows.iter().map(|r| r.2).sum();
         let mut actual: Vec<(LineKey, i64)> = actual_rows

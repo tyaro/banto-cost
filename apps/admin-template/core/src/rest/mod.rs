@@ -70,7 +70,10 @@
 //! | DELETE | `/api/time-entries/{id}?rowVersion` | - | 204 (editor+; own draft/returned) |
 //! | POST   | `/api/time-entries/{id}/submit` | `{rowVersion}` | `TimeEntry` (editor+; own draft/returned) |
 //! | GET    | `/api/time-entries/approvals` | - | `TimeEntry[]` (any role; scope `approval_projects`, activities with `finance.close`) |
-//! | POST   | `/api/time-entries/{id}/decide` | `DecisionInput` | `TimeEntry` (editor+ + `Approve` / `ApproveCommon`, self-approval allowed and audited) |
+//! | POST   | `/api/time-entries/{id}/decide` | `DecisionInput` | `TimeEntry` (editor+ + `Approve` / `ApproveCommon` / `ApproveCorrection` for a correction, self-approval allowed and audited) |
+//! | POST   | `/api/time-entries/{id}/correct` | `CorrectionInput` | `TimeEntrySaved` (editor+ + `EnterTime` / `EnterCommonTime`; own approved entry; reason; P6b-2) |
+//! | GET    | `/api/time-entries/{id}/corrections` | - | `TimeEntry[]` (any role; own entry; the corrections, newest first) |
+//! | GET    | `/api/time-entries/corrections` | - | `CorrectionPair[]` (any role; `finance.close`, others empty) |
 //! | GET    | `/api/projects/{id}/time-summary` | - | `ProjectTimeSummary` (any role + `ViewProjectAmounts`) |
 //! | GET    | `/api/projects/{id}/budget` | - | `BudgetOverview` (any role + `ViewProjectAmounts`) |
 //! | POST   | `/api/projects/{id}/budget/draft` | - | `DraftCreated` (editor+ + `ManageProject`; the existing draft when there is one) |

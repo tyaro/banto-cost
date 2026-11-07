@@ -278,6 +278,65 @@ pub fn summarize(entries: &[SummaryEntry]) -> TimeSummary {
     s
 }
 
+/// 承認済み工数の訂正（P6b-2、仕様8・11、T11）の対象になる元の工数の今の状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CorrectionTarget {
+    pub status: TimeStatus,
+    /// 承認済みの訂正がすでにある（元の工数は置き換わっている）。
+    pub replaced: bool,
+    /// 申請中の訂正がある。
+    pub pending: bool,
+}
+
+/// 訂正を受け付けない理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrectionIssue {
+    /// 承認済みでない工数は訂正ではなく通常の流れ（差戻し後の修正）で直す。
+    NotApproved,
+    /// 承認済みの訂正で置き換わった工数。最新の訂正の方を訂正する。
+    AlreadyReplaced,
+    /// 申請中の訂正がある。承認か差戻しを待つ。
+    Pending,
+    /// 理由がない。
+    ReasonRequired,
+}
+
+/// 承認済みの工数に訂正を申請できるか。承認済みの行は書き換えず、元の行を参照する
+/// 新しい行（理由つき）を再承認する。置き換わった行・申請中の訂正がある行には重ねない。
+pub fn check_correction(
+    target: CorrectionTarget,
+    reason: Option<&str>,
+) -> Result<(), Vec<CorrectionIssue>> {
+    let mut issues = Vec::new();
+    if target.status != TimeStatus::Approved {
+        issues.push(CorrectionIssue::NotApproved);
+    } else if target.replaced {
+        issues.push(CorrectionIssue::AlreadyReplaced);
+    } else if target.pending {
+        issues.push(CorrectionIssue::Pending);
+    }
+    if reason.is_none_or(|r| r.trim().is_empty()) {
+        issues.push(CorrectionIssue::ReasonRequired);
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+/// その行を集計（実績・未承認の件数）に数えるか。
+///
+/// - 承認済みの訂正で置き換わった元の行は数えない（履歴として残すだけ）。
+/// - 差し戻された訂正は数えない（元の行が承認済みのまま生きているので、未処理ではない）。
+/// - それ以外（申請中の訂正を含む）は状態どおりに数える。
+pub fn counts(status: TimeStatus, is_correction: bool, replaced: bool) -> bool {
+    if replaced {
+        return false;
+    }
+    !(is_correction && status == TimeStatus::Returned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,5 +617,69 @@ mod tests {
             assert_eq!(Rework::parse(r).unwrap().as_str(), r);
         }
         assert_eq!(TimeStatus::parse("x"), None);
+    }
+
+    fn target(status: TimeStatus, replaced: bool, pending: bool) -> CorrectionTarget {
+        CorrectionTarget {
+            status,
+            replaced,
+            pending,
+        }
+    }
+
+    #[test]
+    fn t11_承認済みの工数だけを理由つきで訂正できる() {
+        let approved = target(TimeStatus::Approved, false, false);
+        assert_eq!(check_correction(approved, Some("工程の誤り")), Ok(()));
+        assert_eq!(
+            check_correction(approved, Some("  ")),
+            Err(vec![CorrectionIssue::ReasonRequired])
+        );
+        assert_eq!(
+            check_correction(approved, None),
+            Err(vec![CorrectionIssue::ReasonRequired])
+        );
+        for s in [
+            TimeStatus::Draft,
+            TimeStatus::Submitted,
+            TimeStatus::Returned,
+        ] {
+            assert_eq!(
+                check_correction(target(s, false, false), Some("x")),
+                Err(vec![CorrectionIssue::NotApproved]),
+                "承認前は通常の流れで直す"
+            );
+        }
+    }
+
+    #[test]
+    fn t11_置き換わった工数と申請中の訂正には重ねない() {
+        assert_eq!(
+            check_correction(target(TimeStatus::Approved, true, false), Some("x")),
+            Err(vec![CorrectionIssue::AlreadyReplaced])
+        );
+        assert_eq!(
+            check_correction(target(TimeStatus::Approved, false, true), None),
+            Err(vec![
+                CorrectionIssue::Pending,
+                CorrectionIssue::ReasonRequired
+            ])
+        );
+    }
+
+    #[test]
+    fn t11_置き換わった元の行と差し戻した訂正は集計に数えない() {
+        assert!(counts(TimeStatus::Approved, false, false));
+        assert!(!counts(TimeStatus::Approved, false, true), "置き換わった元");
+        assert!(counts(TimeStatus::Approved, true, false), "承認済みの訂正");
+        assert!(
+            counts(TimeStatus::Submitted, true, false),
+            "申請中の訂正は未承認"
+        );
+        assert!(!counts(TimeStatus::Returned, true, false), "差し戻した訂正");
+        assert!(
+            counts(TimeStatus::Returned, false, false),
+            "通常の差戻しは未申請"
+        );
     }
 }

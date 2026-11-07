@@ -43,6 +43,7 @@ use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, OrdersService,
     MAX_TEXT_LEN,
 };
+use crate::time_entries::COUNTS;
 
 pub const RESOURCE: &str = "project_closeouts";
 
@@ -409,14 +410,18 @@ impl CloseoutsService {
         &self,
         project_id: i64,
     ) -> Result<(CloseoutState, Vec<(i64, String)>), BantoError> {
-        let time_sql = self.sql(
-            "SELECT CAST(COUNT(*) AS BIGINT), CAST(COALESCE(SUM(minutes), 0) AS BIGINT) \
-             FROM time_entries WHERE project_id = ? AND status <> 'approved'",
-        );
-        let rate_sql = self.sql(
-            "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries \
-             WHERE project_id = ? AND status = 'approved' AND labor_cost IS NULL",
-        );
+        // COUNTS: a replaced entry and a returned correction count as
+        // nothing (T11) - an entry approved without a rate is resolved by an
+        // approved correction, whose approval fixes the rate.
+        let time_sql = self.sql(&format!(
+            "SELECT CAST(COUNT(*) AS BIGINT), CAST(COALESCE(SUM(t.minutes), 0) AS BIGINT) \
+             FROM time_entries t WHERE t.project_id = ? AND t.status <> 'approved' AND {COUNTS}"
+        ));
+        let rate_sql = self.sql(&format!(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries t \
+             WHERE t.project_id = ? AND t.status = 'approved' AND t.labor_cost IS NULL \
+             AND {COUNTS}"
+        ));
         let (time, missing): (Option<(i64, i64)>, i64) = on_pool!(&self.db, pool => (
             fetch_optional!(pool, time_sql, project_id)?,
             scalar!(pool, rate_sql, project_id)?,
@@ -1068,7 +1073,9 @@ mod tests {
         assert_eq!(f.len(), 2, "{f:?}");
         assert!(f.iter().all(|(field, _)| field == "blockers"));
 
-        // Process them: approve the cost, price the hour (here: drop it).
+        // Process them: approve the cost, and price the hour by correcting
+        // it once the rate is registered (P6b-2: the correction's approval
+        // fixes the rate, the entry it replaces drops out).
         let submitted = costs
             .submit(1, pending.id, pending.row_version)
             .await
@@ -1085,11 +1092,58 @@ mod tests {
             )
             .await
             .unwrap();
+        crate::calc_basis::CalcBasisService::new(db.clone())
+            .add(
+                None,
+                crate::calc_basis::tests::value("emp_rate", "2026-01-01", Some(6_000), "標準"),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let time = crate::time_entries::TimeEntriesService::new(db.clone());
         let sql = placeholders(
             db.dialect(),
-            "DELETE FROM time_entries WHERE project_id = ? AND labor_cost IS NULL",
+            "SELECT id FROM time_entries WHERE project_id = ? AND labor_cost IS NULL",
         );
-        on_pool!(&db, pool => execute!(pool, sql, p)).unwrap();
+        let unpriced: i64 = on_pool!(&db, pool => scalar!(pool, sql, p)).unwrap();
+        let original = time.get(unpriced).await.unwrap();
+        let correction = time
+            .correct(
+                1,
+                unpriced,
+                crate::time_entries::CorrectionInput {
+                    entry: crate::time_entries::TimeEntryInput {
+                        work_date: original.work_date.clone(),
+                        project_id: Some(p),
+                        phase_id: Some(1),
+                        minutes: 60,
+                        row_version: Some(original.row_version),
+                        ..Default::default()
+                    },
+                    reason: Some("単価登録後の再計算".into()),
+                },
+            )
+            .await
+            .unwrap()
+            .entry;
+        let c = svc.check(p).await.unwrap();
+        assert!(
+            c.blockers.iter().any(|b| !b.waivable),
+            "the correction in flight needs processing"
+        );
+        let priced = time
+            .decide(
+                &correction,
+                DecisionInput {
+                    approve: true,
+                    reason: None,
+                    row_version: correction.row_version,
+                },
+                Some(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(priced.labor_cost, Some(6_000));
 
         let c = svc.check(p).await.unwrap();
         assert!(c.blockers.iter().all(|b| b.waivable));

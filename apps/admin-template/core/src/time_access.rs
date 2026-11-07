@@ -7,7 +7,7 @@
 
 use banto_admin_services::authz::{sees_record_costs, Operation, Subject};
 
-use crate::time_entries::{TimeEntry, TimeEntrySaved};
+use crate::time_entries::{CorrectionPair, TimeEntry, TimeEntrySaved};
 
 /// The operation that lets a person enter hours on a target: `EnterTime` on
 /// the project, or `EnterCommonTime` (also for an input naming neither, which
@@ -20,8 +20,15 @@ pub fn enter_op(project_id: Option<i64>) -> Operation {
 }
 
 /// The operation that decides an entry: `Approve` on its project, or
-/// `ApproveCommon` for a common activity.
+/// `ApproveCommon` for a common activity. A correction of an approved entry
+/// is accounting's (`ApproveCorrection`, spec §4 訂正承認, T11) wherever it
+/// lands.
 pub fn approve_op(entry: &TimeEntry) -> Operation {
+    if entry.corrects_id.is_some() {
+        return Operation::ApproveCorrection {
+            submitted_by: entry.user_id,
+        };
+    }
     match entry.project_id {
         Some(project_id) => Operation::Approve {
             project_id,
@@ -41,6 +48,13 @@ pub fn shown(subject: &Subject, entry: TimeEntry) -> TimeEntry {
         entry
     } else {
         entry.without_costs()
+    }
+}
+
+pub fn shown_pair(subject: &Subject, pair: CorrectionPair) -> CorrectionPair {
+    CorrectionPair {
+        correction: shown(subject, pair.correction),
+        original: shown(subject, pair.original),
     }
 }
 

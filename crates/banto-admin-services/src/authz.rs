@@ -250,6 +250,11 @@ pub enum Operation {
     /// Approve hours someone submitted against a common activity. No project
     /// manager owns them, so accounting (`finance.close`) decides (P4b).
     ApproveCommon { submitted_by: i64 },
+    /// Approve a correction of an approved time entry (訂正承認, banto-cost
+    /// P6b-2, spec §4 / §11, T11): accounting (`finance.close`) on any
+    /// project, self-approval by policy. `submitted_by` is the person whose
+    /// hours are corrected (the one who requested the correction).
+    ApproveCorrection { submitted_by: i64 },
     /// Personal hourly cost rates (view).
     ViewRates,
     /// Personal hourly cost rates (register/change).
@@ -312,6 +317,7 @@ impl Operation {
             Operation::EditPurchaseOrder { .. } => "edit_purchase_order",
             Operation::SettleProject { .. } => "settle_project",
             Operation::ApproveCommon { .. } => "approve_common",
+            Operation::ApproveCorrection { .. } => "approve_correction",
             Operation::ViewRates => "view_rates",
             Operation::EditRates => "edit_rates",
             Operation::FinanceClose => "finance_close",
@@ -347,6 +353,7 @@ impl Operation {
             | Operation::OverrideCalcBasis { project_id, .. } => Some(project_id),
             Operation::EnterCommonTime
             | Operation::ApproveCommon { .. }
+            | Operation::ApproveCorrection { .. }
             | Operation::ViewRates
             | Operation::EditRates
             | Operation::FinanceClose
@@ -532,7 +539,8 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
             }
         }
         Operation::EnterCommonTime => require(subject, Capability::TimeEntry)?,
-        Operation::ApproveCommon { submitted_by } => {
+        Operation::ApproveCommon { submitted_by }
+        | Operation::ApproveCorrection { submitted_by } => {
             require(subject, Capability::FinanceClose)?;
             if subject.user_id == Some(submitted_by) {
                 if !policy.allow_self_approval {
@@ -1122,6 +1130,39 @@ mod tests {
 
     fn allow(s: &Subject, op: Operation) {
         authorize(s, op, Policy::default()).expect("should be allowed");
+    }
+
+    #[test]
+    fn t11_correction_approval_is_accountings() {
+        let pm = subject(
+            12,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P1, MemberKind::Manager)],
+        );
+        assert_eq!(
+            deny(&pm, Operation::ApproveCorrection { submitted_by: 10 }),
+            Denial::MissingCapability(Capability::FinanceClose),
+            "a project manager approves hours but not their corrections"
+        );
+        let finance = subject(13, &[Capability::FinanceClose], &[]);
+        allow(&finance, Operation::ApproveCorrection { submitted_by: 10 });
+        assert_eq!(
+            deny(&finance, Operation::ApproveCorrection { submitted_by: 13 }),
+            Denial::SelfApproval
+        );
+        let own = authorize(
+            &finance,
+            Operation::ApproveCorrection { submitted_by: 13 },
+            Policy {
+                allow_self_approval: true,
+            },
+        )
+        .unwrap();
+        assert!(own.self_approval_exception);
+        assert_eq!(
+            Operation::ApproveCorrection { submitted_by: 1 }.name(),
+            "approve_correction"
+        );
     }
 
     #[test]

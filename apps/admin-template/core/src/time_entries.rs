@@ -12,7 +12,16 @@
 //!
 //! Workflow: 下書き → 申請 → 承認, or 差戻し (back to the person, who edits and
 //! submits again). Only drafts and returned entries can be edited or
-//! deleted; an approved entry is never edited here (corrections are P6b-2).
+//! deleted; an approved entry is never edited here.
+//!
+//! Corrections (訂正, P6b-2, spec §8 / §11, T11): the owner of an approved
+//! entry requests a correction - a new row naming the entry (`corrects_id`)
+//! with a reason, submitted at once - and accounting approves it again
+//! (`ApproveCorrection`). The rate is fixed anew at that approval, so this is
+//! also how an entry approved without a rate gets its cost. Once approved,
+//! the entry it names drops out of every figure ([`COUNTS`], mirroring
+//! `cost_domain::time::counts`); a returned correction is history only. A
+//! correction is never edited: a returned one is requested again.
 //! An entry dated in a closed month (月次締め, P6b) takes no write at all:
 //! every write checks the month in its transaction (`refuse_closed!`).
 //! On approval the `emp_rate` calc-basis row in effect on the work date and
@@ -31,8 +40,9 @@ use banto_server::ServerEvent;
 use banto_storage::{Db, Dialect};
 use cost_domain::calc_basis::{CalcValue, Source, Usage, UsageStatus};
 use cost_domain::time::{
-    approval_cost, check_entry, summarize, DayEntry, EntryInput, Rework, SummaryEntry, Target,
-    TimeIssue, TimeStatus, TimeSummary, TimeWarning, RATE_ITEM, UNIT_ITEM,
+    approval_cost, check_correction, check_entry, summarize, CorrectionIssue, CorrectionTarget,
+    DayEntry, EntryInput, Rework, SummaryEntry, Target, TimeIssue, TimeStatus, TimeSummary,
+    TimeWarning, RATE_ITEM, UNIT_ITEM,
 };
 use cost_domain::{calc_basis, Date, Minutes};
 use serde::{Deserialize, Serialize};
@@ -53,8 +63,23 @@ const DAY_ITEM: &str = "day_minutes";
 pub const MAX_RANGE_DAYS: i64 = 62;
 pub const MAX_REQUEST_ID_LEN: usize = 100;
 
-/// One time entry as the screens see it.
 const SETTLED_MESSAGE: &str = "精算完了の案件には工数を入力できません";
+
+/// The rows that count in the figures, `t` being `time_entries`: not an
+/// entry replaced by an approved correction, not a returned correction
+/// (`cost_domain::time::counts`, T11).
+/// A macro so `concat!` can build constant SQL from it.
+macro_rules! counts_sql {
+    () => {
+        "NOT EXISTS (SELECT 1 FROM time_entries rc \
+         WHERE rc.corrects_id = t.id AND rc.status = 'approved') \
+         AND NOT (t.corrects_id IS NOT NULL AND t.status = 'returned')"
+    };
+}
+pub(crate) use counts_sql;
+pub(crate) const COUNTS: &str = counts_sql!();
+
+/// One time entry as the screens see it.
 
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +112,13 @@ pub struct TimeEntry {
     pub labor_cost: Option<i64>,
     /// Approved without a rate: 原価未確定 (T04). Not an amount, always shown.
     pub cost_missing: bool,
+    /// A correction: the entry it replaces once approved (T11).
+    pub corrects_id: Option<i64>,
+    pub correction_reason: Option<String>,
+    /// The approved correction that replaced this entry; it no longer counts.
+    pub replaced_by_id: Option<i64>,
+    /// A correction of this entry waits for approval.
+    pub correction_pending: bool,
     pub row_version: i64,
     pub updated_at: String,
 }
@@ -109,6 +141,7 @@ impl TimeEntry {
             "projectId": self.project_id,
             "activityId": self.activity_id,
             "status": self.status,
+            "correctsId": self.corrects_id,
         })
     }
 }
@@ -135,6 +168,25 @@ pub struct TimeEntryInput {
     /// Required on update (T13).
     #[serde(default)]
     pub row_version: Option<i64>,
+}
+
+/// A correction of an approved entry: the corrected values, the reason, and
+/// in `entry.row_version` the version of the entry being corrected (T13).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionInput {
+    #[serde(flatten)]
+    pub entry: TimeEntryInput,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// A correction waiting for approval, with the entry it would replace.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionPair {
+    pub correction: TimeEntry,
+    pub original: TimeEntry,
 }
 
 /// `rowVersion` for submit / delete.
@@ -243,6 +295,11 @@ const SELECT: &str = "SELECT t.id, t.work_date, t.user_id, u.display_name AS use
      d.display_name AS decided_by_name, t.decided_at, t.return_reason, \
      t.applied_rate, t.labor_cost, \
      (t.status = 'approved' AND t.labor_cost IS NULL) AS cost_missing, \
+     t.corrects_id, t.correction_reason, \
+     (SELECT rc.id FROM time_entries rc WHERE rc.corrects_id = t.id \
+      AND rc.status = 'approved') AS replaced_by_id, \
+     EXISTS (SELECT 1 FROM time_entries pc WHERE pc.corrects_id = t.id \
+      AND pc.status = 'submitted') AS correction_pending, \
      t.row_version, t.updated_at \
      FROM time_entries t JOIN users u ON u.id = t.user_id \
      LEFT JOIN projects p ON p.id = t.project_id \
@@ -317,6 +374,36 @@ fn issue_error(issue: &TimeIssue) -> FieldError {
             field_error("phaseId", "共通活動には工程・手直し区分を付けません")
         }
     }
+}
+
+fn correction_error(issue: &CorrectionIssue) -> FieldError {
+    match issue {
+        CorrectionIssue::NotApproved => field_error(
+            "status",
+            "承認済みの工数だけを訂正できます（承認前は差戻し後に直します）",
+        ),
+        CorrectionIssue::AlreadyReplaced => field_error(
+            "status",
+            "この工数は訂正済みです。訂正後の工数の方を訂正してください",
+        ),
+        CorrectionIssue::Pending => pending_correction_error(),
+        CorrectionIssue::ReasonRequired => field_error("reason", "訂正の理由を入力してください"),
+    }
+}
+
+fn pending_correction_error() -> FieldError {
+    field_error(
+        "status",
+        "この工数には申請中の訂正があります。承認か差戻しを待ってください",
+    )
+}
+
+/// The rows of a person's day the 24-hour check counts (`extra` narrows it).
+fn day_sql(extra: &str) -> String {
+    format!(
+        "SELECT t.id, t.project_id, t.activity_id, t.phase_id, t.minutes FROM time_entries t \
+         WHERE t.user_id = ? AND t.work_date = ? AND {COUNTS}{extra}"
+    )
 }
 
 fn warning_view(w: TimeWarning) -> WarningView {
@@ -417,7 +504,10 @@ impl TimeEntriesService {
         scope: &ProjectScope,
         common: bool,
     ) -> Result<Vec<TimeEntry>, BantoError> {
-        let sql = format!("{SELECT} WHERE t.status = 'submitted' ORDER BY t.work_date, t.id");
+        let sql = format!(
+            "{SELECT} WHERE t.status = 'submitted' AND t.corrects_id IS NULL \
+             ORDER BY t.work_date, t.id"
+        );
         let rows: Vec<TimeEntry> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
         Ok(rows
             .into_iter()
@@ -426,6 +516,51 @@ impl TimeEntriesService {
                 None => common,
             })
             .collect())
+    }
+
+    /// Corrections waiting for approval, each with the entry it replaces
+    /// (accounting decides them all: `ApproveCorrection`).
+    pub async fn pending_corrections(&self) -> Result<Vec<CorrectionPair>, BantoError> {
+        let sql = format!(
+            "{SELECT} WHERE t.status = 'submitted' AND t.corrects_id IS NOT NULL \
+             ORDER BY t.work_date, t.id"
+        );
+        let rows: Vec<TimeEntry> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
+        let mut out = Vec::with_capacity(rows.len());
+        for correction in rows {
+            let original = self
+                .get(correction.corrects_id.expect("filtered above"))
+                .await?;
+            out.push(CorrectionPair {
+                correction,
+                original,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The corrections of an entry and of the corrections after it, newest
+    /// first: the chain's history for the owner's screen.
+    pub async fn corrections_of(
+        &self,
+        user_id: i64,
+        id: i64,
+    ) -> Result<Vec<TimeEntry>, BantoError> {
+        let mut current = self.own(user_id, id).await?;
+        let sql = self.sql(&format!("{SELECT} WHERE t.corrects_id = ? ORDER BY t.id"));
+        let mut out = Vec::new();
+        loop {
+            let rows: Vec<TimeEntry> =
+                on_pool!(&self.db, pool => fetch_all!(pool, sql, current.id))?;
+            let next = rows.iter().find(|r| r.status == "approved").cloned();
+            out.extend(rows);
+            match next {
+                Some(n) => current = n,
+                None => break,
+            }
+        }
+        out.reverse();
+        Ok(out)
     }
 
     /// Check the input against the masters, the project and the calc basis.
@@ -613,10 +748,7 @@ impl TimeEntriesService {
             .company_value(DAY_ITEM, checked.project_id(), on)
             .await?;
         let lock = self.lock_sql();
-        let day = self.sql(
-            "SELECT id, project_id, activity_id, phase_id, minutes FROM time_entries \
-             WHERE user_id = ? AND work_date = ?",
-        );
+        let day = self.sql(&day_sql(""));
         let insert = self.sql(
             "INSERT INTO time_entries (work_date, user_id, project_id, activity_id, phase_id, \
              minutes, description, rework_kind, status, client_request_id) \
@@ -700,6 +832,11 @@ impl TimeEntriesService {
         if !status.is_editable() {
             return Err(status_error("申請中・承認済みの工数は変更できません"));
         }
+        if entry.corrects_id.is_some() {
+            return Err(status_error(
+                "訂正は変更・削除・再申請できません。もう一度訂正を申請してください",
+            ));
+        }
         if row_version != Some(entry.row_version) {
             return Err(stale_version_error());
         }
@@ -721,10 +858,7 @@ impl TimeEntriesService {
             .company_value(DAY_ITEM, checked.project_id(), on)
             .await?;
         let lock = self.lock_sql();
-        let day = self.sql(
-            "SELECT id, project_id, activity_id, phase_id, minutes FROM time_entries \
-             WHERE user_id = ? AND work_date = ? AND id <> ?",
-        );
+        let day = self.sql(&day_sql(" AND t.id <> ?"));
         let update = self.sql(&format!(
             "UPDATE time_entries SET work_date = ?, project_id = ?, activity_id = ?, \
              phase_id = ?, minutes = ?, description = ?, rework_kind = ?, \
@@ -759,6 +893,144 @@ impl TimeEntriesService {
         self.notify_changed();
         Ok(TimeEntrySaved {
             entry: self.get(id).await?,
+            warnings,
+            replayed: false,
+        })
+    }
+
+    /// Request a correction of `user_id`'s approved entry `id` (T11): a new
+    /// row naming it, with the corrected values and a reason, submitted at
+    /// once. The entry keeps counting until the correction is approved.
+    ///
+    /// Both the entry's month and the correction's month must be open (a
+    /// closed month is corrected after accounting reopens it, P6b-1), and
+    /// neither project may be settled. The unique index on `corrects_id`
+    /// keeps a second correction of the same entry out, also against a
+    /// concurrent request.
+    pub async fn correct(
+        &self,
+        user_id: i64,
+        id: i64,
+        input: CorrectionInput,
+    ) -> Result<TimeEntrySaved, BantoError> {
+        let original = self.own(user_id, id).await?;
+        let checked = self.check(&input.entry, Some(&original)).await?;
+        if let Some(rid) = &checked.request_id {
+            if let Some(existing) = self.by_request(user_id, rid).await? {
+                return self.replayed(existing).await;
+            }
+        }
+        if input.entry.row_version != Some(original.row_version) {
+            return Err(stale_version_error());
+        }
+        let reason = clean_optional(&input.reason);
+        let status = TimeStatus::parse(&original.status)
+            .ok_or_else(|| BantoError::Other(format!("不明な状態です: {}", original.status)))?;
+        let target = CorrectionTarget {
+            status,
+            replaced: original.replaced_by_id.is_some(),
+            pending: original.correction_pending,
+        };
+        let mut errors: Vec<FieldError> = match check_correction(target, reason.as_deref()) {
+            Ok(()) => Vec::new(),
+            Err(issues) => issues.iter().map(correction_error).collect(),
+        };
+        if reason
+            .as_deref()
+            .is_some_and(|r| r.chars().count() > MAX_TEXT_LEN)
+        {
+            errors.push(field_error(
+                "reason",
+                format!("{MAX_TEXT_LEN}文字以内で入力してください"),
+            ));
+        }
+        validation(errors)?;
+        if let Some(pid) = original.project_id {
+            self.require_open_project(pid).await?;
+        }
+        let on = checked.domain.work_date;
+        let unit = self.company_value(UNIT_ITEM, None, on).await?;
+        let standard = self
+            .company_value(DAY_ITEM, checked.project_id(), on)
+            .await?;
+        let lock = self.lock_sql();
+        // The entry being corrected is replaced, so its minutes do not count.
+        let day = self.sql(&day_sql(" AND t.id <> ?"));
+        let insert = self.sql(&format!(
+            "INSERT INTO time_entries (work_date, user_id, project_id, activity_id, phase_id, \
+             minutes, description, rework_kind, status, submitted_at, client_request_id, \
+             corrects_id, correction_reason) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'submitted', {}, ?, ?, ?) RETURNING id",
+            self.now()
+        ));
+        // Re-read in the transaction: approved and not replaced (T13).
+        let still = self.sql(&format!(
+            "SELECT t.id FROM time_entries t WHERE t.id = ? AND t.status = 'approved' \
+             AND t.row_version = ? AND {COUNTS}"
+        ));
+        let date = on.to_string();
+        let rework = checked.domain.rework.map(Rework::as_str);
+        let again =
+            self.sql("SELECT id FROM time_entries WHERE user_id = ? AND client_request_id = ?");
+        let settled = settled_check_sql(self.db.dialect());
+        let gate = MonthGate::new(self.db.dialect());
+        let version = original.row_version;
+        let result: Result<Result<(i64, Vec<WarningView>), i64>, BantoError> = async {
+            Ok(in_tx!(&self.db, tx => {
+                if let Some(lock) = &lock {
+                    let _: Vec<(i64,)> = fetch_all!(&mut *tx, lock, user_id)?;
+                }
+                let first: Option<(i64,)> = match &checked.request_id {
+                    Some(rid) => fetch_optional!(&mut *tx, again, user_id, rid)?,
+                    None => None,
+                };
+                if let Some((existing,)) = first {
+                    Err(existing)
+                } else {
+                    let live: Option<(i64,)> = fetch_optional!(&mut *tx, still, id, version)?;
+                    if live.is_none() {
+                        return Err(stale_version_error());
+                    }
+                    let rows: Vec<DayRow> = fetch_all!(&mut *tx, day, user_id, &date, id)?;
+                    let warnings = Self::day_check(&checked, rows, unit, standard)?;
+                    let new_id: i64 = scalar!(&mut *tx, insert, &date, user_id,
+                        checked.project_id(), checked.activity_id(), checked.domain.phase,
+                        checked.domain.minutes, &checked.description, rework,
+                        &checked.request_id, id, &reason)?;
+                    refuse_closed!(&mut *tx, gate, &original.work_date, "workDate");
+                    refuse_closed!(&mut *tx, gate, &date, "workDate");
+                    if let Some(p) = original.project_id {
+                        refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
+                    }
+                    if let Some(p) = checked.project_id() {
+                        refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
+                    }
+                    Ok((new_id, warnings))
+                }
+            }))
+        }
+        .await;
+        let (new_id, warnings) = match result {
+            Ok(Ok(v)) => v,
+            Ok(Err(existing)) => return self.replayed(existing).await,
+            Err(BantoError::Storage(m)) if is_correction_conflict(&m) => {
+                return Err(BantoError::Validation {
+                    field_errors: vec![pending_correction_error()],
+                });
+            }
+            Err(BantoError::Storage(m)) if m.to_lowercase().contains("unique") => {
+                if let Some(rid) = &checked.request_id {
+                    if let Some(existing) = self.by_request(user_id, rid).await? {
+                        return self.replayed(existing).await;
+                    }
+                }
+                return Err(BantoError::Storage(m));
+            }
+            Err(e) => return Err(e),
+        };
+        self.notify_changed();
+        Ok(TimeEntrySaved {
+            entry: self.get(new_id).await?,
             warnings,
             replayed: false,
         })
@@ -833,11 +1105,31 @@ impl TimeEntriesService {
         {
             return Err(stale_version_error());
         }
+        // A correction also writes into the month and project of the entry
+        // it replaces (T11).
+        let original = match entry.corrects_id {
+            Some(oid) => Some(self.get(oid).await?),
+            None => None,
+        };
         if input.approve {
             if let Some(pid) = entry.project_id {
                 self.require_open_project(pid).await?;
             }
+            if let Some(pid) = original.as_ref().and_then(|o| o.project_id) {
+                self.require_open_project(pid).await?;
+            }
         }
+        let original_date = original.as_ref().map(|o| o.work_date.clone());
+        let original_project = original.as_ref().and_then(|o| o.project_id);
+        // Approving a correction touches the replaced entry's version, so a
+        // settlement or a monthly close that read the entry sees the change
+        // in its fingerprint (T13); the entry's values stay as approved.
+        let touch = self.sql(&format!(
+            "UPDATE time_entries SET row_version = row_version + 1, updated_at = {} \
+             WHERE id = ? AND status = 'approved'",
+            self.now()
+        ));
+        let settled = settled_check_sql(self.db.dialect());
         let gate = MonthGate::new(self.db.dialect());
         let changed = if input.approve {
             let work_date = parse_date("workDate", &entry.work_date)?;
@@ -863,6 +1155,20 @@ impl TimeEntriesService {
                 let n = execute!(&mut *tx, sql, value_id, rate, cost.cost, actor_user_id, id,
                     input.row_version)?;
                 refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
+                if let Some(oid) = entry.corrects_id {
+                    if n > 0 && execute!(&mut *tx, touch, oid)? == 0 {
+                        return Err(stale_version_error());
+                    }
+                }
+                if let Some(d) = &original_date {
+                    refuse_closed!(&mut *tx, gate, d, "workDate");
+                }
+                if let Some(p) = original_project {
+                    refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
+                }
+                if let Some(p) = entry.project_id {
+                    refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
+                }
                 n
             })
         } else {
@@ -887,6 +1193,9 @@ impl TimeEntriesService {
             in_tx!(&self.db, tx => {
                 let n = execute!(&mut *tx, sql, &reason, actor_user_id, id, input.row_version)?;
                 refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
+                if let Some(d) = &original_date {
+                    refuse_closed!(&mut *tx, gate, d, "workDate");
+                }
                 n
             })
         };
@@ -909,11 +1218,11 @@ impl TimeEntriesService {
                 id: project_id.to_string(),
             });
         }
-        let sql = self.sql(
+        let sql = self.sql(&format!(
             "SELECT t.status, t.minutes, t.labor_cost, t.phase_id, ph.name, t.rework_kind \
              FROM time_entries t LEFT JOIN phases ph ON ph.id = t.phase_id \
-             WHERE t.project_id = ? ORDER BY ph.sort_order, t.phase_id",
-        );
+             WHERE t.project_id = ? AND {COUNTS} ORDER BY ph.sort_order, t.phase_id"
+        ));
         type Row = (
             String,
             i64,
@@ -956,6 +1265,12 @@ impl TimeEntriesService {
     }
 }
 
+/// A second in-flight or approved correction of the same entry hit the
+/// unique index (SQLite names the column, Postgres the index).
+fn is_correction_conflict(message: &str) -> bool {
+    message.contains("corrects_id") || message.contains("time_entries_one_correction")
+}
+
 /// The `calc_values` row a resolved value came from.
 pub(crate) fn row_of(
     rows: &[CalcValueRow],
@@ -991,8 +1306,12 @@ pub(crate) async fn usages(db: &Db, item_key: &str) -> Result<Vec<Usage>, BantoE
         return Ok(Vec::new());
     }
     let closed = crate::closing::closed_months(db).await?;
-    let sql =
-        "SELECT id, project_id, work_date, status, applied_rate FROM time_entries".to_string();
+    // A replaced entry and a returned correction are neither pending nor
+    // correction candidates (T11).
+    let sql = format!(
+        "SELECT t.id, t.project_id, t.work_date, t.status, t.applied_rate \
+         FROM time_entries t WHERE {COUNTS}"
+    );
     type Row = (i64, Option<i64>, String, String, Option<i64>);
     let rows: Vec<Row> = on_pool!(db, pool => fetch_all!(pool, sql))?;
     Ok(rows
@@ -1569,5 +1888,300 @@ mod tests {
             ["rowVersion"]
         );
         assert_eq!(svc.get(e.id).await.unwrap().status, "submitted");
+    }
+
+    fn correction(from: &TimeEntry, minutes: i64, reason: Option<&str>) -> CorrectionInput {
+        CorrectionInput {
+            entry: TimeEntryInput {
+                work_date: from.work_date.clone(),
+                project_id: from.project_id,
+                activity_id: from.activity_id,
+                phase_id: from.phase_id,
+                minutes,
+                description: from.description.clone(),
+                row_version: Some(from.row_version),
+                ..Default::default()
+            },
+            reason: reason.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn t11_correction_replaces_the_entry_only_once_approved() {
+        let (db, svc, p) = setup().await;
+        // Approved without a rate: 原価未確定, the P6a case a correction resolves.
+        let e = svc.create(2, entry(p, "2026-11-09", 120)).await.unwrap();
+        let original = submit_and_approve(&svc, 2, e.entry.id).await;
+        assert!(original.cost_missing);
+        set_rate(&db, "emp_rate", "2026-06-01", 6_000).await;
+
+        let c = svc
+            .correct(
+                2,
+                original.id,
+                correction(&original, 90, Some("時間の誤り")),
+            )
+            .await
+            .unwrap()
+            .entry;
+        assert_eq!(c.status, "submitted");
+        assert_eq!(c.corrects_id, Some(original.id));
+        assert_eq!(c.correction_reason.as_deref(), Some("時間の誤り"));
+        assert!(svc.get(original.id).await.unwrap().correction_pending);
+        // Until approved, the entry still counts and the correction is pending.
+        let s = svc.project_summary(p).await.unwrap();
+        assert_eq!(s.total.approved.minutes, 120);
+        assert_eq!(s.total.submitted.minutes, 90);
+        // Managers' approval list leaves it to accounting's.
+        assert!(svc
+            .approvals(&ProjectScope::All, true)
+            .await
+            .unwrap()
+            .is_empty());
+        let pending = svc.pending_corrections().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].original.id, original.id);
+        assert_eq!(pending[0].original.minutes, 120);
+
+        let approved = svc
+            .decide(&c, decision(c.row_version, true), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(approved.labor_cost, Some(9_000), "the rate is fixed anew");
+        let before = svc.get(original.id).await.unwrap();
+        assert_eq!(before.replaced_by_id, Some(c.id));
+        assert_eq!(
+            (before.minutes, before.labor_cost),
+            (120, None),
+            "the replaced entry keeps its approved values"
+        );
+        let s = svc.project_summary(p).await.unwrap();
+        assert_eq!(s.total.approved.minutes, 90);
+        assert_eq!(s.total.labor_cost, 9_000);
+        assert!(s.total.complete);
+        // The chain, newest first; the replaced entry cannot be corrected again.
+        let chain = svc.corrections_of(2, original.id).await.unwrap();
+        assert_eq!(chain.iter().map(|e| e.id).collect::<Vec<_>>(), [c.id]);
+        assert_eq!(
+            fields(
+                svc.correct(2, original.id, correction(&before, 60, Some("x")))
+                    .await
+                    .unwrap_err()
+            ),
+            ["status"]
+        );
+        // The correction is the one to correct next.
+        let again = svc
+            .correct(
+                2,
+                approved.id,
+                correction(&approved, 60, Some("さらに訂正")),
+            )
+            .await
+            .unwrap()
+            .entry;
+        assert_eq!(again.corrects_id, Some(approved.id));
+        // A replaced entry is not a correction candidate of the calc basis.
+        let preview = CalcBasisService::new(db.clone())
+            .preview(None, value("emp_rate", "2026-11-01", Some(7_000), "x"))
+            .await
+            .unwrap();
+        assert_eq!(preview.correction_candidates, 1);
+        assert_eq!(preview.pending, 1);
+    }
+
+    #[tokio::test]
+    async fn t11_correction_needs_an_approved_entry_a_reason_and_no_other_pending() {
+        let (_db, svc, p) = setup().await;
+        let draft = svc
+            .create(2, entry(p, "2026-11-09", 60))
+            .await
+            .unwrap()
+            .entry;
+        assert_eq!(
+            fields(
+                svc.correct(2, draft.id, correction(&draft, 30, Some("x")))
+                    .await
+                    .unwrap_err()
+            ),
+            ["status"],
+            "before approval the normal flow fixes it"
+        );
+        let original = submit_and_approve(&svc, 2, draft.id).await;
+        assert!(matches!(
+            svc.correct(1, original.id, correction(&original, 30, Some("x")))
+                .await,
+            Err(BantoError::NotFound { .. })
+        ));
+        assert_eq!(
+            fields(
+                svc.correct(2, original.id, correction(&original, 30, Some(" ")))
+                    .await
+                    .unwrap_err()
+            ),
+            ["reason"]
+        );
+        let mut stale = correction(&original, 30, Some("x"));
+        stale.entry.row_version = Some(original.row_version - 1);
+        assert_eq!(
+            fields(svc.correct(2, original.id, stale).await.unwrap_err()),
+            ["rowVersion"]
+        );
+        let c = svc
+            .correct(2, original.id, correction(&original, 30, Some("x")))
+            .await
+            .unwrap()
+            .entry;
+        assert_eq!(
+            fields(
+                svc.correct(2, original.id, correction(&original, 45, Some("y")))
+                    .await
+                    .unwrap_err()
+            ),
+            ["status"],
+            "one correction in flight"
+        );
+        // Returned: history only, not unprocessed, never edited.
+        let r = svc
+            .decide(&c, decision(c.row_version, false), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(r.status, "returned");
+        let s = svc.project_summary(p).await.unwrap();
+        assert_eq!(s.total.approved.minutes, 60);
+        assert_eq!(s.total.unsubmitted.count, 0);
+        let mut edit = entry(p, "2026-11-09", 45);
+        edit.row_version = Some(r.row_version);
+        assert_eq!(
+            fields(svc.update(2, r.id, edit).await.unwrap_err()),
+            ["status"]
+        );
+        assert_eq!(
+            fields(svc.delete(2, r.id, r.row_version).await.unwrap_err()),
+            ["status"]
+        );
+        // A new correction can be requested; both stay in the chain.
+        let c2 = svc
+            .correct(2, original.id, correction(&original, 45, Some("y")))
+            .await
+            .unwrap()
+            .entry;
+        let chain = svc.corrections_of(2, original.id).await.unwrap();
+        assert_eq!(
+            chain.iter().map(|e| e.id).collect::<Vec<_>>(),
+            [c2.id, c.id]
+        );
+    }
+
+    #[tokio::test]
+    async fn t11_correction_moves_hours_and_checks_the_day() {
+        let (db, svc, p) = setup().await;
+        let other = ProjectsService::new(db.clone())
+            .create(project_input("P-002"), Some(1))
+            .await
+            .unwrap()
+            .id;
+        let e = svc
+            .create(2, entry(p, "2026-11-09", 23 * 60))
+            .await
+            .unwrap()
+            .entry;
+        let original = submit_and_approve(&svc, 2, e.id).await;
+        // The replaced minutes do not count against the corrected day.
+        let mut moved = correction(&original, 23 * 60 + 30, Some("案件の誤り"));
+        moved.entry.project_id = Some(other);
+        let c = svc.correct(2, original.id, moved).await.unwrap().entry;
+        svc.decide(&c, decision(c.row_version, true), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(
+            svc.project_summary(p).await.unwrap().total.approved.count,
+            0
+        );
+        assert_eq!(
+            svc.project_summary(other)
+                .await
+                .unwrap()
+                .total
+                .approved
+                .minutes,
+            23 * 60 + 30
+        );
+        // The replaced entry no longer fills the day either.
+        assert_eq!(
+            fields(svc.create(2, entry(p, "2026-11-09", 60)).await.unwrap_err()),
+            ["minutes"],
+            "23:30 + 1:00 is over 24 hours"
+        );
+        svc.create(2, entry(p, "2026-11-09", 30)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn t11_a_closed_month_is_corrected_after_reopening() {
+        use crate::closing::{CloseInput, ClosingService, ReopenInput};
+        let (db, svc, p) = setup().await;
+        let e = svc
+            .create(2, entry(p, "2026-10-05", 60))
+            .await
+            .unwrap()
+            .entry;
+        let original = submit_and_approve(&svc, 2, e.id).await;
+        let closing = ClosingService::new(db.clone());
+        closing
+            .close("2026-10", CloseInput { row_version: 1 }, Some(1))
+            .await
+            .unwrap();
+        let mut moved = correction(&original, 60, Some("日付の誤り"));
+        moved.entry.work_date = "2026-11-05".into();
+        assert_eq!(
+            fields(
+                svc.correct(2, original.id, moved.clone())
+                    .await
+                    .unwrap_err()
+            ),
+            ["workDate"],
+            "the replaced entry's month is closed"
+        );
+        let m = closing.get("2026-10").await.unwrap();
+        closing
+            .reopen(
+                "2026-10",
+                ReopenInput {
+                    row_version: m.row_version,
+                    reason: "工数の訂正".into(),
+                },
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let c = svc.correct(2, original.id, moved).await.unwrap().entry;
+        // A correction in flight blocks closing the month again.
+        assert_eq!(
+            closing
+                .get("2026-11")
+                .await
+                .unwrap()
+                .unapproved_time_entries,
+            1
+        );
+        svc.decide(&c, decision(c.row_version, true), Some(1))
+            .await
+            .unwrap();
+        let m = closing.get("2026-10").await.unwrap();
+        assert!(m.can_close);
+        let closed = closing
+            .close(
+                "2026-10",
+                CloseInput {
+                    row_version: m.row_version,
+                },
+                Some(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            closed.total.labor_missing, 0,
+            "the replaced entry left October"
+        );
     }
 }
