@@ -114,6 +114,11 @@ export interface ForecastOverview {
 	currentProfitRatioPermille: number | null;
 	currentOverrun: number | null;
 	changeFromPrevious: number | null;
+	/** 目標粗利率 on the business date (`null` = 未設定, never 0%). */
+	targetMarginPct: number | null;
+	targetProfit: number | null;
+	/** 原資 = confirmed order − 目標粗利 (`null` before the order or with no rate). */
+	funds: number | null;
 	comparison: ForecastComparisonRow[];
 }
 
@@ -155,6 +160,9 @@ export interface PortfolioRow {
 	forecastProfit: number | null;
 	forecastRatioPermille: number | null;
 	forecastOverrun: number | null;
+	targetMarginPct: number | null;
+	/** 原資 (`null` before the order or with no 目標粗利率). */
+	funds: number | null;
 	alerts: string[];
 	updateReasons: string[];
 }

@@ -474,6 +474,8 @@ impl ReportsService {
                 Cell::opt_int(r.pending_addition),
                 Cell::opt_int(r.budget_total),
                 Cell::opt_int(r.budget_version_no),
+                Cell::opt_int(r.target_margin_pct),
+                Cell::opt_int(r.funds),
                 Cell::opt_int(r.actual_cost),
                 Cell::opt_text(r.actual_complete.map(|c| if c { "確定" } else { "暫定" })),
                 Cell::opt_int(r.forecast_version_no),
@@ -517,7 +519,7 @@ const MONTHLY_HEADER: [&str; 17] = [
     "案件累計粗利率(%)",
 ];
 
-const PORTFOLIO_HEADER: [&str; 18] = [
+const PORTFOLIO_HEADER: [&str; 20] = [
     "案件コード",
     "案件名",
     "顧客",
@@ -527,6 +529,8 @@ const PORTFOLIO_HEADER: [&str; 18] = [
     "未確定追加売上",
     "原価予算",
     "予算版",
+    "目標粗利率(%)",
+    "原資",
     "実績原価",
     "実績",
     "完了見込版",

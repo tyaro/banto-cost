@@ -144,7 +144,8 @@ const CALC_ITEM_LABELS: Record<string, () => string> = {
 	tax_rate: () => m['calcBasis.item.taxRate'](),
 	time_unit: () => m['calcBasis.item.timeUnit'](),
 	review_delay_days: () => m['calcBasis.item.reviewDelayDays'](),
-	low_margin_pct: () => m['calcBasis.item.lowMarginPct']()
+	low_margin_pct: () => m['calcBasis.item.lowMarginPct'](),
+	target_margin_pct: () => m['calcBasis.item.targetMarginPct']()
 };
 
 /** Calc-basis item label; an item added later shows the label stored with it. */
@@ -158,7 +159,8 @@ const CALC_GROUP_LABELS: Record<string, () => string> = {
 	conversion: () => m['calcBasis.group.conversion'](),
 	travel: () => m['calcBasis.group.travel'](),
 	tax_input: () => m['calcBasis.group.taxInput'](),
-	alert: () => m['calcBasis.group.alert']()
+	alert: () => m['calcBasis.group.alert'](),
+	profit: () => m['calcBasis.group.profit']()
 };
 
 export function calcGroupLabel(group: string): string {

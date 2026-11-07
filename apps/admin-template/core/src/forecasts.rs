@@ -37,6 +37,7 @@ use cost_domain::forecast::{
     summarize, update_reasons, validate_remaining, AdoptedFacts, AdoptionIssue, CostType,
     KeyedLine, PricedForecastLine, RemainingInput, RemainingIssue, UpdateReason, RATE_ITEM,
 };
+use cost_domain::funds::{funds, TARGET_MARGIN_ITEM};
 use cost_domain::project::ProjectStatus;
 use cost_domain::Date;
 use serde::{Deserialize, Serialize};
@@ -253,6 +254,15 @@ pub struct ForecastOverview {
     pub current_overrun: Option<i64>,
     /// The latest version's cost − the previous version's.
     pub change_from_previous: Option<i64>,
+    /// 目標粗利率 applied on the business date (the project's override or
+    /// the company basis); `None` = 未設定 (design §9.4 item 4, T36).
+    pub target_margin_pct: Option<i64>,
+    /// 目標粗利 = confirmed order × rate (円未満切り捨て).
+    pub target_profit: Option<i64>,
+    /// 原資 = confirmed order − 目標粗利: a ceiling to read the budget and
+    /// the forecast against, never written into a budget. `None` before the
+    /// order or while the rate is unset.
+    pub funds: Option<i64>,
     pub comparison: Vec<ComparisonRow>,
 }
 
@@ -1368,6 +1378,15 @@ impl ForecastsService {
         let latest_cost = latest.as_ref().and_then(|v| v.cost_total);
         let current_profit = latest_cost.map(|c| profit(order, c));
         let current_total = budget.current.as_ref().and_then(|b| b.total);
+        let target_margin_pct = applied_value(
+            &self.db,
+            TARGET_MARGIN_ITEM,
+            Some(project_id),
+            self.today().await?,
+        )
+        .await?
+        .map(|(v, _)| v);
+        let funds = funds(order, target_margin_pct);
         Ok(ForecastOverview {
             project_id,
             project_status: status.as_str().into(),
@@ -1392,6 +1411,9 @@ impl ForecastsService {
             current_profit: current_profit.filter(|_| order.is_some()).map(|p| p.amount),
             current_profit_ratio_permille: current_profit.and_then(|p| p.ratio_permille),
             current_overrun: latest_cost.zip(current_total).map(|(c, b)| overrun(c, b)),
+            target_margin_pct,
+            target_profit: funds.map(|f| f.target_profit),
+            funds: funds.map(|f| f.funds),
             comparison,
         })
     }

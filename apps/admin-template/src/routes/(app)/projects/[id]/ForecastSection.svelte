@@ -22,7 +22,13 @@
 	import { LoadingState, StatusBadge } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
-	import { formatSignedYen, formatYen, isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
+	import {
+		formatPct,
+		formatSignedYen,
+		formatYen,
+		isForbiddenError,
+		todayIso
+	} from '#lib/banto/costFormat.js';
 	import { COST_TYPES, type CostType } from '#lib/banto/budgetAdmin.js';
 	import { costTypeLabel, hoursToMinutes, minutesToHours } from '#lib/banto/budgetFormat.js';
 	import {
@@ -311,6 +317,19 @@
 			<div>
 				<span class="label">{m['forecast.currentBudget']()}</span>
 				<span class="value">{money(overview.budgetCurrentTotal)}</span>
+			</div>
+			<div>
+				<span class="label"
+					>{overview.targetMarginPct === null
+						? m['forecast.fundsLabel']()
+						: m['forecast.funds']({ pct: formatPct(overview.targetMarginPct) })}</span
+				>
+				<span class="value"
+					>{overview.targetMarginPct === null ? m['cost.unset']() : money(overview.funds)}</span
+				>
+				{#if overview.targetMarginPct === null}
+					<span class="label">{m['forecast.fundsUnsetRate']()}</span>
+				{/if}
 			</div>
 			<div>
 				<span class="label">{m['forecast.costTotal']()}</span>
