@@ -79,18 +79,23 @@
 	const money = (v: unknown) => (typeof v === 'number' ? formatYen(v) : '—');
 	const numeric = (a: unknown, b: unknown) =>
 		(typeof a === 'number' ? a : -Infinity) - (typeof b === 'number' ? b : -Infinity);
+	/** A provisional adopted forecast (暫定・不足あり) is marked, never shown as final. */
+	const provisional = (row: Row) =>
+		row.pf?.forecastActualComplete === false ? m['forecast.provisionalShort']() : '';
 	function amountColumn(
 		id: string,
 		header: string,
-		pick: (r: PortfolioRow) => number | null
+		pick: (r: PortfolioRow) => number | null,
+		forecast = false
 	): GridColumn<Row> {
 		return {
 			id,
 			header,
 			accessor: (row) => (row.pf ? pick(row.pf) : null),
-			width: 140,
+			width: forecast ? 170 : 140,
 			align: 'right',
-			format: money,
+			format: (v, row) =>
+				forecast && typeof v === 'number' ? `${money(v)}${provisional(row)}` : money(v),
 			comparator: numeric
 		};
 	}
@@ -145,8 +150,13 @@
 		amountColumn('orderAmount', m['portfolio.colOrder'](), (r) => r.orderAmount),
 		amountColumn('budgetTotal', m['portfolio.colBudget'](), (r) => r.budgetTotal),
 		amountColumn('actualCost', m['portfolio.colActual'](), (r) => r.actualCost),
-		amountColumn('forecastCost', m['portfolio.colForecastCost'](), (r) => r.forecastCost),
-		amountColumn('forecastProfit', m['portfolio.colForecastProfit'](), (r) => r.forecastProfit),
+		amountColumn('forecastCost', m['portfolio.colForecastCost'](), (r) => r.forecastCost, true),
+		amountColumn(
+			'forecastProfit',
+			m['portfolio.colForecastProfit'](),
+			(r) => r.forecastProfit,
+			true
+		),
 		{
 			id: 'forecastRatio',
 			header: m['portfolio.colForecastRatio'](),
@@ -234,6 +244,13 @@
 						<dt>{m['portfolio.forecastProfitTotal']({ count: t.forecastCount })}</dt>
 						<dd>
 							{formatYen(t.forecastProfitTotal)} ({formatPermille(t.forecastRatioPermille)})
+							{#if t.provisionalForecasts.length > 0}
+								<span class="warn"
+									>{m['portfolio.provisionalForecasts']({
+										count: t.provisionalForecasts.length
+									})}</span
+								>
+							{/if}
 						</dd>
 					</div>
 					<div>
@@ -311,6 +328,11 @@
 	.summary dd {
 		margin: 0;
 		font-variant-numeric: tabular-nums;
+	}
+
+	.warn {
+		color: var(--banto-warning-tint-text);
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.alerts {

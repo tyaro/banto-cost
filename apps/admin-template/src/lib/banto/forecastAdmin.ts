@@ -149,6 +149,8 @@ export interface PortfolioRow {
 	actualComplete: boolean | null;
 	forecastVersionNo: number | null;
 	forecastBaseDate: string | null;
+	/** `false` = the adopted version was 暫定・不足あり at its base date. */
+	forecastActualComplete: boolean | null;
 	forecastCost: number | null;
 	forecastProfit: number | null;
 	forecastRatioPermille: number | null;
@@ -169,6 +171,8 @@ export interface PortfolioTotals {
 	forecastRatioPermille: number | null;
 	needsUpdate: number[];
 	withoutForecast: number[];
+	/** Summed forecasts that were 暫定・不足あり at their base date. */
+	provisionalForecasts: number[];
 	oldestBaseDate: string | null;
 	alertCounts: { alert: string; count: number }[];
 }

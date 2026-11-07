@@ -1370,5 +1370,6 @@
   "portfolio.thresholdUnset": "Unset thresholds (review delay days, low margin) are not judged (set them in the calc basis).",
   "portfolio.loadError": "Could not load the amounts and alerts; only the ledger columns are shown.",
   "forecast.sum": "Total",
-  "forecast.discard": "Discard draft"
+  "forecast.discard": "Discard draft",
+  "portfolio.provisionalForecasts": "includes {count} provisional"
 }

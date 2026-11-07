@@ -1846,5 +1846,58 @@ pub(crate) mod tests {
         let s = svc.summary(pid, &[], Some(1_000_000)).await.unwrap();
         assert_eq!(s.unapproved, 1);
         assert!(s.update_reasons.is_empty());
+        // The overall list keeps it marked provisional (not as final figures).
+        let all = banto_admin_services::authz::ProjectScope::All;
+        let p = svc.portfolio().overview(&all, &all).await.unwrap();
+        let row = p.rows.iter().find(|r| r.project_id == pid).unwrap();
+        assert_eq!(row.forecast_actual_complete, Some(false));
+        assert_eq!(p.totals.provisional_forecasts, vec![pid]);
+    }
+
+    #[tokio::test]
+    async fn a_provisional_confirmed_after_the_base_date_still_counts_on_that_date() {
+        let db = fixture().await;
+        let svc = ForecastsService::new(db.clone());
+        let costs = DirectCostsService::new(db.clone());
+        let pid = ordered_project(&db, "P-F05", vec![plan_line(None, 1_000_000)]).await;
+        let provisional = approved(
+            &costs,
+            DirectCostInput {
+                project_id: Some(pid),
+                cost_type: Some("outsource".into()),
+                entry_kind: Some("provisional".into()),
+                booked_on: "2026-01-20".into(),
+                amount: 300_000,
+                ..Default::default()
+            },
+        )
+        .await;
+        approved(
+            &costs,
+            DirectCostInput {
+                entry_kind: Some("confirms".into()),
+                ref_id: Some(provisional.id),
+                booked_on: "2026-02-10".into(),
+                amount: 320_000,
+                reason: Some("請求書到着".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let d = svc.create_draft(pid, Some(2)).await.unwrap().draft;
+        // On 2026-01-31 the cost was the unconfirmed provisional.
+        let d = save(&svc, &d, "2026-01-31", Some("1月末"), vec![])
+            .await
+            .unwrap();
+        assert_eq!(d.actual_total, 300_000);
+        assert_eq!(d.provisional_count, 1);
+        assert!(!d.actual_complete);
+        // On 2026-02-28 the invoice replaced it.
+        let d = save(&svc, &d, "2026-02-28", Some("2月末"), vec![])
+            .await
+            .unwrap();
+        assert_eq!(d.actual_total, 320_000);
+        assert_eq!(d.provisional_count, 0);
+        assert!(d.actual_complete);
     }
 }

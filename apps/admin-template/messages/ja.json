@@ -1370,5 +1370,6 @@
   "portfolio.thresholdUnset": "確認遅れ日数・低利益率の閾値のうち未設定のものは判定していません（計算基準で設定します）。",
   "portfolio.loadError": "金額と注意表示を読み込めませんでした。台帳の列だけを表示しています。",
   "forecast.sum": "合計",
-  "forecast.discard": "見込案を破棄"
+  "forecast.discard": "見込案を破棄",
+  "portfolio.provisionalForecasts": "うち暫定・不足ありの見込 {count}件を含む"
 }

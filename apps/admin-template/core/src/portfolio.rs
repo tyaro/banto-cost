@@ -62,6 +62,9 @@ pub struct PortfolioRow {
     pub actual_complete: Option<bool>,
     pub forecast_version_no: Option<i64>,
     pub forecast_base_date: Option<String>,
+    /// The adopted version's actuals were final at its base date; `false` =
+    /// 暫定・不足あり (unapproved, provisional or unpriced records then).
+    pub forecast_actual_complete: Option<bool>,
     /// The latest adopted version's 完了見込原価.
     pub forecast_cost: Option<i64>,
     /// 現在の確定受注額 − 完了見込原価.
@@ -103,6 +106,9 @@ pub struct PortfolioTotals {
     pub needs_update: Vec<i64>,
     /// Ordered projects without an adopted forecast.
     pub without_forecast: Vec<i64>,
+    /// Summed forecasts that were 暫定・不足あり at their base date: the
+    /// totals include them and say so.
+    pub provisional_forecasts: Vec<i64>,
     /// The oldest base date among the forecasts summed.
     pub oldest_base_date: Option<String>,
     pub alert_counts: Vec<AlertCount>,
@@ -213,6 +219,7 @@ impl PortfolioService {
                 actual_complete: None,
                 forecast_version_no: None,
                 forecast_base_date: None,
+                forecast_actual_complete: None,
                 forecast_cost: None,
                 forecast_profit: None,
                 forecast_ratio_permille: None,
@@ -244,6 +251,7 @@ impl PortfolioService {
                 let pr = profit(order.confirmed_amount, f.cost_total);
                 row.forecast_version_no = Some(f.version_no);
                 row.forecast_base_date = Some(f.base_date.clone());
+                row.forecast_actual_complete = Some(f.actual_complete);
                 row.forecast_cost = Some(f.cost_total);
                 row.forecast_profit = order.confirmed_amount.map(|_| pr.amount);
                 row.forecast_ratio_permille = pr.ratio_permille;
@@ -323,6 +331,11 @@ impl PortfolioService {
             forecast_ratio_permille: ratio_permille(forecast_profit_total, forecast_order_total),
             needs_update: needs_update.into_iter().collect(),
             without_forecast: without_forecast.into_iter().collect(),
+            provisional_forecasts: with_forecast
+                .iter()
+                .filter(|r| r.forecast_actual_complete == Some(false))
+                .map(|r| r.project_id)
+                .collect(),
             oldest_base_date: with_forecast
                 .iter()
                 .filter_map(|r| r.forecast_base_date.clone())
@@ -418,6 +431,8 @@ mod tests {
         assert_eq!(all.totals.forecast_ratio_permille, Some(275));
         assert_eq!(all.totals.without_forecast, vec![bare]);
         assert_eq!(all.totals.oldest_base_date.as_deref(), Some("2026-01-31"));
+        assert_eq!(r.forecast_actual_complete, Some(true));
+        assert!(all.totals.provisional_forecasts.is_empty());
 
         // T30: an actual after the base date flags 見込更新要 and is counted.
         crate::forecasts::tests::approved_hours(&db, spec, 1, "2026-02-10", 60, 5_000).await;
