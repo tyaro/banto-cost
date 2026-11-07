@@ -38,7 +38,7 @@ const RESOURCE: &str = "time_entries";
 
 // --- masters ------------------------------------------------------------------
 
-async fn masters_list(
+pub(super) async fn masters_list(
     state: &BusinessState,
     session: &AuthenticatedSession,
     kind: MasterKind,
@@ -51,7 +51,7 @@ async fn masters_list(
     Ok(Json(state.work_masters.list(kind).await?))
 }
 
-async fn masters_write(
+pub(super) async fn masters_write(
     state: &BusinessState,
     session: &AuthenticatedSession,
     headers: &HeaderMap,

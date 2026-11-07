@@ -8,7 +8,8 @@
 	 *
 	 * The calc basis of the project (P4a, design 10.6) is CalcBasisSection.svelte;
 	 * its hours by phase (P4b, spec §6.1) are TimeSection.svelte, its budget
-	 * versions (P4c, spec §5.3) BudgetSection.svelte.
+	 * versions (P4c, spec §5.3) BudgetSection.svelte, its direct costs and
+	 * purchase orders (P4d, spec §6.3) CostsSection.svelte.
 	 * Order conversion and ordered revenue (P3b) are OrderSection.svelte; it
 	 * asks this page to reload after a conversion (status and rowVersion change).
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
@@ -38,6 +39,7 @@
 	import CalcBasisSection from './CalcBasisSection.svelte';
 	import TimeSection from './TimeSection.svelte';
 	import BudgetSection from './BudgetSection.svelte';
+	import CostsSection from './CostsSection.svelte';
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -55,6 +57,7 @@
 	let customerName = $state('');
 	let managerName = $state('');
 	let projectCode = $state('');
+	let projectName = $state('');
 	let projectRowVersion = $state(0);
 	let formErrors = $state<string[]>([]);
 
@@ -67,11 +70,23 @@
 	let calcBusy = $state(false);
 	let budgetDirty = $state(false);
 	let budgetBusy = $state(false);
+	let costsDirty = $state(false);
+	let costsBusy = $state(false);
 	const guard = guardUnsavedChanges({
 		isDirty: () =>
-			(store?.isDirty ?? false) || pipelineDirty || ordersDirty || calcDirty || budgetDirty,
+			(store?.isDirty ?? false) ||
+			pipelineDirty ||
+			ordersDirty ||
+			calcDirty ||
+			budgetDirty ||
+			costsDirty,
 		isSaving: () =>
-			(formResource?.saving ?? false) || pipelineBusy || ordersBusy || calcBusy || budgetBusy
+			(formResource?.saving ?? false) ||
+			pipelineBusy ||
+			ordersBusy ||
+			calcBusy ||
+			budgetBusy ||
+			costsBusy
 	});
 
 	async function loadForm() {
@@ -84,6 +99,7 @@
 		customerName = String(initial.customerName ?? '');
 		managerName = String(initial.managerName ?? '');
 		projectCode = String(initial.code ?? '');
+		projectName = String(initial.name ?? '');
 		projectRowVersion = Number(initial.rowVersion ?? 0);
 		const built = projectFormSchema({ ...pickers, currentStatus: status });
 		store = createFormStore(built, initial, formValidationMessages());
@@ -232,6 +248,15 @@
 			onPendingChange={(pending) => {
 				budgetDirty = pending.dirty;
 				budgetBusy = pending.busy;
+			}}
+		/>
+		<CostsSection
+			projectId={parsedId}
+			projectLabel={`${projectCode} ${projectName}`.trim()}
+			{canWrite}
+			onPendingChange={(pending) => {
+				costsDirty = pending.dirty;
+				costsBusy = pending.busy;
 			}}
 		/>
 		<TimeSection projectId={parsedId} />

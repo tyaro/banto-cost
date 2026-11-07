@@ -15,7 +15,8 @@
 import { getBantoMode } from './setup';
 import { demoModeError, httpRequest, invokeCommand, isPipelineAvailable } from './pipelineAdmin';
 
-export type MasterKind = 'phases' | 'activities';
+/** `vendors` = 取引先 (P4d, the vendors of orders and direct costs). */
+export type MasterKind = 'phases' | 'activities' | 'vendors';
 
 /** Mirrors `admin_template_core::work_masters::WorkMaster`. */
 export interface WorkMaster {
@@ -116,11 +117,13 @@ export interface ProjectTimeSummary {
 
 const MASTER_PATH: Record<MasterKind, string> = {
 	phases: '/api/phases',
-	activities: '/api/common-activities'
+	activities: '/api/common-activities',
+	vendors: '/api/vendors'
 };
 const MASTER_CMD: Record<MasterKind, string> = {
 	phases: 'phases',
-	activities: 'common_activities'
+	activities: 'common_activities',
+	vendors: 'vendors'
 };
 
 function guard(): void {

@@ -26,8 +26,8 @@ mod keyring_store;
 use admin_template_core::assets::FrontendAssets;
 use admin_template_core::audit::{AuditEntry, AuditLogList, AuditLogService};
 use admin_template_core::authz::{
-    amount_projects, approval_projects, visible_projects, Actor, Allowed, AuthzService, Capability,
-    MemberKind, Operation, Policy, ProjectMember, ProjectScope, Subject,
+    amount_projects, approval_projects, cost_approval_projects, visible_projects, Actor, Allowed,
+    AuthzService, Capability, MemberKind, Operation, Policy, ProjectMember, ProjectScope, Subject,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
 use admin_template_core::budgets::{
@@ -38,8 +38,17 @@ use admin_template_core::calc_basis::{
     audit_detail as calc_basis_audit_detail, CalcBasisService, CalcValueInput, CalcValueRow,
     CompanyBasis, ImpactPreview, ProjectBasis,
 };
+use admin_template_core::cost_access::{
+    approve_ops as cost_approve_ops, entry_ops as cost_entry_ops, order_create_op,
+    own_ops as cost_own_ops,
+};
 use admin_template_core::customers::{Customer, CustomerInput, CustomersService};
 use admin_template_core::db::init_db;
+use admin_template_core::direct_costs::{
+    DirectCost, DirectCostInput, DirectCostSaved, DirectCostsService, OrderRevisionInput,
+    ProjectCosts, PurchaseOrderInput, PurchaseOrderSaved, PurchaseOrderView, ORDER_RESOURCE,
+    RESOURCE as COST_RESOURCE,
+};
 use admin_template_core::events::event_channel;
 use admin_template_core::first_boot::seed_first_boot_settings;
 use admin_template_core::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
@@ -211,6 +220,8 @@ struct AppState {
     work_masters: WorkMastersService,
     time_entries: TimeEntriesService,
     budgets: BudgetsService,
+    /// banto-cost P4d: vendors, purchase orders and direct costs.
+    direct_costs: DirectCostsService,
     /// CPU/memory probe (ADR-0013, Issue #185): `Some` when the
     /// `system-metrics` feature is on and the host platform is supported;
     /// `None` otherwise, in which case the `system_info` command reports
@@ -1934,6 +1945,7 @@ async fn start_embedded_server(
     work_masters: WorkMastersService,
     time_entries: TimeEntriesService,
     budgets: BudgetsService,
+    direct_costs: DirectCostsService,
     metrics: Option<MetricsProbe>,
     auth: AuthState,
     events: broadcast::Sender<ServerEvent>,
@@ -1963,6 +1975,7 @@ async fn start_embedded_server(
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics,
     };
     // Issue #219 (`docs/design/lan-reach-check-design.md` §5.2): the one
@@ -2564,6 +2577,7 @@ async fn server_apply_body(
             state.work_masters.clone(),
             state.time_entries.clone(),
             state.budgets.clone(),
+            state.direct_costs.clone(),
             state.metrics.clone(),
             state.rest_auth.clone(),
             state.events.clone(),
@@ -4648,6 +4662,429 @@ async fn budget_draft_approve_body(
     Ok(approved)
 }
 
+// --- banto-cost P4d: vendors, direct costs and purchase orders ---------------
+// Twins of `/api/vendors/*`, `/api/direct-costs/*`, `/api/purchase-orders/*`
+// and `/api/projects/{id}/costs` (`admin_template_core::rest::costs`): the
+// same role floors, the same `Operation`s from `cost_access` through
+// `authorize_audited` (`EnterCost`, `ApproveCost` with `APPROVAL_POLICY`,
+// `EditPurchaseOrder`, `ViewProjectAmounts`), the same audit actions and
+// detail (`DirectCost::audit_detail`, `PurchaseOrderView::audit_detail`, no
+// amounts).
+
+/// Authorize every op (each denial is recorded); the subject, the caller's
+/// user row, and whether a self-approval exception was used.
+async fn cost_guard_all(
+    state: &AppState,
+    identity: &UserIdentity,
+    ops: &[Operation],
+    policy: Policy,
+    resource: &str,
+) -> Result<(Subject, Option<i64>, bool), BantoError> {
+    let mut out = None;
+    let mut exception = false;
+    for op in ops {
+        let (subject, user_id, allowed) =
+            business_guard_with(state, identity, *op, policy, resource).await?;
+        exception |= allowed.self_approval_exception;
+        out = Some((subject, user_id));
+    }
+    let (subject, user_id) = out.ok_or(BantoError::Forbidden)?;
+    Ok((subject, user_id, exception))
+}
+
+async fn cost_caller(state: &AppState) -> Result<i64, BantoError> {
+    let session = current_session(state)
+        .await?
+        .ok_or(BantoError::Unauthorized)?;
+    session_user_id(&session).ok_or(BantoError::Forbidden)
+}
+
+/// The caller's own record; someone else's reads as not found (as on REST).
+async fn own_direct_cost(state: &AppState, id: i64) -> Result<(DirectCost, i64), BantoError> {
+    let user_id = cost_caller(state).await?;
+    let cost = state.direct_costs.get(id).await?;
+    if cost.user_id != user_id {
+        return Err(BantoError::NotFound {
+            resource: COST_RESOURCE.into(),
+            id: id.to_string(),
+        });
+    }
+    Ok((cost, user_id))
+}
+
+#[tauri::command]
+async fn vendors_list(state: State<'_, AppState>) -> Result<Vec<WorkMaster>, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "vendors").await?;
+    masters_list(&state, &identity, MasterKind::Vendors).await
+}
+
+#[tauri::command]
+async fn vendors_create(
+    state: State<'_, AppState>,
+    values: WorkMasterInput,
+) -> Result<WorkMaster, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    masters_write(&state, &actor, MasterKind::Vendors, None, values).await
+}
+
+#[tauri::command]
+async fn vendors_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: WorkMasterInput,
+) -> Result<WorkMaster, BantoError> {
+    let actor = require_role(&state, Role::Editor, "business").await?;
+    masters_write(&state, &actor, MasterKind::Vendors, Some(id), values).await
+}
+
+#[tauri::command]
+async fn direct_costs_list(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<Vec<DirectCost>, BantoError> {
+    direct_costs_list_body(&state, from, to).await
+}
+
+async fn direct_costs_list_body(
+    state: &AppState,
+    from: String,
+    to: String,
+) -> Result<Vec<DirectCost>, BantoError> {
+    let identity = require_role(state, Role::Viewer, COST_RESOURCE).await?;
+    let (_, user_id) =
+        business_guard(state, &identity, Operation::ViewMasters, COST_RESOURCE).await?;
+    let user_id = user_id.ok_or(BantoError::Forbidden)?;
+    state.direct_costs.list_own(user_id, &from, &to).await
+}
+
+#[tauri::command]
+async fn direct_costs_create(
+    state: State<'_, AppState>,
+    values: DirectCostInput,
+) -> Result<DirectCostSaved, BantoError> {
+    direct_costs_create_body(&state, values).await
+}
+
+async fn direct_costs_create_body(
+    state: &AppState,
+    values: DirectCostInput,
+) -> Result<DirectCostSaved, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let user_id = cost_caller(state).await?;
+    let ops = cost_entry_ops(&state.direct_costs, &values, None, user_id).await?;
+    cost_guard_all(state, &actor, &ops, Policy::default(), COST_RESOURCE).await?;
+    let saved = state.direct_costs.create(user_id, values).await?;
+    if !saved.replayed {
+        record_ok(
+            &state.audit,
+            &actor,
+            "create",
+            COST_RESOURCE,
+            Some(&saved.cost.id.to_string()),
+            Some(saved.cost.audit_detail()),
+        )
+        .await;
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn direct_costs_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: DirectCostInput,
+) -> Result<DirectCostSaved, BantoError> {
+    direct_costs_update_body(&state, id, values).await
+}
+
+async fn direct_costs_update_body(
+    state: &AppState,
+    id: i64,
+    values: DirectCostInput,
+) -> Result<DirectCostSaved, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (kept, user_id) = own_direct_cost(state, id).await?;
+    let ops = cost_entry_ops(&state.direct_costs, &values, Some(&kept), user_id).await?;
+    cost_guard_all(state, &actor, &ops, Policy::default(), COST_RESOURCE).await?;
+    let saved = state.direct_costs.update(user_id, id, values).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        COST_RESOURCE,
+        Some(&id.to_string()),
+        Some(saved.cost.audit_detail()),
+    )
+    .await;
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn direct_costs_delete(
+    state: State<'_, AppState>,
+    id: i64,
+    row_version: i64,
+) -> Result<(), BantoError> {
+    direct_costs_delete_body(&state, id, row_version).await
+}
+
+async fn direct_costs_delete_body(
+    state: &AppState,
+    id: i64,
+    row_version: i64,
+) -> Result<(), BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (cost, user_id) = own_direct_cost(state, id).await?;
+    cost_guard_all(
+        state,
+        &actor,
+        &cost_own_ops(&cost),
+        Policy::default(),
+        COST_RESOURCE,
+    )
+    .await?;
+    state.direct_costs.delete(user_id, id, row_version).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "delete",
+        COST_RESOURCE,
+        Some(&id.to_string()),
+        Some(cost.audit_detail()),
+    )
+    .await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn direct_costs_submit(
+    state: State<'_, AppState>,
+    id: i64,
+    values: VersionInput,
+) -> Result<DirectCost, BantoError> {
+    direct_costs_submit_body(&state, id, values).await
+}
+
+async fn direct_costs_submit_body(
+    state: &AppState,
+    id: i64,
+    values: VersionInput,
+) -> Result<DirectCost, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (cost, user_id) = own_direct_cost(state, id).await?;
+    cost_guard_all(
+        state,
+        &actor,
+        &cost_own_ops(&cost),
+        Policy::default(),
+        COST_RESOURCE,
+    )
+    .await?;
+    let cost = state
+        .direct_costs
+        .submit(user_id, id, values.row_version)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "submit",
+        COST_RESOURCE,
+        Some(&id.to_string()),
+        Some(cost.audit_detail()),
+    )
+    .await;
+    Ok(cost)
+}
+
+#[tauri::command]
+async fn direct_costs_approvals(state: State<'_, AppState>) -> Result<Vec<DirectCost>, BantoError> {
+    direct_costs_approvals_body(&state).await
+}
+
+async fn direct_costs_approvals_body(state: &AppState) -> Result<Vec<DirectCost>, BantoError> {
+    require_role(state, Role::Viewer, COST_RESOURCE).await?;
+    let subject = caller_subject(state).await?;
+    let scope = cost_approval_projects(&subject);
+    state.direct_costs.approvals(&scope).await
+}
+
+#[tauri::command]
+async fn direct_costs_decide(
+    state: State<'_, AppState>,
+    id: i64,
+    values: DecisionInput,
+) -> Result<DirectCost, BantoError> {
+    direct_costs_decide_body(&state, id, values).await
+}
+
+async fn direct_costs_decide_body(
+    state: &AppState,
+    id: i64,
+    values: DecisionInput,
+) -> Result<DirectCost, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let cost = state.direct_costs.get(id).await?;
+    let (_, user_id, exception) = cost_guard_all(
+        state,
+        &actor,
+        &cost_approve_ops(&cost),
+        admin_template_core::approval::APPROVAL_POLICY,
+        COST_RESOURCE,
+    )
+    .await?;
+    let approve = values.approve;
+    let cost = state.direct_costs.decide(&cost, values, user_id).await?;
+    let mut detail = cost.audit_detail();
+    detail["selfApproval"] = serde_json::json!(exception);
+    record_ok(
+        &state.audit,
+        &actor,
+        if approve { "approve" } else { "return" },
+        COST_RESOURCE,
+        Some(&id.to_string()),
+        Some(detail),
+    )
+    .await;
+    Ok(cost)
+}
+
+#[tauri::command]
+async fn project_costs(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<ProjectCosts, BantoError> {
+    project_costs_body(&state, project_id).await
+}
+
+async fn project_costs_body(state: &AppState, project_id: i64) -> Result<ProjectCosts, BantoError> {
+    let identity = require_role(state, Role::Viewer, COST_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        COST_RESOURCE,
+    )
+    .await?;
+    state.direct_costs.project_costs(project_id).await
+}
+
+#[tauri::command]
+async fn purchase_orders_create(
+    state: State<'_, AppState>,
+    values: PurchaseOrderInput,
+) -> Result<PurchaseOrderSaved, BantoError> {
+    purchase_orders_create_body(&state, values).await
+}
+
+async fn purchase_orders_create_body(
+    state: &AppState,
+    values: PurchaseOrderInput,
+) -> Result<PurchaseOrderSaved, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        order_create_op(values.project_id)?,
+        ORDER_RESOURCE,
+    )
+    .await?;
+    let saved = state.direct_costs.create_order(values, user_id).await?;
+    if !saved.replayed {
+        record_ok(
+            &state.audit,
+            &actor,
+            "create",
+            ORDER_RESOURCE,
+            Some(&saved.order.id.to_string()),
+            Some(saved.order.audit_detail()),
+        )
+        .await;
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn purchase_orders_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: PurchaseOrderInput,
+) -> Result<PurchaseOrderView, BantoError> {
+    purchase_orders_update_body(&state, id, values).await
+}
+
+async fn purchase_orders_update_body(
+    state: &AppState,
+    id: i64,
+    values: PurchaseOrderInput,
+) -> Result<PurchaseOrderView, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let order = state.direct_costs.order(id).await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::EditPurchaseOrder {
+            project_id: order.project_id,
+        },
+        ORDER_RESOURCE,
+    )
+    .await?;
+    let saved = state.direct_costs.update_order(id, values, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        ORDER_RESOURCE,
+        Some(&id.to_string()),
+        Some(saved.audit_detail()),
+    )
+    .await;
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn purchase_orders_revise(
+    state: State<'_, AppState>,
+    id: i64,
+    values: OrderRevisionInput,
+) -> Result<PurchaseOrderView, BantoError> {
+    purchase_orders_revise_body(&state, id, values).await
+}
+
+async fn purchase_orders_revise_body(
+    state: &AppState,
+    id: i64,
+    values: OrderRevisionInput,
+) -> Result<PurchaseOrderView, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let order = state.direct_costs.order(id).await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::EditPurchaseOrder {
+            project_id: order.project_id,
+        },
+        ORDER_RESOURCE,
+    )
+    .await?;
+    let action = if values.kind == "cancel" {
+        "cancel"
+    } else {
+        "revise"
+    };
+    let saved = state.direct_costs.revise_order(id, values, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        action,
+        ORDER_RESOURCE,
+        Some(&id.to_string()),
+        Some(saved.audit_detail()),
+    )
+    .await;
+    Ok(saved)
+}
+
 /// `admin`-only (spec M10): the user-management screen's account list.
 #[tauri::command]
 async fn users_list(state: State<'_, AppState>) -> Result<Vec<UserSummary>, BantoError> {
@@ -5127,6 +5564,8 @@ pub fn run() {
             let time_entries = TimeEntriesService::new(db.clone()).with_events(events.clone());
             // banto-cost P4c.
             let budgets = BudgetsService::new(db.clone()).with_events(events.clone());
+            // banto-cost P4d.
+            let direct_costs = DirectCostsService::new(db.clone()).with_events(events.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
             // same "share one stateful sampler" reasoning as `banto-serve`'s
             // main() - see `SystemMetricsSampler::sample`'s doc comment for
@@ -5355,6 +5794,7 @@ pub fn run() {
                     work_masters.clone(),
                     time_entries.clone(),
                     budgets.clone(),
+                    direct_costs.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
                     events.clone(),
@@ -5427,6 +5867,7 @@ pub fn run() {
                 work_masters,
                 time_entries,
                 budgets,
+                direct_costs,
                 metrics,
                 started_at,
             });
@@ -5516,6 +5957,20 @@ pub fn run() {
             budget_draft_update,
             budget_draft_delete,
             budget_draft_approve,
+            vendors_list,
+            vendors_create,
+            vendors_update,
+            direct_costs_list,
+            direct_costs_create,
+            direct_costs_update,
+            direct_costs_delete,
+            direct_costs_submit,
+            direct_costs_approvals,
+            direct_costs_decide,
+            project_costs,
+            purchase_orders_create,
+            purchase_orders_update,
+            purchase_orders_revise,
             users_update,
             users_reset_password,
             users_delete,
@@ -5591,6 +6046,7 @@ mod tests {
             work_masters: WorkMastersService::new(pool.clone()),
             time_entries: TimeEntriesService::new(pool.clone()),
             budgets: BudgetsService::new(pool.clone()),
+            direct_costs: DirectCostsService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
             metrics: None,
@@ -5653,6 +6109,7 @@ mod tests {
             work_masters: WorkMastersService::new(pool.clone()),
             time_entries: TimeEntriesService::new(pool.clone()),
             budgets: BudgetsService::new(pool.clone()),
+            direct_costs: DirectCostsService::new(pool.clone()),
             metrics: None,
             started_at: std::time::Instant::now(),
         }
@@ -10499,6 +10956,150 @@ mod tests {
 
     // --- banto-cost P4c ----------------------------------------------------
     // Tauri twin of `rest::tests::t09_t12_rest_budget_versions_keep_the_original_and_follow_scope`.
+
+    #[tokio::test]
+    async fn t05_t12_tauri_direct_costs_and_orders_follow_scope_and_do_not_double() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[
+                Capability::ProjectManage,
+                Capability::AmountView,
+                Capability::TimeEntry,
+            ],
+        )
+        .await
+        .expect("grant editor");
+        authz_capabilities_set_body(&state, admin.id, &[Capability::FinanceRate])
+            .await
+            .expect("grant admin");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let project = projects_create_body(&state, project_input("P-C01", editor.id))
+            .await
+            .expect("manager registers a project");
+        let order: PurchaseOrderInput = serde_json::from_value(serde_json::json!({
+            "projectId": project.id,
+            "costType": "outsource",
+            "orderedOn": "2026-11-01",
+            "amount": 500_000
+        }))
+        .expect("input");
+        let po = purchase_orders_create_body(&state, order)
+            .await
+            .expect("order")
+            .order;
+        let entry = |body: serde_json::Value| -> DirectCostInput {
+            serde_json::from_value(body).expect("input")
+        };
+        async fn approve(state: &AppState, values: DirectCostInput) -> DirectCost {
+            let c = direct_costs_create_body(state, values)
+                .await
+                .expect("create")
+                .cost;
+            let c = direct_costs_submit_body(
+                state,
+                c.id,
+                VersionInput {
+                    row_version: c.row_version,
+                },
+            )
+            .await
+            .expect("submit");
+            direct_costs_decide_body(
+                state,
+                c.id,
+                DecisionInput {
+                    row_version: c.row_version,
+                    approve: true,
+                    reason: None,
+                },
+            )
+            .await
+            .expect("self-approval")
+        }
+        let prov = approve(
+            &state,
+            entry(serde_json::json!({
+                "entryKind": "provisional",
+                "purchaseOrderId": po.id,
+                "bookedOn": "2026-11-30",
+                "amount": 300_000
+            })),
+        )
+        .await;
+        approve(
+            &state,
+            entry(serde_json::json!({
+                "entryKind": "confirms",
+                "refId": prov.id,
+                "bookedOn": "2026-11-30",
+                "amount": 300_000,
+                "reason": "請求書到着"
+            })),
+        )
+        .await;
+        let costs = project_costs_body(&state, project.id).await.expect("costs");
+        assert_eq!(costs.orders[0].realized, 300_000);
+        assert_eq!(costs.orders[0].remaining, 200_000);
+
+        // Out of the project's scope: no reading, entering or ordering (T12).
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        assert!(matches!(
+            project_costs_body(&state, project.id).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            direct_costs_create_body(
+                &state,
+                entry(serde_json::json!({
+                    "projectId": project.id,
+                    "costType": "travel",
+                    "bookedOn": "2026-11-30",
+                    "amount": 1
+                }))
+            )
+            .await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(direct_costs_approvals_body(&state)
+            .await
+            .expect("list")
+            .is_empty());
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        let approvals: Vec<_> = rows
+            .iter()
+            .filter(|r| r.resource == "direct_costs" && r.action == "approve")
+            .collect();
+        assert_eq!(approvals.len(), 2);
+        for row in approvals {
+            let detail = row.detail.clone().unwrap_or_default();
+            assert!(detail.contains("\"selfApproval\":true"));
+            assert!(!detail.contains("300000"));
+        }
+        assert!(rows
+            .iter()
+            .any(|r| r.resource == "direct_costs" && r.action == "denied" && r.origin == "tauri"));
+    }
 
     #[tokio::test]
     async fn t09_t12_tauri_budget_versions_keep_the_original_and_follow_scope() {

@@ -7,7 +7,7 @@
  *
  * Amounts are integer yen, planned hours integer minutes. A labor line
  * without a budget rate has `amount: null` (未確定) and is never read as 0.
- * An actual of `null` means that cost type is not summed yet (直接費は P4d).
+ * Actuals are approved hours (labor) and approved direct costs (P4d).
  *
  * Demo mode has no backend: every export rejects like pipelineAdmin.ts.
  */
@@ -82,6 +82,8 @@ export interface BudgetOverview {
 	comparison: ComparisonRow[];
 	totals: CostTypeTotal[];
 	laborActualComplete: boolean;
+	/** No direct cost pending approval and no provisional left (P4d). */
+	directActualComplete: boolean;
 }
 
 export interface BudgetLineInput {

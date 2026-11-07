@@ -1,4 +1,5 @@
-//! Phase and common-activity masters (工程・共通活動, banto-cost P4b,
+//! Phase, common-activity and vendor masters (工程・共通活動・取引先,
+//! banto-cost P4b / P4d,
 //! `docs/project/design.md` §3.3, spec §5.2).
 //!
 //! Service-layer shape (conventions §2): `Clone`, `BantoError`, sqlx, no
@@ -24,6 +25,8 @@ pub const MAX_NAME_LEN: usize = 100;
 pub enum MasterKind {
     Phases,
     Activities,
+    /// 取引先 (banto-cost P4d): vendors of purchase orders and direct costs.
+    Vendors,
 }
 
 impl MasterKind {
@@ -31,6 +34,7 @@ impl MasterKind {
         match self {
             MasterKind::Phases => "phases",
             MasterKind::Activities => "common_activities",
+            MasterKind::Vendors => "vendors",
         }
     }
 
@@ -39,6 +43,7 @@ impl MasterKind {
         match self {
             MasterKind::Phases => "phases",
             MasterKind::Activities => "common_activities",
+            MasterKind::Vendors => "vendors",
         }
     }
 }

@@ -77,6 +77,20 @@
 //! | PUT    | `/api/budget-versions/{id}` | `BudgetDraftInput` | `BudgetVersion` (editor+ + `ManageProject`, draft only) |
 //! | DELETE | `/api/budget-versions/{id}?rowVersion=` | - | 204 (editor+ + `ManageProject`, draft only) |
 //! | POST   | `/api/budget-versions/{id}/approve` | `BudgetVersionInput` | `BudgetVersion` (editor+ + `ApproveBudget`, self-approval allowed and audited) |
+//! | GET    | `/api/vendors` | - | `WorkMaster[]` (any role; admin or `ViewMasters`) |
+//! | POST   | `/api/vendors` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`) |
+//! | PUT    | `/api/vendors/{id}` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`; `rowVersion`) |
+//! | GET    | `/api/direct-costs?from&to` | - | `DirectCost[]` (any role; company member; the caller's own) |
+//! | POST   | `/api/direct-costs` | `DirectCostInput` | `DirectCostSaved` (editor+ + `EnterCost` on every project; `clientRequestId`) |
+//! | PUT    | `/api/direct-costs/{id}` | `DirectCostInput` | `DirectCostSaved` (as create; own draft/returned; `rowVersion`) |
+//! | DELETE | `/api/direct-costs/{id}?rowVersion` | - | 204 (editor+ + `EnterCost`; own draft/returned) |
+//! | POST   | `/api/direct-costs/{id}/submit` | `{rowVersion}` | `DirectCost` (editor+ + `EnterCost`; own draft/returned) |
+//! | GET    | `/api/direct-costs/approvals` | - | `DirectCost[]` (any role; scope `cost_approval_projects`) |
+//! | POST   | `/api/direct-costs/{id}/decide` | `DecisionInput` | `DirectCost` (editor+ + `ApproveCost` on every project, self-approval allowed and audited) |
+//! | GET    | `/api/projects/{id}/costs` | - | `ProjectCosts` (any role + `ViewProjectAmounts`) |
+//! | POST   | `/api/purchase-orders` | `PurchaseOrderInput` | `PurchaseOrderSaved` (editor+ + `EditPurchaseOrder`; `clientRequestId`) |
+//! | PUT    | `/api/purchase-orders/{id}` | `PurchaseOrderInput` | `PurchaseOrderView` (editor+ + `EditPurchaseOrder`; `rowVersion`) |
+//! | POST   | `/api/purchase-orders/{id}/revise` | `OrderRevisionInput` | `PurchaseOrderView` (editor+ + `EditPurchaseOrder`; reason required) |
 //! | GET    | `/api/ui-settings/{key}` | -          | `{value: string \| null}` (any role) |
 //! | PUT    | `/api/ui-settings/{key}` | `{value}`  | 204 (any role)          |
 //! | POST   | `/api/audit-log/list?asOfId=` | `ListParams` | `AuditLogList` (`ListResult` + `asOfId`/`deletionEpoch`, admin; #248) |
@@ -245,6 +259,7 @@ use crate::users::{Role, UsersService};
 
 mod authz;
 mod budgets;
+mod costs;
 mod projects;
 #[cfg(test)]
 mod tests;
@@ -292,6 +307,8 @@ pub struct Services {
     pub time_entries: crate::time_entries::TimeEntriesService,
     /// banto-cost P4c: budget versions.
     pub budgets: crate::budgets::BudgetsService,
+    /// banto-cost P4d: vendors, purchase orders and direct costs.
+    pub direct_costs: crate::direct_costs::DirectCostsService,
     /// CPU/memory probe (ADR-0013, Issue #185), or `None` when the
     /// `system-metrics` feature is off (or the host platform is
     /// unsupported) - the app layer builds the `Some` case, see
@@ -333,6 +350,7 @@ pub fn api_router(
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         metrics,
     } = services;
     let business = projects::BusinessServices {
@@ -344,6 +362,7 @@ pub fn api_router(
         work_masters,
         time_entries,
         budgets,
+        direct_costs,
         authz: authz.clone(),
         users: users.clone(),
     };
@@ -420,6 +439,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(budgets::budget_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(costs::costs_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(costs::costs_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

@@ -17,6 +17,12 @@ pub enum PurchaseError {
         excess: Yen,
     },
     NegativeAmount,
+    /// 取消・変更の金額が0以下。
+    NotPositive,
+    /// 変更後の発注額が、取消済み額と実績化済み額の合計を下回る。
+    BelowUsed {
+        used: Yen,
+    },
 }
 
 impl PurchaseOrder {
@@ -44,6 +50,33 @@ impl PurchaseOrder {
             });
         }
         self.realized += amount;
+        Ok(())
+    }
+
+    /// 不要になった発注残を取り消す（理由は呼び出し側で残す）。未実績残を超えては取り消せない。
+    pub fn cancel(&mut self, amount: Yen) -> Result<(), PurchaseError> {
+        if amount <= 0 {
+            return Err(PurchaseError::NotPositive);
+        }
+        if amount > self.remaining() {
+            return Err(PurchaseError::ExceedsOrder {
+                excess: amount - self.remaining(),
+            });
+        }
+        self.cancelled += amount;
+        Ok(())
+    }
+
+    /// 値上がり・追加などで発注額を見直す。取消済みと実績化済みの合計を下回る額にはできない。
+    pub fn change_amount(&mut self, amount: Yen) -> Result<(), PurchaseError> {
+        if amount <= 0 {
+            return Err(PurchaseError::NotPositive);
+        }
+        let used = self.cancelled + self.realized;
+        if amount < used {
+            return Err(PurchaseError::BelowUsed { used });
+        }
+        self.amount = amount;
         Ok(())
     }
 
@@ -89,6 +122,25 @@ mod tests {
         po.realize(300_000).unwrap();
         po.replace_provisional(300_000, 320_000).unwrap();
         assert_eq!((po.realized, po.remaining()), (320_000, 180_000));
+    }
+
+    #[test]
+    fn t05_不要な発注残の取消と発注額の見直し() {
+        let mut po = PurchaseOrder::new(500_000);
+        po.realize(300_000).unwrap();
+        assert_eq!(
+            po.cancel(250_000),
+            Err(PurchaseError::ExceedsOrder { excess: 50_000 })
+        );
+        assert_eq!(po.cancel(0), Err(PurchaseError::NotPositive));
+        po.cancel(50_000).unwrap();
+        assert_eq!(po.remaining(), 150_000);
+        assert_eq!(
+            po.change_amount(340_000),
+            Err(PurchaseError::BelowUsed { used: 350_000 })
+        );
+        po.change_amount(600_000).unwrap();
+        assert_eq!(po.remaining(), 250_000);
     }
 
     #[test]

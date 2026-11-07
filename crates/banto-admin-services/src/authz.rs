@@ -221,6 +221,20 @@ pub enum Operation {
     /// the amounts must be visible (`amount.view`). `submitted_by` is the
     /// person who last saved the draft.
     ApproveBudget { project_id: i64, submitted_by: i64 },
+    /// Enter a direct cost (材料・外注・旅費・その他) against a project
+    /// (banto-cost P4d): one's own expense as a member with `time.entry`
+    /// (as [`Operation::EnterTime`]), or as the project's manager
+    /// (`project.manage`), or accounting (`finance.close`, every project).
+    /// A cost split over projects needs this on each of them.
+    EnterCost { project_id: i64 },
+    /// Approve a direct cost (banto-cost P4d): as [`Operation::ApproveBudget`]
+    /// (the project's manager or accounting, `amount.view`, self-approval by
+    /// policy). A split cost needs this on each project it lands on.
+    ApproveCost { project_id: i64, submitted_by: i64 },
+    /// Register and revise (amount, cancellation) a project's purchase
+    /// orders (banto-cost P4d): its manager (`project.manage`) or accounting
+    /// (`finance.close`), with `amount.view`.
+    EditPurchaseOrder { project_id: i64 },
     /// Approve hours someone submitted against a common activity. No project
     /// manager owns them, so accounting (`finance.close`) decides (P4b).
     ApproveCommon { submitted_by: i64 },
@@ -276,6 +290,9 @@ impl Operation {
             Operation::ManageProject { .. } => "manage_project",
             Operation::Approve { .. } => "approve",
             Operation::ApproveBudget { .. } => "approve_budget",
+            Operation::EnterCost { .. } => "enter_cost",
+            Operation::ApproveCost { .. } => "approve_cost",
+            Operation::EditPurchaseOrder { .. } => "edit_purchase_order",
             Operation::ApproveCommon { .. } => "approve_common",
             Operation::ViewRates => "view_rates",
             Operation::EditRates => "edit_rates",
@@ -301,6 +318,9 @@ impl Operation {
             | Operation::ManageProject { project_id }
             | Operation::Approve { project_id, .. }
             | Operation::ApproveBudget { project_id, .. }
+            | Operation::EnterCost { project_id }
+            | Operation::ApproveCost { project_id, .. }
+            | Operation::EditPurchaseOrder { project_id }
             | Operation::EditProject { project_id }
             | Operation::EditOrder { project_id }
             | Operation::OverrideCalcBasis { project_id, .. } => Some(project_id),
@@ -421,8 +441,15 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         | Operation::ApproveBudget {
             project_id,
             submitted_by,
+        }
+        | Operation::ApproveCost {
+            project_id,
+            submitted_by,
         } => {
-            if matches!(op, Operation::ApproveBudget { .. }) {
+            if matches!(
+                op,
+                Operation::ApproveBudget { .. } | Operation::ApproveCost { .. }
+            ) {
                 require(subject, Capability::AmountView)?;
             }
             let as_manager = subject.has(Capability::ProjectManage)
@@ -441,6 +468,28 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
                 return Ok(Allowed {
                     self_approval_exception: true,
                 });
+            }
+        }
+        Operation::EnterCost { project_id } => {
+            let as_member = subject.has(Capability::TimeEntry) && subject.is_member_of(project_id);
+            let as_manager = subject.has(Capability::ProjectManage)
+                && subject.holds(project_id, MemberKind::Manager);
+            if !as_member && !as_manager && !subject.has(Capability::FinanceClose) {
+                if subject.has(Capability::TimeEntry) || subject.has(Capability::ProjectManage) {
+                    return Err(Denial::OutOfProjectScope { project_id });
+                }
+                return Err(Denial::MissingCapability(Capability::TimeEntry));
+            }
+        }
+        Operation::EditPurchaseOrder { project_id } => {
+            require(subject, Capability::AmountView)?;
+            let as_manager = subject.has(Capability::ProjectManage)
+                && subject.holds(project_id, MemberKind::Manager);
+            if !as_manager && !subject.has(Capability::FinanceClose) {
+                if subject.has(Capability::ProjectManage) {
+                    return Err(Denial::OutOfProjectScope { project_id });
+                }
+                return Err(Denial::MissingCapability(Capability::ProjectManage));
             }
         }
         Operation::EnterCommonTime => require(subject, Capability::TimeEntry)?,
@@ -605,6 +654,16 @@ pub fn approval_projects(subject: &Subject) -> ProjectScope {
             .map(|(id, _)| *id)
             .collect(),
     )
+}
+
+/// Projects whose submitted direct costs the subject may approve: as
+/// [`approval_projects`], and approving an amount presupposes seeing it
+/// (`amount.view`, [`Operation::ApproveCost`]).
+pub fn cost_approval_projects(subject: &Subject) -> ProjectScope {
+    if !subject.has(Capability::AmountView) {
+        return ProjectScope::Only(BTreeSet::new());
+    }
+    approval_projects(subject)
 }
 
 /// Whether the subject sees each record's hourly rate and labor cost. A
@@ -1167,6 +1226,77 @@ mod tests {
                 }
             ),
             Denial::MissingCapability(Capability::ProjectManage)
+        );
+    }
+
+    #[test]
+    fn p4d_direct_cost_entry_approval_and_purchase_orders() {
+        // A worker enters their own expense on a project they belong to.
+        let worker = subject(30, &[Capability::TimeEntry], &[(P1, MemberKind::Worker)]);
+        allow(&worker, Operation::EnterCost { project_id: P1 });
+        assert_eq!(
+            deny(&worker, Operation::EnterCost { project_id: P2 }),
+            Denial::OutOfProjectScope { project_id: P2 }
+        );
+        assert_eq!(
+            deny(&worker, Operation::EditPurchaseOrder { project_id: P1 }),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        // The manager enters, orders and approves on their project.
+        let pm = subject(
+            31,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P1, MemberKind::Manager)],
+        );
+        allow(&pm, Operation::EnterCost { project_id: P1 });
+        allow(&pm, Operation::EditPurchaseOrder { project_id: P1 });
+        allow(
+            &pm,
+            Operation::ApproveCost {
+                project_id: P1,
+                submitted_by: 30,
+            },
+        );
+        assert_eq!(
+            deny(&pm, Operation::EditPurchaseOrder { project_id: P2 }),
+            Denial::OutOfProjectScope { project_id: P2 }
+        );
+        assert_eq!(
+            deny(
+                &pm,
+                Operation::ApproveCost {
+                    project_id: P1,
+                    submitted_by: 31
+                }
+            ),
+            Denial::SelfApproval
+        );
+        // Approving needs the amounts.
+        let blind = subject(32, &[Capability::FinanceClose], &[]);
+        assert_eq!(
+            deny(
+                &blind,
+                Operation::ApproveCost {
+                    project_id: P1,
+                    submitted_by: 30
+                }
+            ),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        assert_eq!(
+            cost_approval_projects(&blind),
+            ProjectScope::Only(BTreeSet::new())
+        );
+        // Accounting works on every project.
+        let finance = subject(33, &[Capability::FinanceClose, Capability::AmountView], &[]);
+        allow(&finance, Operation::EnterCost { project_id: P2 });
+        allow(&finance, Operation::EditPurchaseOrder { project_id: P2 });
+        assert_eq!(cost_approval_projects(&finance), ProjectScope::All);
+        // No capability at all.
+        let none = subject(34, &[Capability::ReportAll], &[(P1, MemberKind::Worker)]);
+        assert_eq!(
+            deny(&none, Operation::EnterCost { project_id: P1 }),
+            Denial::MissingCapability(Capability::TimeEntry)
         );
     }
 
