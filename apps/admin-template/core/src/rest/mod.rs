@@ -92,6 +92,10 @@
 //! | GET    | `/api/closing/{month}` | - | `MonthClosing` (any role + `CloseMonth`: `finance.close` + `amount.view`) |
 //! | POST   | `/api/closing/{month}/close` | `CloseInput` | `MonthClosing` (editor+ + `CloseMonth`; 月次締め, T11) |
 //! | POST   | `/api/closing/{month}/reopen` | `ReopenInput` | `MonthClosing` (editor+ + `CloseMonth`; 再開, reason required) |
+//! | GET    | `/api/projects/{id}/monthly` | - | `ProjectMonthly` (any role + `ViewProjectAmounts`; 月別・期別・累計, T15) |
+//! | GET    | `/api/projects/{id}/monthly.csv` | - | `CsvExport` (any role + `ViewProjectAmounts`; audited `export`) |
+//! | GET    | `/api/reports/portfolio.csv` | - | `CsvExport` (any role; rows `visible_projects` (admin all), amounts `amount_projects`; audited) |
+//! | GET    | `/api/reports/period-monthly.csv?period=N` | - | `CsvExport` (any role; `amount_projects`; audited) |
 //! | GET    | `/api/portfolio` | - | `Portfolio` (any role; rows `visible_projects` (admin all), amounts and alerts `amount_projects`) |
 //! | GET    | `/api/vendors` | - | `WorkMaster[]` (any role; admin or `ViewMasters`) |
 //! | POST   | `/api/vendors` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`) |
@@ -280,6 +284,7 @@ mod closing;
 mod costs;
 mod forecasts;
 mod projects;
+mod reports;
 #[cfg(test)]
 mod tests;
 mod time;
@@ -482,6 +487,11 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(closing::closing_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(reports::reports_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

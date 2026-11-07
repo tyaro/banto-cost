@@ -799,6 +799,31 @@ async fn app_layer_crud_round_trips_on_postgres() {
         );
         let month = closing.get("2026-07").await.unwrap();
         assert_eq!(month.unapproved_time_entries, 0);
+
+        // banto-cost P6c: the monthly figures and the CSV on Postgres
+        // (SUBSTR month keys, the local timestamp, the summed casts). The
+        // months add up to the total, as on SQLite (T15).
+        let reports = forecasts.reports();
+        let monthly = reports
+            .project_monthly(project.id)
+            .await
+            .expect("monthly figures on Postgres");
+        let labor: i64 = monthly.lines.iter().map(|l| l.amounts.labor).sum();
+        assert_eq!(labor, monthly.total.labor);
+        let csv = reports
+            .project_monthly_csv(project.id)
+            .await
+            .expect("monthly CSV on Postgres");
+        assert!(csv.content.starts_with("\u{feff}出力日時,20"));
+        let all = banto_admin_services::authz::ProjectScope::All;
+        reports
+            .portfolio_csv(&all, &all)
+            .await
+            .expect("portfolio CSV on Postgres");
+        reports
+            .period_monthly_csv(14, &all)
+            .await
+            .expect("period CSV on Postgres");
     }
 }
 

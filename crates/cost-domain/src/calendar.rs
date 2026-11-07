@@ -92,6 +92,21 @@ impl YearMonth {
         }
     }
 
+    /// 次の月。
+    pub fn next(self) -> Self {
+        if self.month == 12 {
+            Self {
+                year: self.year + 1,
+                month: 1,
+            }
+        } else {
+            Self {
+                year: self.year,
+                month: self.month + 1,
+            }
+        }
+    }
+
     /// 前の月。
     pub fn previous(self) -> Self {
         if self.month == 1 {

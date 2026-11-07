@@ -480,6 +480,11 @@ impl ForecastsService {
         crate::portfolio::PortfolioService::new(self.db.clone())
     }
 
+    /// 月別収支と CSV (P6c) over the same database.
+    pub fn reports(&self) -> crate::reports::ReportsService {
+        crate::reports::ReportsService::new(self.db.clone())
+    }
+
     /// 精算完了 (P6a) over the same database and event channel.
     pub fn closeouts(&self) -> crate::closeouts::CloseoutsService {
         let svc = crate::closeouts::CloseoutsService::new(self.db.clone());

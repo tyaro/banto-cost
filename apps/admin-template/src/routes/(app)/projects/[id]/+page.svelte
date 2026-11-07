@@ -11,7 +11,9 @@
 	 * versions (P4c, spec §5.3) BudgetSection.svelte, its direct costs and
 	 * purchase orders (P4d, spec §6.3) CostsSection.svelte, its completion
 	 * forecast versions (P5, spec §6.6) ForecastSection.svelte, its settlement
-	 * (精算完了, P6a, spec §5.1, T17) CloseoutSection.svelte.
+	 * (精算完了, P6a, spec §5.1, T17) CloseoutSection.svelte, its figures by
+	 * month, fiscal period and cumulative with the CSV (P6c, T15)
+	 * MonthlySection.svelte.
 	 * Order conversion and ordered revenue (P3b) are OrderSection.svelte; it
 	 * asks this page to reload after a conversion (status and rowVersion change).
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
@@ -44,6 +46,7 @@
 	import CostsSection from './CostsSection.svelte';
 	import ForecastSection from './ForecastSection.svelte';
 	import CloseoutSection from './CloseoutSection.svelte';
+	import MonthlySection from './MonthlySection.svelte';
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -285,6 +288,7 @@
 				/>
 			{/key}
 		{/if}
+		<MonthlySection projectId={parsedId} />
 		<CostsSection
 			projectId={parsedId}
 			projectLabel={`${projectCode} ${projectName}`.trim()}
