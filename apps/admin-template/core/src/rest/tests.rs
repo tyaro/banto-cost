@@ -5123,3 +5123,155 @@ async fn t06_t12_t30_rest_forecast_versions_and_portfolio_follow_scope() {
         "no amounts in the audit: {detail}"
     );
 }
+
+#[tokio::test]
+async fn t17_t12_rest_closeout_is_checked_with_amounts_and_settled_by_accounting() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["project.manage", "amount.view"]),
+    )
+    .await;
+    grant(&router, &admin, 1, json!(["finance.close", "amount.view"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-C01", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": project["rowVersion"],
+                "convertedOn": "2026-11-20",
+                "confirmedAmount": 1_000_000,
+                "basis": "注文書受領",
+                "plannedStart": "2026-12-01",
+                "plannedEnd": "2027-03-31",
+                "revenuePlan": [{ "month": "2027-03", "amount": 1_000_000 }],
+                "scope": "whole"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    // The manager marks the work done.
+    let current = body_json(
+        router
+            .clone()
+            .oneshot(get_auth(&format!("/api/projects/{id}"), &editor))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let mut body = project_body("P-C01", EDITOR_ID);
+    body["status"] = json!("work_done");
+    body["plannedStart"] = json!("2026-12-01");
+    body["plannedEnd"] = json!("2027-03-31");
+    body["rowVersion"] = current["rowVersion"].clone();
+    let response = router
+        .clone()
+        .oneshot(put_json(&format!("/api/projects/{id}"), &editor, body))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The manager sees the check; the viewer (no capability) does not.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/closeout"), &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let check = body_json(response).await;
+    assert_eq!(check["settleable"], true);
+    assert_eq!(check["blockers"][0]["kind"], "revenue_difference");
+    assert_eq!(check["blockers"][0]["amount"], 1_000_000);
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/closeout"), &viewer))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let waiver = json!({
+        "rowVersion": check["rowVersion"],
+        "note": "精算",
+        "waivers": [{ "kind": "revenue_difference", "amount": 1_000_000, "reason": "値引きで合意" }]
+    });
+    // Neither the manager nor the viewer role settles (accounting does).
+    for token in [&editor, &viewer] {
+        let response = router
+            .clone()
+            .oneshot(post_json_auth(
+                &format!("/api/projects/{id}/closeout"),
+                token,
+                waiver.clone(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "project_closeouts"));
+    // Accounting: without the waiver the remaining revenue blocks it.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/closeout"),
+            &admin,
+            json!({ "rowVersion": check["rowVersion"], "waivers": [] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/closeout"),
+            &admin,
+            waiver.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let settled = body_json(response).await;
+    assert_eq!(settled["status"], "settled");
+    assert_eq!(settled["closeout"]["waivers"][0]["reason"], "値引きで合意");
+    // Once settled, the order takes no revenue.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/recognitions"),
+            &admin,
+            json!({ "recognizedOn": "2027-03-10", "amount": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let writes: Vec<_> = audit
+        .list(ListParams::default())
+        .await
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter(|row| row.resource == "project_closeouts" && row.action == "settle")
+        .collect();
+    assert_eq!(writes.len(), 1);
+    let detail = writes[0].detail.clone().unwrap_or_default();
+    assert!(detail.contains("revenue_difference"), "{detail}");
+    assert!(!detail.contains("1000000"), "no amounts: {detail}");
+}

@@ -1,0 +1,37 @@
+-- banto-cost P6a (docs/project/design.md §3.5, spec §5.1, T17): 精算完了.
+--
+-- A work-done project (作業完了) is settled (精算完了) only when nothing is
+-- left unapproved, unpriced, provisional or undecided, and every remaining
+-- amount (未実績発注残, 残作業見込み, 未処理の売上差額) is either gone or
+-- waived with a reason and an approver (`cost_domain::closeout`). One row
+-- per settlement keeps the status before it, the business date, who settled
+-- and a note; each waiver keeps the amount it was given for, so a waiver
+-- made for an amount that changed no longer matches.
+--
+-- A project is settled once (project_closeouts_project). Rows are never
+-- rewritten or deleted.
+--
+-- kind MUST match `cost_domain::closeout::Blocker::code` (the waivable ones).
+CREATE TABLE project_closeouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    previous_status TEXT NOT NULL,
+    settled_on TEXT NOT NULL,
+    note TEXT,
+    settled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX project_closeouts_project ON project_closeouts (project_id);
+
+CREATE TABLE closeout_waivers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    closeout_id INTEGER NOT NULL REFERENCES project_closeouts(id),
+    kind TEXT NOT NULL
+        CHECK (kind IN ('purchase_remaining','forecast_remaining','revenue_difference')),
+    purchase_order_id INTEGER REFERENCES purchase_orders(id),
+    amount INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    CHECK ((kind = 'purchase_remaining') = (purchase_order_id IS NOT NULL))
+);

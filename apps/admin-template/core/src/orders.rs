@@ -434,7 +434,14 @@ impl State {
         })
     }
 
+    /// The ordered revenue of a project that is not settled: 精算完了 closes
+    /// the order and its revenue (T17).
     fn require_ordered(&self) -> Result<OrderedRevenue, BantoError> {
+        if self.status == ProjectStatus::Settled {
+            return Err(BantoError::Validation {
+                field_errors: vec![field_error("status", "精算完了の案件です")],
+            });
+        }
         self.revenue().ok_or_else(|| BantoError::Validation {
             field_errors: vec![field_error(
                 "status",

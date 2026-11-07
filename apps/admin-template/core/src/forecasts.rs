@@ -479,6 +479,15 @@ impl ForecastsService {
         crate::portfolio::PortfolioService::new(self.db.clone())
     }
 
+    /// 精算完了 (P6a) over the same database and event channel.
+    pub fn closeouts(&self) -> crate::closeouts::CloseoutsService {
+        let svc = crate::closeouts::CloseoutsService::new(self.db.clone());
+        match &self.events {
+            Some(events) => svc.with_events(events.clone()),
+            None => svc,
+        }
+    }
+
     fn sql(&self, s: &str) -> String {
         placeholders(self.db.dialect(), s)
     }

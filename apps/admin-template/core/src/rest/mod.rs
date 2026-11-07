@@ -82,6 +82,8 @@
 //! | PUT    | `/api/forecast-versions/{id}` | `ForecastDraftInput` | `ForecastVersion` (editor+ + `ManageProject`, draft only) |
 //! | DELETE | `/api/forecast-versions/{id}?rowVersion=` | - | 204 (editor+ + `ManageProject`, draft only) |
 //! | POST   | `/api/forecast-versions/{id}/adopt` | `ForecastVersionInput` | `ForecastVersion` (editor+ + `AdoptForecast`, self-adoption allowed and audited) |
+//! | GET    | `/api/projects/{id}/closeout` | - | `CloseoutCheck` (any role + `ViewProjectAmounts`) |
+//! | POST   | `/api/projects/{id}/closeout` | `SettleInput` | `CloseoutCheck` (editor+ + `SettleProject`; 精算完了, T17) |
 //! | GET    | `/api/portfolio` | - | `Portfolio` (any role; rows `visible_projects` (admin all), amounts and alerts `amount_projects`) |
 //! | GET    | `/api/vendors` | - | `WorkMaster[]` (any role; admin or `ViewMasters`) |
 //! | POST   | `/api/vendors` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`) |
@@ -265,6 +267,7 @@ use crate::users::{Role, UsersService};
 
 mod authz;
 mod budgets;
+mod closeouts;
 mod costs;
 mod forecasts;
 mod projects;
@@ -450,6 +453,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(budgets::budget_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(closeouts::closeout_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(closeouts::closeout_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

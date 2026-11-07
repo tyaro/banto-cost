@@ -1,8 +1,8 @@
 //! 精算完了の検査（仕様5.1、T17）。
 //!
-//! 未承認実績、単価未設定、未確定の仮計上、未実績発注残、残作業見込み、未処理の売上差額が
-//! 残る案件は精算完了にできない。前の三つは処理（承認・単価登録・請求確定）で解消する。
-//! 不要になった残額は、理由と承認者を記録した解消として扱える。
+//! 未承認実績、単価未設定、未確定の仮計上、判断待ちの受注変更、未実績発注残、残作業見込み、
+//! 未処理の売上差額が残る案件は精算完了にできない。前の四つは処理（承認・訂正・請求確定・
+//! 受注変更の判断）で解消する。不要になった残額は、理由と承認者を記録した解消として扱える。
 
 use crate::money::{Minutes, Yen};
 
@@ -18,9 +18,13 @@ pub struct CloseoutState {
     pub missing_rate_entries: usize,
     /// 請求確定していない仮計上。
     pub provisional_entries: usize,
+    /// 判断待ちの受注変更（未確定追加売上）。
+    pub pending_order_changes: usize,
     /// 発注ごとの未実績発注残（発注ID、金額）。
     pub purchase_remaining: Vec<(String, Yen)>,
-    /// 最新の採用見込版の残原価見込み。採用版がなければ `None`。
+    /// 最新の採用見込版の残原価見込みのうち、発注済み未実績を除いた分（残工数の金額と
+    /// それ以外に必要な見込み）。発注残は `purchase_remaining` で数えるので重ねない。
+    /// 採用版がなければ `None`。
     pub forecast_remaining: Option<Yen>,
     /// 未計上残（確定受注額 − 累計売上計上額）。
     pub unrecognized_revenue: Yen,
@@ -40,6 +44,9 @@ pub enum Blocker {
     Provisional {
         entries: usize,
     },
+    PendingOrderChanges {
+        changes: usize,
+    },
     PurchaseRemaining {
         purchase_order_id: String,
         amount: Yen,
@@ -53,6 +60,29 @@ pub enum Blocker {
 }
 
 impl Blocker {
+    /// DB・通信で使う種類の文字列。
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Unapproved { .. } => "unapproved",
+            Self::MissingRate { .. } => "missing_rate",
+            Self::Provisional { .. } => "provisional",
+            Self::PendingOrderChanges { .. } => "pending_order_changes",
+            Self::PurchaseRemaining { .. } => "purchase_remaining",
+            Self::ForecastRemaining { .. } => "forecast_remaining",
+            Self::RevenueDifference { .. } => "revenue_difference",
+        }
+    }
+
+    /// 解消できる残額の金額。処理が必要な項目は `None`。
+    pub fn amount(&self) -> Option<Yen> {
+        match self {
+            Self::PurchaseRemaining { amount, .. }
+            | Self::ForecastRemaining { amount }
+            | Self::RevenueDifference { amount } => Some(*amount),
+            _ => None,
+        }
+    }
+
     /// 理由と承認つきで解消できる残額か。未承認・単価未設定・仮計上は処理が必要。
     pub fn waivable(&self) -> bool {
         matches!(
@@ -99,6 +129,11 @@ pub fn blockers(s: &CloseoutState) -> Vec<Blocker> {
     if s.provisional_entries > 0 {
         out.push(Blocker::Provisional {
             entries: s.provisional_entries,
+        });
+    }
+    if s.pending_order_changes > 0 {
+        out.push(Blocker::PendingOrderChanges {
+            changes: s.pending_order_changes,
         });
     }
     for (id, amount) in &s.purchase_remaining {
@@ -159,6 +194,7 @@ mod tests {
             unapproved_costs: 1,
             missing_rate_entries: 0,
             provisional_entries: 1,
+            pending_order_changes: 0,
             purchase_remaining: vec![("PO-1".into(), 200_000), ("PO-2".into(), 0)],
             forecast_remaining: Some(50_000),
             unrecognized_revenue: 0,
@@ -264,6 +300,31 @@ mod tests {
         };
         assert_eq!(unresolved, vec![b.clone()]);
         assert!(check_closeout(&s, &[waiver(b, "値引き合意", Some("accounting"))]).is_ok());
+    }
+
+    #[test]
+    fn t17_判断待ちの受注変更は解消できず_判断が要る() {
+        let s = CloseoutState {
+            pending_order_changes: 1,
+            ..Default::default()
+        };
+        let b = Blocker::PendingOrderChanges { changes: 1 };
+        assert_eq!(blockers(&s), vec![b.clone()]);
+        assert!(!b.waivable());
+        assert_eq!(b.amount(), None);
+        assert!(check_closeout(&s, &[waiver(b, "不要", Some("accounting"))]).is_err());
+    }
+
+    #[test]
+    fn 種類の文字列と金額() {
+        let po = Blocker::PurchaseRemaining {
+            purchase_order_id: "7".into(),
+            amount: 1,
+        };
+        assert_eq!((po.code(), po.amount()), ("purchase_remaining", Some(1)));
+        let r = Blocker::RevenueDifference { amount: -5 };
+        assert_eq!((r.code(), r.amount()), ("revenue_difference", Some(-5)));
+        assert_eq!(Blocker::MissingRate { entries: 1 }.code(), "missing_rate");
     }
 
     #[test]
