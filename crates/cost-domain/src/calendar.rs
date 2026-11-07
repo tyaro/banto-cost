@@ -28,6 +28,17 @@ impl Date {
         Self::new(y.parse().ok()?, m.parse().ok()?, d.parse().ok()?)
     }
 
+    /// 1970-01-01 からの日数（日付の差を求める用、Howard Hinnant の days_from_civil）。
+    pub fn day_number(self) -> i64 {
+        let (m, d) = (i64::from(self.month), i64::from(self.day));
+        let y = i64::from(self.year) - i64::from(m <= 2);
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
+    }
+
     pub fn year_month(self) -> YearMonth {
         YearMonth {
             year: self.year,
@@ -145,6 +156,16 @@ impl FiscalCalendar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 日数の通し番号() {
+        let d = |s: &str| Date::parse(s).unwrap().day_number();
+        assert_eq!(d("1970-01-01"), 0);
+        assert_eq!(d("2026-11-06") - d("2026-11-01"), 5);
+        assert_eq!(d("2027-03-01") - d("2027-02-28"), 1);
+        assert_eq!(d("2028-03-01") - d("2028-02-28"), 2, "閏年");
+        assert_eq!(d("2027-01-01") - d("2026-12-31"), 1);
+    }
 
     fn ym(s: &str) -> YearMonth {
         YearMonth::parse(s).unwrap()

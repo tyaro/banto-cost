@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod project;
 pub mod purchase;
 pub mod revenue;
+pub mod time;
 
 pub use calendar::{Date, FiscalCalendar, YearMonth};
 pub use money::{labor_cost, ratio_permille, Minutes, Yen};

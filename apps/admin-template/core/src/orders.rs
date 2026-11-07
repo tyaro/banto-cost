@@ -54,15 +54,6 @@ use crate::projects::{MAX_CODE_LEN, MAX_NAME_LEN};
 
 pub const MAX_TEXT_LEN: usize = 1000;
 
-/// The policy the order-change decision is authorized with on both paths:
-/// the person who requested a change may decide it, because the company
-/// runs banto-cost single-handed (spec §4 small-team exception, user
-/// decision 2026-11-06). The wiring layers record `selfApproval` in the
-/// audit detail when it is used.
-pub const ORDER_CHANGE_POLICY: banto_admin_services::authz::Policy =
-    banto_admin_services::authz::Policy {
-        allow_self_approval: true,
-    };
 pub const MAX_PLAN_LINES: usize = 60;
 
 /// Run `$body` with `$pool` bound to the concrete pool of either backend.

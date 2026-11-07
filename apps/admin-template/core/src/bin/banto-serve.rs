@@ -150,6 +150,10 @@ async fn main() {
     let orders =
         admin_template_core::orders::OrdersService::new(db.clone()).with_events(events.clone());
     let calc_basis = admin_template_core::calc_basis::CalcBasisService::new(db.clone());
+    let work_masters = admin_template_core::work_masters::WorkMastersService::new(db.clone())
+        .with_events(events.clone());
+    let time_entries = admin_template_core::time_entries::TimeEntriesService::new(db.clone())
+        .with_events(events.clone());
     // ADR-0013 (Issue #185): the sampler is stateful (CPU% needs a delta
     // between refreshes, see `SystemMetricsSampler::sample`'s doc comment),
     // so it is built once here and shared - same lifetime as `system_info`
@@ -251,6 +255,8 @@ async fn main() {
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics,
     };
     let app = with_security_headers(

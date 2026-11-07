@@ -59,34 +59,38 @@ use crate::customers::{Customer, CustomerInput, CustomersService};
 use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use crate::orders::{
     CancelInput, ChangeDecision, ChangeRequest, ConversionRequest, OrderSummary, OrdersService,
-    RecognitionInput, ReplanInput, ORDER_CHANGE_POLICY,
+    RecognitionInput, ReplanInput,
 };
 use crate::pipeline::{PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput};
 use crate::projects::{Project, ProjectInput, ProjectsService};
+use crate::time_entries::TimeEntriesService;
+use crate::work_masters::WorkMastersService;
 
 use super::authz::caller_user_id;
 
 #[derive(Clone)]
-struct BusinessState {
-    customers: CustomersService,
-    projects: ProjectsService,
-    pipeline: PipelineService,
-    orders: OrdersService,
-    calc_basis: CalcBasisService,
-    authz: AuthzService,
-    users: UsersService,
-    audit: AuditLogService,
-    auth: AuthState,
+pub(super) struct BusinessState {
+    pub(super) customers: CustomersService,
+    pub(super) projects: ProjectsService,
+    pub(super) pipeline: PipelineService,
+    pub(super) orders: OrdersService,
+    pub(super) calc_basis: CalcBasisService,
+    pub(super) work_masters: WorkMastersService,
+    pub(super) time_entries: TimeEntriesService,
+    pub(super) authz: AuthzService,
+    pub(super) users: UsersService,
+    pub(super) audit: AuditLogService,
+    pub(super) auth: AuthState,
 }
 
-fn is_admin(session: &AuthenticatedSession) -> bool {
+pub(super) fn is_admin(session: &AuthenticatedSession) -> bool {
     Role::from_str(&session.identity.role).is_ok_and(|role| role.is_admin())
 }
 
 impl BusinessState {
     /// Decide `op` for the caller (recording a denial), returning the loaded
     /// subject and the caller's user id.
-    async fn guard(
+    pub(super) async fn guard(
         &self,
         session: &AuthenticatedSession,
         op: Operation,
@@ -99,7 +103,7 @@ impl BusinessState {
     }
 
     /// As [`Self::guard`] with an explicit policy, also returning the decision.
-    async fn guard_with(
+    pub(super) async fn guard_with(
         &self,
         session: &AuthenticatedSession,
         op: Operation,
@@ -126,7 +130,7 @@ impl BusinessState {
     }
 
     /// As [`Self::guard`], but the `admin` role passes without a capability.
-    async fn guard_or_admin(
+    pub(super) async fn guard_or_admin(
         &self,
         session: &AuthenticatedSession,
         op: Operation,
@@ -138,7 +142,10 @@ impl BusinessState {
         Ok(())
     }
 
-    async fn subject(&self, session: &AuthenticatedSession) -> Result<Subject, BantoError> {
+    pub(super) async fn subject(
+        &self,
+        session: &AuthenticatedSession,
+    ) -> Result<Subject, BantoError> {
         let user_id = caller_user_id(session, &self.users).await?;
         self.authz.subject(user_id).await
     }
@@ -471,7 +478,7 @@ async fn order_change_decide(
                 // A request without a requester (deleted user) is nobody's own.
                 submitted_by: requester.unwrap_or(0),
             },
-            ORDER_CHANGE_POLICY,
+            crate::approval::APPROVAL_POLICY,
             "orders",
         )
         .await?;
@@ -796,17 +803,25 @@ pub(super) struct BusinessServices {
     pub pipeline: PipelineService,
     pub orders: OrdersService,
     pub calc_basis: CalcBasisService,
+    pub work_masters: WorkMastersService,
+    pub time_entries: TimeEntriesService,
     pub authz: AuthzService,
     pub users: UsersService,
 }
 
-fn state(services: BusinessServices, audit: AuditLogService, auth: AuthState) -> BusinessState {
+pub(super) fn state(
+    services: BusinessServices,
+    audit: AuditLogService,
+    auth: AuthState,
+) -> BusinessState {
     BusinessState {
         customers: services.customers,
         projects: services.projects,
         pipeline: services.pipeline,
         orders: services.orders,
         calc_basis: services.calc_basis,
+        work_masters: services.work_masters,
+        time_entries: services.time_entries,
         authz: services.authz,
         users: services.users,
         audit,

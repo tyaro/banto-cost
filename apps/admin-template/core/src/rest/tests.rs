@@ -71,6 +71,8 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -128,6 +130,8 @@ async fn router_with_role_tokens() -> (Router, String, String, String) {
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: None,
     };
     (
@@ -151,6 +155,8 @@ async fn router_with_token() -> (Router, String) {
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth
@@ -169,6 +175,8 @@ async fn router_with_token() -> (Router, String) {
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: None,
     };
     (api_router(services, auth, tx, false), token)
@@ -224,6 +232,8 @@ async fn router_with_setup(allow_setup: bool) -> Router {
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let services = Services {
@@ -238,6 +248,8 @@ async fn router_with_setup(allow_setup: bool) -> Router {
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: None,
     };
     api_router(services, auth, tx, allow_setup)
@@ -443,6 +455,8 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = AuthState::new(
         audited_credential_verifier(users.clone(), audit.clone()),
@@ -460,6 +474,8 @@ async fn router_with_real_login(allow_setup: bool) -> (Router, AuditLogService) 
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: None,
     };
     (api_router(services, auth, tx, allow_setup), audit)
@@ -808,6 +824,8 @@ async fn router_with_role_tokens_audit_and_events() -> (
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let audit = AuditLogService::new(pool.clone());
 
     users
@@ -854,6 +872,8 @@ async fn router_with_role_tokens_audit_and_events() -> (
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: None,
     };
     let router = api_router(services, auth, tx.clone(), false);
@@ -902,6 +922,8 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
     let pipeline = crate::pipeline::PipelineService::new(db.clone());
     let orders = crate::orders::OrdersService::new(db.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(db.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(db.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(db.clone());
     let audit = AuditLogService::new(db);
 
     users
@@ -946,6 +968,8 @@ async fn router_with_role_tokens_and_backup() -> (Router, tempfile::TempDir, Str
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: None,
     };
     let router = api_router(services, auth, tx, false);
@@ -1306,6 +1330,8 @@ async fn system_info_reports_metrics_when_probe_is_present() {
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let audit = AuditLogService::new(pool);
     let auth = demo_auth();
     let token = auth.login("admin", "admin").await.unwrap();
@@ -1337,6 +1363,8 @@ async fn system_info_reports_metrics_when_probe_is_present() {
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: Some(metrics),
     };
     let router = api_router(services, auth, tx, false);
@@ -1954,6 +1982,8 @@ async fn router_with_viewer_public(
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     settings
@@ -1980,6 +2010,8 @@ async fn router_with_viewer_public(
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: None,
     };
     (
@@ -2632,6 +2664,8 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
     let pipeline = crate::pipeline::PipelineService::new(pool.clone()).with_events(tx.clone());
     let orders = crate::orders::OrdersService::new(pool.clone()).with_events(tx.clone());
     let calc_basis = crate::calc_basis::CalcBasisService::new(pool.clone());
+    let work_masters = crate::work_masters::WorkMastersService::new(pool.clone());
+    let time_entries = crate::time_entries::TimeEntriesService::new(pool.clone());
     let audit = AuditLogService::new(pool);
 
     users
@@ -2660,6 +2694,8 @@ async fn router_with_user_sessions() -> (Router, UsersService) {
         pipeline,
         orders,
         calc_basis,
+        work_masters,
+        time_entries,
         metrics: None,
     };
     (api_router(services, auth, tx, false), users)
@@ -3929,4 +3965,317 @@ async fn t31_t32_t34_t35_rest_calc_basis_follows_the_item_capability() {
         .await
         .iter()
         .any(|row| row.resource == "calc_basis"));
+}
+
+#[tokio::test]
+async fn t02_t04_t12_rest_time_entries_follow_ownership_scope_and_approval() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    let entry = |project: i64, request: &str| {
+        json!({
+            "workDate": "2026-11-09",
+            "projectId": project,
+            "phaseId": 1,
+            "minutes": 420,
+            "description": "盤図の作成",
+            "clientRequestId": request
+        })
+    };
+    // No `time.entry`: no hours.
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/time-entries?from=2026-11-09&to=2026-11-15",
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["time.entry", "project.manage", "amount.view"]),
+    )
+    .await;
+    grant(
+        &router,
+        &admin,
+        1,
+        json!(["time.entry", "finance.rate", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/calc-basis",
+            &admin,
+            json!({ "itemKey": "emp_rate", "validFrom": "2026-06-01", "value": 5_000, "reason": "標準" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await["id"].as_i64().unwrap();
+
+    // Not a member of a project: no hours on it (T12).
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/time-entries",
+            &admin,
+            entry(project, "a-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // T13: a retried send returns the first row.
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(post_json_auth(
+                "/api/time-entries",
+                &editor,
+                entry(project, "e-1"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved = body_json(response).await;
+        ids.push(saved["entry"]["id"].as_i64().unwrap());
+    }
+    assert_eq!(ids[0], ids[1]);
+    let id = ids[0];
+
+    // Someone else's entry reads as not found.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/submit"),
+            &admin,
+            json!({ "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    // The viewer role cannot write at all.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/time-entries",
+            &viewer,
+            entry(project, "v-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/submit"),
+            &editor,
+            json!({ "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let submitted = body_json(response).await;
+    assert_eq!(submitted["status"], "submitted");
+
+    // The manager sees it to approve; finance.rate-less callers see no rate.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/time-entries/approvals", &editor))
+        .await
+        .unwrap();
+    let list = body_json(response).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/time-entries/approvals", &admin))
+        .await
+        .unwrap();
+    assert!(
+        body_json(response).await.as_array().unwrap().is_empty(),
+        "not a manager, not accounting: nothing to approve"
+    );
+
+    // Self-approval (one-person company), recorded in the audit.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/decide"),
+            &editor,
+            json!({ "rowVersion": submitted["rowVersion"], "approve": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let approved = body_json(response).await;
+    assert_eq!(approved["status"], "approved");
+    assert_eq!(
+        approved["laborCost"],
+        serde_json::Value::Null,
+        "rate hidden"
+    );
+    assert_eq!(approved["costMissing"], false);
+
+    // T02: the project's labor cost (420 min × 5,000 yen/h).
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/projects/{project}/time-summary"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let summary = body_json(response).await;
+    assert_eq!(summary["total"]["laborCost"], 35_000);
+    assert_eq!(summary["total"]["approved"]["minutes"], 420);
+    assert_eq!(summary["total"]["complete"], true);
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/projects/{project}/time-summary"),
+            &admin,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // A common activity is accounting's to approve.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/time-entries",
+            &editor,
+            json!({ "workDate": "2026-11-10", "activityId": 1, "minutes": 60 }),
+        ))
+        .await
+        .unwrap();
+    let common = body_json(response).await["entry"]["id"].as_i64().unwrap();
+    router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{common}/submit"),
+            &editor,
+            json!({ "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{common}/decide"),
+            &editor,
+            json!({ "rowVersion": 2, "approve": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let rows = audit.list(ListParams::default()).await.unwrap().rows;
+    let writes: Vec<_> = rows
+        .iter()
+        .filter(|row| row.resource == "time_entries" && row.action != "denied")
+        .collect();
+    assert_eq!(
+        writes.iter().filter(|r| r.action == "create").count(),
+        2,
+        "the replayed create is not recorded twice"
+    );
+    let approval = writes.iter().find(|r| r.action == "approve").unwrap();
+    let detail = approval.detail.as_deref().unwrap();
+    assert!(detail.contains("\"selfApproval\":true"));
+    assert!(!detail.contains("5000"), "no rate in the audit");
+    assert!(rows
+        .iter()
+        .any(|r| r.resource == "time_entries" && r.action == "denied"));
+}
+
+#[tokio::test]
+async fn p4b_rest_work_masters_follow_the_master_rights() {
+    let (router, _audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    for token in [&editor, &viewer] {
+        let response = router
+            .clone()
+            .oneshot(get_auth("/api/phases", token))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "not a company member"
+        );
+    }
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/common-activities", &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await.as_array().unwrap().len(), 4);
+
+    grant(&router, &admin, EDITOR_ID, json!(["time.entry"])).await;
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/phases", &editor))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await.as_array().unwrap().len(), 6);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/phases",
+            &editor,
+            json!({ "name": "据付", "sortOrder": 70 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "time.entry alone does not maintain masters"
+    );
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["time.entry", "project.manage"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/phases",
+            &editor,
+            json!({ "name": "据付", "sortOrder": 70 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let row = body_json(response).await;
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/phases/{}", row["id"]),
+            &admin,
+            json!({ "name": "据付", "sortOrder": 70, "active": false, "rowVersion": row["rowVersion"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["active"], false);
 }

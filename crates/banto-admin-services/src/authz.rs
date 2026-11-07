@@ -203,6 +203,9 @@ pub enum Operation {
     ViewProjectAmounts { project_id: i64 },
     /// Enter one's own hours/expenses against a project.
     EnterTime { project_id: i64 },
+    /// Enter one's own hours against a common activity (社内会議・教育など,
+    /// spec §5.2): no project, so `time.entry` alone (banto-cost P4b).
+    EnterCommonTime,
     /// Update and adopt the pipeline of a project. Entering and adopting
     /// amounts presupposes seeing them, so this also needs `amount.view`
     /// (PR #9 review: the saved version is returned with its amounts).
@@ -211,6 +214,9 @@ pub enum Operation {
     ManageProject { project_id: i64 },
     /// Approve a record someone submitted against a project.
     Approve { project_id: i64, submitted_by: i64 },
+    /// Approve hours someone submitted against a common activity. No project
+    /// manager owns them, so accounting (`finance.close`) decides (P4b).
+    ApproveCommon { submitted_by: i64 },
     /// Personal hourly cost rates (view).
     ViewRates,
     /// Personal hourly cost rates (register/change).
@@ -258,9 +264,11 @@ impl Operation {
             Operation::ViewProject { .. } => "view_project",
             Operation::ViewProjectAmounts { .. } => "view_project_amounts",
             Operation::EnterTime { .. } => "enter_time",
+            Operation::EnterCommonTime => "enter_common_time",
             Operation::EditPipeline { .. } => "edit_pipeline",
             Operation::ManageProject { .. } => "manage_project",
             Operation::Approve { .. } => "approve",
+            Operation::ApproveCommon { .. } => "approve_common",
             Operation::ViewRates => "view_rates",
             Operation::EditRates => "edit_rates",
             Operation::FinanceClose => "finance_close",
@@ -287,7 +295,9 @@ impl Operation {
             | Operation::EditProject { project_id }
             | Operation::EditOrder { project_id }
             | Operation::OverrideCalcBasis { project_id, .. } => Some(project_id),
-            Operation::ViewRates
+            Operation::EnterCommonTime
+            | Operation::ApproveCommon { .. }
+            | Operation::ViewRates
             | Operation::EditRates
             | Operation::FinanceClose
             | Operation::ViewAllReports
@@ -407,6 +417,18 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
                 }
                 return Err(Denial::MissingCapability(Capability::ProjectManage));
             }
+            if subject.user_id == Some(submitted_by) {
+                if !policy.allow_self_approval {
+                    return Err(Denial::SelfApproval);
+                }
+                return Ok(Allowed {
+                    self_approval_exception: true,
+                });
+            }
+        }
+        Operation::EnterCommonTime => require(subject, Capability::TimeEntry)?,
+        Operation::ApproveCommon { submitted_by } => {
+            require(subject, Capability::FinanceClose)?;
             if subject.user_id == Some(submitted_by) {
                 if !policy.allow_self_approval {
                     return Err(Denial::SelfApproval);
@@ -542,6 +564,40 @@ pub fn amount_projects(subject: &Subject) -> ProjectScope {
             .map(|(id, _)| *id)
             .collect(),
     )
+}
+
+/// Projects whose submitted hours the subject may approve - the ids for which
+/// `authorize(Approve)` passes the capability and scope checks (the
+/// self-approval check depends on the record, so the caller still decides
+/// each record). Accounting approves everywhere; a manager on their projects.
+pub fn approval_projects(subject: &Subject) -> ProjectScope {
+    if !subject.is_company_member() {
+        return ProjectScope::Only(BTreeSet::new());
+    }
+    if subject.has(Capability::FinanceClose) {
+        return ProjectScope::All;
+    }
+    if !subject.has(Capability::ProjectManage) {
+        return ProjectScope::Only(BTreeSet::new());
+    }
+    ProjectScope::Only(
+        subject
+            .memberships
+            .iter()
+            .filter(|(_, kinds)| kinds.contains(&MemberKind::Manager))
+            .map(|(id, _)| *id)
+            .collect(),
+    )
+}
+
+/// Whether the subject sees each record's hourly rate and labor cost. A
+/// record's cost divided by its minutes is the person's rate, so this is the
+/// personal-rate right (`finance.rate`, spec §4) plus `amount.view`; project
+/// managers see only the project's aggregate.
+pub fn sees_record_costs(subject: &Subject) -> bool {
+    subject.is_company_member()
+        && subject.has(Capability::FinanceRate)
+        && subject.has(Capability::AmountView)
 }
 
 /// The caller as the wiring layer knows it, for [`AuthzService::authorize_audited`].
@@ -947,6 +1003,78 @@ mod tests {
 
     fn allow(s: &Subject, op: Operation) {
         authorize(s, op, Policy::default()).expect("should be allowed");
+    }
+
+    #[test]
+    fn p4b_common_activity_time_and_its_approval() {
+        let worker = subject(10, &[Capability::TimeEntry], &[]);
+        allow(&worker, Operation::EnterCommonTime);
+        let none = subject(11, &[Capability::AmountView], &[]);
+        assert_eq!(
+            deny(&none, Operation::EnterCommonTime),
+            Denial::MissingCapability(Capability::TimeEntry)
+        );
+        let pm = subject(
+            12,
+            &[Capability::ProjectManage],
+            &[(P1, MemberKind::Manager)],
+        );
+        assert_eq!(
+            deny(&pm, Operation::ApproveCommon { submitted_by: 10 }),
+            Denial::MissingCapability(Capability::FinanceClose)
+        );
+        let finance = subject(13, &[Capability::FinanceClose], &[]);
+        allow(&finance, Operation::ApproveCommon { submitted_by: 10 });
+        assert_eq!(
+            deny(&finance, Operation::ApproveCommon { submitted_by: 13 }),
+            Denial::SelfApproval
+        );
+        let own = authorize(
+            &finance,
+            Operation::ApproveCommon { submitted_by: 13 },
+            Policy {
+                allow_self_approval: true,
+            },
+        )
+        .unwrap();
+        assert!(own.self_approval_exception);
+    }
+
+    #[test]
+    fn p4b_approval_scope_and_record_costs() {
+        let pm = subject(
+            12,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P1, MemberKind::Manager), (P2, MemberKind::Worker)],
+        );
+        assert_eq!(
+            approval_projects(&pm),
+            ProjectScope::Only([P1].into_iter().collect())
+        );
+        for id in [P1, P2] {
+            let decided = authorize(
+                &pm,
+                Operation::Approve {
+                    project_id: id,
+                    submitted_by: 10,
+                },
+                Policy::default(),
+            );
+            assert_eq!(decided.is_ok(), approval_projects(&pm).contains(id));
+        }
+        assert!(!sees_record_costs(&pm), "managers see aggregates only");
+        let finance = subject(13, &[Capability::FinanceClose], &[]);
+        assert_eq!(approval_projects(&finance), ProjectScope::All);
+        let rate = subject(14, &[Capability::FinanceRate, Capability::AmountView], &[]);
+        assert!(sees_record_costs(&rate));
+        assert_eq!(
+            approval_projects(&subject(
+                15,
+                &[Capability::TimeEntry],
+                &[(P1, MemberKind::Manager)]
+            )),
+            ProjectScope::Only(BTreeSet::new())
+        );
     }
 
     #[test]
