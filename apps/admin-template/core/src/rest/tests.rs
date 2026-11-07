@@ -4279,3 +4279,116 @@ async fn p4b_rest_work_masters_follow_the_master_rights() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body_json(response).await["active"], false);
 }
+
+#[tokio::test]
+async fn p4b_rest_returned_entry_is_fixed_resubmitted_and_drafts_deleted() {
+    let (router, _audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["time.entry", "project.manage"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await["id"].as_i64().unwrap();
+    let body = |phase: i64, row_version: Option<i64>| {
+        json!({
+            "workDate": "2026-11-09", "projectId": project, "phaseId": phase,
+            "minutes": 60, "rowVersion": row_version
+        })
+    };
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/time-entries", &editor, body(1, None)))
+        .await
+        .unwrap();
+    let id = body_json(response).await["entry"]["id"].as_i64().unwrap();
+    router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/submit"),
+            &editor,
+            json!({ "rowVersion": 1 }),
+        ))
+        .await
+        .unwrap();
+    // Returning needs a reason.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/decide"),
+            &editor,
+            json!({ "rowVersion": 2, "approve": false }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/decide"),
+            &editor,
+            json!({ "rowVersion": 2, "approve": false, "reason": "工程が違います" }),
+        ))
+        .await
+        .unwrap();
+    let returned = body_json(response).await;
+    assert_eq!(returned["status"], "returned");
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/time-entries/{id}"),
+            &editor,
+            body(2, returned["rowVersion"].as_i64()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let fixed = body_json(response).await["entry"].clone();
+    assert_eq!(fixed["phaseName"], "ソフト開発");
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/submit"),
+            &editor,
+            json!({ "rowVersion": fixed["rowVersion"] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["status"], "submitted");
+
+    // A draft is deleted with the version it was read at; a stale one is refused.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/time-entries", &editor, body(1, None)))
+        .await
+        .unwrap();
+    let draft = body_json(response).await["entry"]["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(delete_auth(
+            &format!("/api/time-entries/{draft}?rowVersion=9"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(delete_auth(
+            &format!("/api/time-entries/{draft}?rowVersion=1"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
