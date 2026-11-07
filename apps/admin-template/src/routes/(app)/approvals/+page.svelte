@@ -10,8 +10,9 @@
 	 *
 	 * The company runs single-handed, so approving one's own submission is
 	 * allowed and recorded in the audit log (design 2.4). The server decides
-	 * each entry; nothing the caller may not decide is listed. Demo mode has
-	 * no backend.
+	 * each entry; nothing the caller may not decide is listed. Submitted
+	 * direct costs (P4d) are listed below (CostApprovals.svelte). Demo mode
+	 * has no backend.
 	 */
 	import { isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
@@ -23,6 +24,7 @@
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
+	import CostApprovals from './CostApprovals.svelte';
 
 	const available = isPipelineAvailable();
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -35,9 +37,10 @@
 	let returning = $state<number | null>(null);
 	let reason = $state('');
 	let reasonError = $state('');
+	let costsPending = $state({ dirty: false, busy: false });
 	const guard = guardUnsavedChanges({
-		isDirty: () => returning !== null && reason.trim() !== '',
-		isSaving: () => busy
+		isDirty: () => (returning !== null && reason.trim() !== '') || costsPending.dirty,
+		isSaving: () => busy || costsPending.busy
 	});
 
 	async function load() {
@@ -237,6 +240,9 @@
 				</table>
 			</div>
 		</section>
+	{/if}
+	{#if available}
+		<CostApprovals {canWrite} onPendingChange={(p) => (costsPending = p)} />
 	{/if}
 	<p class="sr-only" aria-live="polite">{guard.pending ? m['unsaved.notice']() : ''}</p>
 </div>

@@ -2,7 +2,8 @@
 	/**
 	 * 管理設定 → 工程・共通活動 (spec §5.2 / §9, banto-cost P4b): the phases a
 	 * project's hours are entered against and the common activities (社内会議・
-	 * 教育・営業・待機) that belong to no project. Reading needs any capability
+	 * 教育・営業・待機) that belong to no project, and the vendors (取引先, P4d)
+	 * of purchase orders and direct costs. Reading needs any capability
 	 * (or the `admin` role); maintaining them needs the `admin` role or a
 	 * business capability that maintains masters (sales, project management,
 	 * accounting) - the server decides (MasterTable.svelte). Demo mode has no
@@ -20,9 +21,10 @@
 	const canWrite = $derived(canWriteResources(sessionStore.role));
 	let phasesPending = $state({ dirty: false, busy: false });
 	let activitiesPending = $state({ dirty: false, busy: false });
+	let vendorsPending = $state({ dirty: false, busy: false });
 	const guard = guardUnsavedChanges({
-		isDirty: () => phasesPending.dirty || activitiesPending.dirty,
-		isSaving: () => phasesPending.busy || activitiesPending.busy
+		isDirty: () => phasesPending.dirty || activitiesPending.dirty || vendorsPending.dirty,
+		isSaving: () => phasesPending.busy || activitiesPending.busy || vendorsPending.busy
 	});
 </script>
 
@@ -47,6 +49,12 @@
 				title={m['workMasters.activities']()}
 				{canWrite}
 				onPendingChange={(p) => (activitiesPending = p)}
+			/>
+			<MasterTable
+				kind="vendors"
+				title={m['workMasters.vendors']()}
+				{canWrite}
+				onPendingChange={(p) => (vendorsPending = p)}
 			/>
 		</div>
 	{/if}

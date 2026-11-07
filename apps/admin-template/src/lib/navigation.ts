@@ -31,6 +31,7 @@ export type CostNavIconKey =
 	| 'calc-basis'
 	| 'time'
 	| 'approvals'
+	| 'costs'
 	| 'work-masters';
 export type CostNavLabelKey =
 	| 'nav.pipeline'
@@ -40,6 +41,7 @@ export type CostNavLabelKey =
 	| 'nav.calcBasis'
 	| 'nav.time'
 	| 'nav.approvals'
+	| 'nav.costs'
 	| 'nav.workMasters';
 
 /** Keys of the demo-only catalog entry (`NavItem.demoOnly`). Kept out of the unions above on purpose:
@@ -119,6 +121,8 @@ const allNavItems: NavItem[] = [
 	},
 	// banto-cost P4b: 工数入力・承認一覧 (spec §6.1 / §9). Capability-gated by the server.
 	{ path: '/time', labelKey: 'nav.time', icon: 'time' },
+	// banto-cost P4d: 直接費入力 (spec §6.3 / §9). Capability-gated by the server.
+	{ path: '/costs', labelKey: 'nav.costs', icon: 'costs' },
 	{ path: '/approvals', labelKey: 'nav.approvals', icon: 'approvals' },
 	// banto-cost P4a: 計算基準 (design 第10章). Amounts: capability-gated by the server.
 	{ path: '/calc-basis', labelKey: 'nav.calcBasis', icon: 'calc-basis' },

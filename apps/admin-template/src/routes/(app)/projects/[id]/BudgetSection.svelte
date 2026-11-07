@@ -7,8 +7,9 @@
 	 * A draft starts as a copy of the current budget. Labor lines take planned
 	 * hours (amount = hours × the budget rate on the draft's date); the other
 	 * cost types take a planned amount. Approving numbers the draft; a change
-	 * (版2 on) needs its reason, and approved versions never change. Direct-cost
-	 * actuals arrive with P4d, so their actual and variance show "—", never ¥0.
+	 * (版2 on) needs its reason, and approved versions never change. The actuals
+	 * are approved hours (labor) and approved direct costs (P4d); either side
+	 * still pending or provisional shows 暫定・不足あり.
 	 *
 	 * Reading needs `ViewProjectAmounts`; drafting is the project manager's
 	 * (`ManageProject`), approving the manager's or accounting's
@@ -301,6 +302,12 @@
 				label={overview.laborActualComplete
 					? m['budget.laborActualComplete']()
 					: m['budget.laborActualProvisional']()}
+			/>
+			<StatusBadge
+				variant={overview.directActualComplete ? 'success' : 'warning'}
+				label={overview.directActualComplete
+					? m['budget.directActualComplete']()
+					: m['budget.directActualProvisional']()}
 			/>
 		</div>
 		{#if !overview.current}
