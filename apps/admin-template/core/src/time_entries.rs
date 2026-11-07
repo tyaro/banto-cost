@@ -42,7 +42,7 @@ use cost_domain::calc_basis::{CalcValue, Source, Usage, UsageStatus};
 use cost_domain::time::{
     approval_cost, check_correction, check_entry, summarize, CorrectionIssue, CorrectionTarget,
     DayEntry, EntryInput, Rework, SummaryEntry, Target, TimeIssue, TimeStatus, TimeSummary,
-    TimeWarning, RATE_ITEM, UNIT_ITEM,
+    TimeWarning, DAY_LIMIT, RATE_ITEM, UNIT_ITEM,
 };
 use cost_domain::{calc_basis, Date, Minutes};
 use serde::{Deserialize, Serialize};
@@ -398,11 +398,16 @@ fn pending_correction_error() -> FieldError {
     )
 }
 
-/// The rows of a person's day the 24-hour check counts (`extra` narrows it).
+/// The rows of a person's day the 24-hour check counts (`extra` narrows it):
+/// those that count, except a correction still waiting - until it is
+/// approved the entry it would replace is the one that counts, and the
+/// approval checks the day again with the correction in its place (PR #24
+/// review: both rows would otherwise fill the day twice).
 fn day_sql(extra: &str) -> String {
     format!(
         "SELECT t.id, t.project_id, t.activity_id, t.phase_id, t.minutes FROM time_entries t \
-         WHERE t.user_id = ? AND t.work_date = ? AND {COUNTS}{extra}"
+         WHERE t.user_id = ? AND t.work_date = ? AND {COUNTS} \
+         AND NOT (t.corrects_id IS NOT NULL AND t.status = 'submitted'){extra}"
     )
 }
 
@@ -1151,13 +1156,30 @@ impl TimeEntriesService {
                 now = self.now()
             ));
             let rate = cost.rate.map(|r| r.value);
+            let lock = self.lock_sql();
+            let day = self.sql(&day_sql(""));
             in_tx!(&self.db, tx => {
+                if entry.corrects_id.is_some() {
+                    if let Some(lock) = &lock {
+                        let _: Vec<(i64,)> = fetch_all!(&mut *tx, lock, entry.user_id)?;
+                    }
+                }
                 let n = execute!(&mut *tx, sql, value_id, rate, cost.cost, actor_user_id, id,
                     input.row_version)?;
                 refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
                 if let Some(oid) = entry.corrects_id {
                     if n > 0 && execute!(&mut *tx, touch, oid)? == 0 {
                         return Err(stale_version_error());
+                    }
+                    // The day with the correction in place of the entry it
+                    // replaces (now out of COUNTS) stays within 24 hours.
+                    let rows: Vec<DayRow> =
+                        fetch_all!(&mut *tx, day, entry.user_id, &entry.work_date)?;
+                    let total: i64 = rows.iter().map(|r| r.4).sum();
+                    if total > DAY_LIMIT {
+                        return Err(BantoError::Validation {
+                            field_errors: vec![issue_error(&TimeIssue::DayOverLimit { total })],
+                        });
                     }
                 }
                 if let Some(d) = &original_date {
@@ -2183,5 +2205,79 @@ mod tests {
             closed.total.labor_missing, 0,
             "the replaced entry left October"
         );
+    }
+
+    #[tokio::test]
+    async fn t11_a_waiting_correction_does_not_fill_the_day_twice() {
+        let (_db, svc, p) = setup().await;
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let e = svc
+                .create(2, entry(p, "2026-11-09", 12 * 60))
+                .await
+                .unwrap()
+                .entry;
+            ids.push(submit_and_approve(&svc, 2, e.id).await);
+        }
+        // PR #24 review: both corrections of a full day can wait at once.
+        let c1 = svc
+            .correct(
+                2,
+                ids[0].id,
+                correction(&ids[0], 12 * 60, Some("工程の誤り")),
+            )
+            .await
+            .unwrap()
+            .entry;
+        let c2 = svc
+            .correct(
+                2,
+                ids[1].id,
+                correction(&ids[1], 12 * 60, Some("工程の誤り")),
+            )
+            .await
+            .unwrap()
+            .entry;
+        assert_eq!(
+            fields(svc.create(2, entry(p, "2026-11-09", 30)).await.unwrap_err()),
+            ["minutes"],
+            "the day is still full with the approved entries"
+        );
+        svc.decide(&c1, decision(c1.row_version, true), Some(1))
+            .await
+            .unwrap();
+        svc.decide(&c2, decision(c2.row_version, true), Some(1))
+            .await
+            .unwrap();
+        // A correction that would overfill the day is refused at approval:
+        // 11h corrected to 12h is fine on its own (12 + 12), but an hour
+        // entered while it waited (12 + 11 + 1) leaves no room for it.
+        let e = svc
+            .create(2, entry(p, "2026-11-10", 12 * 60))
+            .await
+            .unwrap()
+            .entry;
+        submit_and_approve(&svc, 2, e.id).await;
+        let e = svc
+            .create(2, entry(p, "2026-11-10", 11 * 60))
+            .await
+            .unwrap()
+            .entry;
+        let short = submit_and_approve(&svc, 2, e.id).await;
+        let longer = svc
+            .correct(2, short.id, correction(&short, 12 * 60, Some("時間の誤り")))
+            .await
+            .unwrap()
+            .entry;
+        svc.create(2, entry(p, "2026-11-10", 60)).await.unwrap();
+        assert_eq!(
+            fields(
+                svc.decide(&longer, decision(longer.row_version, true), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["minutes"]
+        );
+        assert_eq!(svc.get(longer.id).await.unwrap().status, "submitted");
     }
 }
