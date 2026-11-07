@@ -39,6 +39,7 @@ use crate::direct_costs::DirectCostsService;
 use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, MAX_TEXT_LEN,
 };
+use crate::time_entries::COUNTS;
 
 pub const RESOURCE: &str = "closing_periods";
 
@@ -233,8 +234,18 @@ const FINGERPRINT_SQL: [&str; 3] = [
 ];
 
 const UNAPPROVED_SQL: [&str; 2] = [
-    "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries \
-     WHERE status <> 'approved' AND work_date >= ? AND work_date <= ?",
+    // A returned correction is not unprocessed: the entry it would replace
+    // is still approved (T11).
+    // A waiting correction of an entry dated in the month also counts there,
+    // wherever it moves the hours: closing first would leave it impossible
+    // to approve (PR #24 review).
+    concat!(
+        "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries t \
+         WHERE t.status <> 'approved' AND ((t.work_date >= ? AND t.work_date <= ?) \
+         OR (t.status = 'submitted' AND t.corrects_id IN (SELECT o.id FROM time_entries o \
+         WHERE o.work_date >= ? AND o.work_date <= ?))) AND ",
+        crate::time_entries::counts_sql!()
+    ),
     "SELECT CAST(COUNT(*) AS BIGINT) FROM direct_costs \
      WHERE status <> 'approved' AND booked_on >= ? AND booked_on <= ?",
 ];
@@ -244,7 +255,7 @@ macro_rules! month_reads {
         let a: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[0], $from, $to)?;
         let b: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[1], $from, $to)?;
         let c: Option<(i64, i64, i64)> = fetch_optional!($exec, $fp[2], $from, $to)?;
-        let t: i64 = scalar!($exec, $un[0], $from, $to)?;
+        let t: i64 = scalar!($exec, $un[0], $from, $to, $from, $to)?;
         let d: i64 = scalar!($exec, $un[1], $from, $to)?;
         (
             vec![
@@ -323,10 +334,10 @@ impl ClosingService {
     /// The month's warnings (approved hours without a rate, provisionals
     /// not confirmed).
     async fn warning_state(&self, from: &str, to: &str) -> Result<(i64, i64), BantoError> {
-        let rate = self.sql(
-            "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries WHERE status = 'approved' \
-             AND labor_cost IS NULL AND work_date >= ? AND work_date <= ?",
-        );
+        let rate = self.sql(&format!(
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries t WHERE t.status = 'approved' \
+             AND t.labor_cost IS NULL AND t.work_date >= ? AND t.work_date <= ? AND {COUNTS}"
+        ));
         let provisional = self.sql(
             "SELECT CAST(COUNT(*) AS BIGINT) FROM direct_costs p WHERE p.status = 'approved' \
              AND p.entry_kind = 'provisional' AND p.booked_on >= ? AND p.booked_on <= ? \
@@ -343,12 +354,13 @@ impl ClosingService {
     async fn figures(&self, m: YearMonth) -> Result<BTreeMap<i64, MonthFigures>, BantoError> {
         let (from, to) = (first_day(m).to_string(), m.last_day().to_string());
         // CAST: Postgres sums BIGINT to NUMERIC.
-        let labor = self.sql(
-            "SELECT project_id, CAST(COALESCE(SUM(labor_cost), 0) AS BIGINT), \
-             CAST(SUM(CASE WHEN labor_cost IS NULL THEN 1 ELSE 0 END) AS BIGINT) \
-             FROM time_entries WHERE status = 'approved' AND project_id IS NOT NULL \
-             AND work_date >= ? AND work_date <= ? GROUP BY project_id",
-        );
+        // A replaced entry no longer counts (T11).
+        let labor = self.sql(&format!(
+            "SELECT t.project_id, CAST(COALESCE(SUM(t.labor_cost), 0) AS BIGINT), \
+             CAST(SUM(CASE WHEN t.labor_cost IS NULL THEN 1 ELSE 0 END) AS BIGINT) \
+             FROM time_entries t WHERE t.status = 'approved' AND t.project_id IS NOT NULL \
+             AND t.work_date >= ? AND t.work_date <= ? AND {COUNTS} GROUP BY t.project_id"
+        ));
         let revenue = self.sql(
             "SELECT project_id, CAST(COALESCE(SUM(amount), 0) AS BIGINT) \
              FROM revenue_recognitions WHERE cancelled_at IS NULL \

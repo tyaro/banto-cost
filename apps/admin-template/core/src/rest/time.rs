@@ -12,7 +12,10 @@
 //! | create / update | `EnterTime` on the project, or `EnterCommonTime`; own draft/returned only |
 //! | delete / submit | as above for the entry's target; own draft/returned only |
 //! | approvals list | scope `approval_projects`; activities with `finance.close` |
-//! | decide | `Approve` (project) / `ApproveCommon` (activity) with `APPROVAL_POLICY` |
+//! | decide | `Approve` (project) / `ApproveCommon` (activity) / `ApproveCorrection` (a correction) with `APPROVAL_POLICY` |
+//! | correct | own approved entry; `EnterTime` / `EnterCommonTime` on the corrected target |
+//! | an entry's corrections | own entry; `EnterCommonTime` |
+//! | pending corrections | `finance.close` (others: empty) |
 //! | project time summary | `ViewProjectAmounts` |
 //!
 //! An entry's rate and labor cost are shown only to `sees_record_costs`
@@ -28,9 +31,10 @@ use banto_core::BantoError;
 use banto_server::AuthenticatedSession;
 
 use crate::approval::APPROVAL_POLICY;
-use crate::time_access::{approve_op, enter_op, shown, shown_saved};
+use crate::time_access::{approve_op, enter_op, shown, shown_pair, shown_saved};
 use crate::time_entries::{
-    DecisionInput, ProjectTimeSummary, TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
+    CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntry, TimeEntryInput,
+    TimeEntrySaved, VersionInput,
 };
 use crate::work_masters::{MasterKind, WorkMaster, WorkMasterInput};
 
@@ -350,6 +354,58 @@ async fn entries_decide(
     Ok(Json(shown(&subject, entry)))
 }
 
+async fn entries_correct(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<CorrectionInput>,
+) -> Result<Json<TimeEntrySaved>, ApiError> {
+    own_entry(&state, &session, id).await?;
+    let (subject, user_id) =
+        entry_guard(&state, &session, enter_op(input.entry.project_id)).await?;
+    let saved = state.time_entries.correct(user_id, id, input).await?;
+    if !saved.replayed {
+        // The reason is free text: kept on the row, not in the audit log.
+        record_write(
+            &state.audit,
+            &state.auth,
+            &headers,
+            "correct",
+            RESOURCE,
+            Some(&saved.entry.id.to_string()),
+            Some(saved.entry.audit_detail()),
+        )
+        .await;
+    }
+    Ok(Json(shown_saved(&subject, saved)))
+}
+
+async fn entries_corrections(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<TimeEntry>>, ApiError> {
+    own_entry(&state, &session, id).await?;
+    let (subject, user_id) = entry_guard(&state, &session, Operation::EnterCommonTime).await?;
+    let rows = state.time_entries.corrections_of(user_id, id).await?;
+    Ok(Json(rows.into_iter().map(|e| shown(&subject, e)).collect()))
+}
+
+async fn corrections_pending(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+) -> Result<Json<Vec<CorrectionPair>>, ApiError> {
+    let subject = state.subject(&session).await?;
+    if !(subject.is_company_member() && subject.has(Capability::FinanceClose)) {
+        return Ok(Json(Vec::new()));
+    }
+    let rows = state.time_entries.pending_corrections().await?;
+    Ok(Json(
+        rows.into_iter().map(|p| shown_pair(&subject, p)).collect(),
+    ))
+}
+
 async fn project_time_summary(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
@@ -376,6 +432,11 @@ pub(super) fn time_read_router(
         .route("/api/common-activities", get(activities_list))
         .route("/api/time-entries", get(entries_list))
         .route("/api/time-entries/approvals", get(approvals_list))
+        .route("/api/time-entries/corrections", get(corrections_pending))
+        .route(
+            "/api/time-entries/{id}/corrections",
+            get(entries_corrections),
+        )
         .route("/api/projects/{id}/time-summary", get(project_time_summary))
         .with_state(super::projects::state(services, audit, auth.clone()))
         .layer(middleware::from_fn_with_state(auth, require_auth))
@@ -402,6 +463,7 @@ pub(super) fn time_write_router(
         )
         .route("/api/time-entries/{id}/submit", post(entries_submit))
         .route("/api/time-entries/{id}/decide", post(entries_decide))
+        .route("/api/time-entries/{id}/correct", post(entries_correct))
         .with_state(super::projects::state(
             services,
             audit.clone(),

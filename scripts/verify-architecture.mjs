@@ -459,6 +459,8 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'time_entries_delete', rest: 'DELETE /api/time-entries/{id}', role: 'Editor' },
 		{ tauri: 'time_entries_submit', rest: 'POST /api/time-entries/{id}/submit', role: 'Editor' },
 		{ tauri: 'time_entries_decide', rest: 'POST /api/time-entries/{id}/decide', role: 'Editor' },
+		// banto-cost P6b-2: 承認済み工数の訂正（申請は本人、承認は decide の ApproveCorrection）。
+		{ tauri: 'time_entries_correct', rest: 'POST /api/time-entries/{id}/correct', role: 'Editor' },
 		// banto-cost P4c: 予算版。editor 床＋authorize_audited（承認は APPROVAL_POLICY）。
 		{
 			tauri: 'budget_draft_create',
@@ -565,6 +567,16 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'time_entries_list', rest: 'GET /api/time-entries', role: 'Viewer' },
 		{ tauri: 'time_entries_approvals', rest: 'GET /api/time-entries/approvals', role: 'Viewer' },
 		{
+			tauri: 'time_entries_corrections',
+			rest: 'GET /api/time-entries/{id}/corrections',
+			role: 'Viewer'
+		},
+		{
+			tauri: 'time_entries_pending_corrections',
+			rest: 'GET /api/time-entries/corrections',
+			role: 'Viewer'
+		},
+		{
 			tauri: 'project_time_summary',
 			rest: 'GET /api/projects/{id}/time-summary',
 			role: 'Viewer'
@@ -667,6 +679,8 @@ const isAllowedPackageImport = (spec) =>
 		'direct_costs_approvals',
 		'time_entries_approvals',
 		'time_entries_list',
+		'time_entries_corrections',
+		'time_entries_pending_corrections',
 		// Issue #219 PR-C2: the reach check of the live listener (admin, like
 		// server_status). Desktop-only by nature - no REST twin.
 		'reach_check_status',
@@ -704,6 +718,8 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/common-activities',
 		'GET /api/time-entries',
 		'GET /api/time-entries/approvals',
+		'GET /api/time-entries/{id}/corrections',
+		'GET /api/time-entries/corrections',
 		'GET /api/projects/{id}/time-summary',
 		'GET /api/projects/{id}/budget',
 		'GET /api/projects/{id}/costs',

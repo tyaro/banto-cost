@@ -11,11 +11,17 @@
 	 * the save. A create carries a `clientRequestId` that is kept until the
 	 * save succeeds, so a resend after a lost response is not a second row
 	 * (T13).
+	 *
+	 * With `correcting`, the form requests a correction of an approved entry
+	 * (訂正, P6b-2, T11): it starts from the entry's values, needs a reason,
+	 * and the correction is submitted at once for accounting to approve; the
+	 * approved entry is never edited.
 	 */
 	import { untrack } from 'svelte';
 	import { isProviderError, notify, type FieldError } from '@banto/admin-core';
 	import * as m from '#lib/paraglide/messages.js';
 	import {
+		correctEntry,
 		newRequestId,
 		saveEntry,
 		type ReworkKind,
@@ -34,6 +40,8 @@
 	interface Props {
 		/** The entry to edit, or `null` for a new one. */
 		entry: TimeEntry | null;
+		/** Request a correction of the approved `entry` instead of editing it. */
+		correcting?: boolean;
 		/** The date a new entry starts with. */
 		defaultDate: string;
 		projects: ProjectChoice[];
@@ -46,6 +54,7 @@
 
 	let {
 		entry,
+		correcting = false,
 		defaultDate,
 		projects,
 		phases,
@@ -67,6 +76,8 @@
 	let mins = $state<number | null>(start ? start.minutes % 60 : 0);
 	let description = $state(start?.description ?? '');
 	let rework = $state<ReworkKind | ''>(start?.reworkKind ?? '');
+	let reason = $state('');
+	const correction = untrack(() => correcting) && start !== null;
 	let errors = $state<Record<string, string>>({});
 	let busy = $state(false);
 	let requestId = newRequestId();
@@ -85,7 +96,8 @@
 			hours,
 			mins,
 			description,
-			rework
+			rework,
+			reason
 		]);
 	}
 	const initial = snapshot();
@@ -111,6 +123,7 @@
 		} else if (activityId === '') {
 			next.activityId = m['time.errorActivity']();
 		}
+		if (correction && reason.trim() === '') next.reason = m['time.errorCorrectionReason']();
 		errors = next;
 		if (Object.keys(next).length > 0 || minutes === null) return null;
 		const isProject = kind === 'project';
@@ -144,9 +157,17 @@
 		requestFor = sending;
 		busy = true;
 		try {
-			const saved = start
-				? await saveEntry(start.id, { ...values, rowVersion: start.rowVersion })
-				: await saveEntry(null, { ...values, clientRequestId: requestId });
+			const saved =
+				correction && start
+					? await correctEntry(start.id, {
+							...values,
+							rowVersion: start.rowVersion,
+							reason: reason.trim(),
+							clientRequestId: requestId
+						})
+					: start
+						? await saveEntry(start.id, { ...values, rowVersion: start.rowVersion })
+						: await saveEntry(null, { ...values, clientRequestId: requestId });
 			requestId = newRequestId();
 			requestFor = null;
 			onSaved(saved);
@@ -175,7 +196,8 @@
 						'phaseId',
 						'activityId',
 						'description',
-						'reworkKind'
+						'reworkKind',
+						'reason'
 					].includes(field)
 			)
 			.map(([, message]) => message)
@@ -190,7 +212,12 @@
 		void save();
 	}}
 >
-	<h2 id="time-form-heading">{start ? m['time.editTitle']() : m['time.addTitle']()}</h2>
+	<h2 id="time-form-heading">
+		{correction ? m['time.correctTitle']() : start ? m['time.editTitle']() : m['time.addTitle']()}
+	</h2>
+	{#if correction}
+		<p class="note" role="note">{m['time.correctNote']()}</p>
+	{/if}
 	{#if start?.status === 'returned' && start.returnReason}
 		<p class="returned" role="note">
 			{m['time.returnedReason']({ reason: start.returnReason })}
@@ -302,11 +329,28 @@
 			<textarea class="banto-input" rows="2" bind:value={description}></textarea>
 			{#if errors.description}<span class="error">{errors.description}</span>{/if}
 		</label>
+
+		{#if correction}
+			<label class="field wide">
+				<span>{m['time.fieldCorrectionReason']()}</span>
+				<textarea
+					class="banto-input"
+					rows="2"
+					bind:value={reason}
+					aria-invalid={!!errors.reason}
+					required></textarea>
+				{#if errors.reason}<span class="error">{errors.reason}</span>{/if}
+			</label>
+		{/if}
 	</div>
 
 	<div class="actions">
 		<button type="submit" class="banto-btn banto-btn--primary" disabled={busy}>
-			{start ? m['time.saveChanges']() : m['time.saveDraft']()}
+			{correction
+				? m['time.correctSubmit']()
+				: start
+					? m['time.saveChanges']()
+					: m['time.saveDraft']()}
 		</button>
 		<button type="button" class="banto-btn banto-btn--ghost" disabled={busy} onclick={onCancel}>
 			{m['common.cancel']()}
@@ -374,6 +418,12 @@
 	.error {
 		margin: 0;
 		color: var(--banto-danger);
+		font-size: var(--banto-font-size-sm);
+	}
+
+	.note {
+		margin: 0;
+		color: var(--banto-text-muted);
 		font-size: var(--banto-font-size-sm);
 	}
 

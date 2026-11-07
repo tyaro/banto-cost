@@ -11,8 +11,9 @@
 	 * The company runs single-handed, so approving one's own submission is
 	 * allowed and recorded in the audit log (design 2.4). The server decides
 	 * each entry; nothing the caller may not decide is listed. Submitted
-	 * direct costs (P4d) are listed below (CostApprovals.svelte). Demo mode
-	 * has no backend.
+	 * direct costs (P4d) are listed below (CostApprovals.svelte), and for
+	 * accounting the corrections of approved hours (P6b-2,
+	 * CorrectionApprovals.svelte). Demo mode has no backend.
 	 */
 	import { isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
@@ -25,6 +26,7 @@
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
 	import CostApprovals from './CostApprovals.svelte';
+	import CorrectionApprovals from './CorrectionApprovals.svelte';
 
 	const available = isPipelineAvailable();
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -38,9 +40,13 @@
 	let reason = $state('');
 	let reasonError = $state('');
 	let costsPending = $state({ dirty: false, busy: false });
+	let correctionsPending = $state({ dirty: false, busy: false });
 	const guard = guardUnsavedChanges({
-		isDirty: () => (returning !== null && reason.trim() !== '') || costsPending.dirty,
-		isSaving: () => busy || costsPending.busy
+		isDirty: () =>
+			(returning !== null && reason.trim() !== '') ||
+			costsPending.dirty ||
+			correctionsPending.dirty,
+		isSaving: () => busy || costsPending.busy || correctionsPending.busy
 	});
 
 	async function load() {
@@ -242,6 +248,7 @@
 		</section>
 	{/if}
 	{#if available}
+		<CorrectionApprovals {canWrite} onPendingChange={(p) => (correctionsPending = p)} />
 		<CostApprovals {canWrite} onPendingChange={(p) => (costsPending = p)} />
 	{/if}
 	<p class="sr-only" aria-live="polite">{guard.pending ? m['unsaved.notice']() : ''}</p>

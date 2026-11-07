@@ -5,7 +5,9 @@
 	 * (TimeEntryForm.svelte); a draft or a returned entry can be edited,
 	 * deleted or submitted (申請), one at a time or every one of the week.
 	 * Submitted and approved entries are read-only here - approval is on
-	 * /approvals, corrections of approved hours come with the monthly close.
+	 * /approvals. An approved entry is corrected by requesting a correction
+	 * (訂正, P6b-2, T11: the same form with a reason, approved again by
+	 * accounting); the replaced entry stays listed but no longer counts.
 	 *
 	 * Needs `time.entry` (and, for a project, being one of its members); the
 	 * server decides, and a `forbidden` read shows the no-access state. An
@@ -19,7 +21,9 @@
 	import { isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
 	import type { Project } from '#lib/banto/resources/projects.js';
 	import {
+		countsInTotals,
 		deleteEntry,
+		isCorrectable,
 		listMasters,
 		listOwnEntries,
 		submitEntry,
@@ -61,6 +65,8 @@
 
 	/** `undefined` = no form; `null` = a new entry; otherwise the entry being edited. */
 	let formEntry = $state<TimeEntry | null | undefined>(undefined);
+	/** The form requests a correction of the approved `formEntry`. */
+	let formCorrecting = $state(false);
 	let formKey = $state(0);
 	let formDate = $state(todayIso());
 	let formPending = $state({ dirty: false, busy: false });
@@ -123,12 +129,22 @@
 		for (const e of entries ?? []) map.get(e.workDate)?.push(e);
 		return map;
 	});
-	const weekTotal = $derived((entries ?? []).reduce((sum, e) => sum + e.minutes, 0));
-	const editable = (e: TimeEntry) => e.status === 'draft' || e.status === 'returned';
+	/**
+	 * The week's rows that add up: not replaced, not a returned correction,
+	 * and not a correction still waiting (until approved, the entry it would
+	 * replace is the one that counts).
+	 */
+	const inTotals = (e: TimeEntry) =>
+		countsInTotals(e) && (e.correctsId === null || e.status === 'approved');
+	const counted = $derived((entries ?? []).filter(inTotals));
+	const weekTotal = $derived(counted.reduce((sum, e) => sum + e.minutes, 0));
+	/** A returned correction is history: it is requested again, never edited. */
+	const editable = (e: TimeEntry) =>
+		(e.status === 'draft' || e.status === 'returned') && e.correctsId === null;
 	const pendingSubmit = $derived(loadedFor === monday ? (entries ?? []).filter(editable) : []);
 	const statusTotals = $derived.by(() => {
 		const totals: Record<string, number> = { draft: 0, returned: 0, submitted: 0, approved: 0 };
-		for (const e of entries ?? []) totals[e.status] = (totals[e.status] ?? 0) + e.minutes;
+		for (const e of counted) totals[e.status] = (totals[e.status] ?? 0) + e.minutes;
 		return totals;
 	});
 
@@ -138,9 +154,10 @@
 		return !formPending.dirty || window.confirm(m['time.discardConfirm']());
 	}
 
-	function openForm(entry: TimeEntry | null, date?: string) {
+	function openForm(entry: TimeEntry | null, date?: string, correcting = false) {
 		if (!canLeaveForm()) return;
 		formEntry = entry;
+		formCorrecting = correcting && entry !== null;
 		formDate = date ?? (dates.includes(todayIso()) ? todayIso() : dates[0]);
 		formKey += 1;
 		formPending = { dirty: false, busy: false };
@@ -162,7 +179,14 @@
 
 	function onSaved(saved: TimeEntrySaved) {
 		warnings = saved.warnings.map(warningText);
-		notify('success', saved.replayed ? m['time.savedReplayed']() : m['time.saved']());
+		notify(
+			'success',
+			saved.replayed
+				? m['time.savedReplayed']()
+				: saved.entry.correctsId !== null
+					? m['time.correctionRequested']()
+					: m['time.saved']()
+		);
 		closeForm();
 		if (!dates.includes(saved.entry.workDate)) {
 			entries = null;
@@ -280,6 +304,7 @@
 				{#key formKey}
 					<TimeEntryForm
 						entry={formEntry}
+						correcting={formCorrecting}
 						defaultDate={formDate}
 						{projects}
 						{phases}
@@ -336,7 +361,7 @@
 						<tbody>
 							{#each dates as date (date)}
 								{@const rows = byDate.get(date) ?? []}
-								{@const dayTotal = rows.reduce((sum, e) => sum + e.minutes, 0)}
+								{@const dayTotal = rows.filter(inTotals).reduce((sum, e) => sum + e.minutes, 0)}
 								<tr class="day">
 									<th scope="rowgroup" colspan="3">{dayLabel(date)}</th>
 									<td class="num">{formatMinutes(dayTotal)}</td>
@@ -355,7 +380,7 @@
 									</td>
 								</tr>
 								{#each rows as e (e.id)}
-									<tr>
+									<tr class:not-counted={!inTotals(e)} class:replaced={!countsInTotals(e)}>
 										<td></td>
 										<td>{targetLabel(e)}</td>
 										<td>
@@ -365,6 +390,11 @@
 										<td class="num">{formatMinutes(e.minutes)}</td>
 										<td class="wrap">
 											{e.description ?? ''}
+											{#if e.correctsId !== null && e.correctionReason}
+												<div class="sub">
+													{m['time.correctionReason']({ reason: e.correctionReason })}
+												</div>
+											{/if}
 											{#if e.status === 'returned' && e.returnReason}
 												<div class="returned">
 													{m['time.returnedReason']({ reason: e.returnReason })}
@@ -376,7 +406,17 @@
 												variant={timeStatusVariant(e.status)}
 												label={timeStatusLabel(e.status)}
 											/>
-											{#if e.costMissing}<div class="sub">{m['time.costMissing']()}</div>{/if}
+											{#if e.costMissing && e.replacedById === null}
+												<div class="sub">{m['time.costMissing']()}</div>
+											{/if}
+											{#if e.correctsId !== null}
+												<div class="sub">{m['time.isCorrection']()}</div>
+											{/if}
+											{#if e.replacedById !== null}
+												<div class="sub">{m['time.replaced']()}</div>
+											{:else if e.correctionPending}
+												<div class="sub">{m['time.correctionPending']()}</div>
+											{/if}
 										</td>
 										<td>
 											{#if canWrite && editable(e)}
@@ -400,6 +440,13 @@
 														onclick={() => void remove(e)}>{m['common.delete']()}</button
 													>
 												</div>
+											{:else if canWrite && isCorrectable(e)}
+												<button
+													type="button"
+													class="banto-btn banto-btn--ghost"
+													disabled={acting}
+													onclick={() => openForm(e, undefined, true)}>{m['time.correct']()}</button
+												>
 											{/if}
 										</td>
 									</tr>
@@ -518,6 +565,14 @@
 	td.wrap {
 		white-space: normal;
 		min-width: 12rem;
+	}
+
+	tr.not-counted td {
+		color: var(--banto-text-muted);
+	}
+
+	tr.replaced td.num {
+		text-decoration: line-through;
 	}
 
 	.num {

@@ -10,6 +10,12 @@
  * unless the caller holds the personal-rate right; `costMissing` (approved
  * without a rate, 原価未確定) is shown to everyone and never read as 0 yen.
  *
+ * Corrections (訂正, P6b-2, T11): an approved entry is never edited; its
+ * owner requests a correction (a new row with `correctsId` and a reason,
+ * submitted at once) and accounting approves it again. Once approved the
+ * entry it replaces (`replacedById`) no longer counts; a returned correction
+ * is history only (`countsInTotals`).
+ *
  * Demo mode has no backend: every export rejects like pipelineAdmin.ts.
  */
 import { getBantoMode } from './setup';
@@ -62,8 +68,32 @@ export interface TimeEntry {
 	appliedRate: number | null;
 	laborCost: number | null;
 	costMissing: boolean;
+	/** A correction: the entry it replaces once approved. */
+	correctsId: number | null;
+	correctionReason: string | null;
+	/** The approved correction that replaced this entry (it no longer counts). */
+	replacedById: number | null;
+	/** A correction of this entry waits for approval. */
+	correctionPending: boolean;
 	rowVersion: number;
 	updatedAt: string;
+}
+
+/** Mirrors `admin_template_core::time_entries::CorrectionPair`. */
+export interface CorrectionPair {
+	correction: TimeEntry;
+	original: TimeEntry;
+}
+
+/** Mirrors `cost_domain::time::counts`: a replaced entry and a returned correction count as nothing. */
+export function countsInTotals(e: TimeEntry): boolean {
+	if (e.replacedById !== null) return false;
+	return !(e.correctsId !== null && e.status === 'returned');
+}
+
+/** An approved entry that can be corrected now (not replaced, no correction pending). */
+export function isCorrectable(e: TimeEntry): boolean {
+	return e.status === 'approved' && e.replacedById === null && !e.correctionPending;
 }
 
 export interface TimeEntryInput {
@@ -219,6 +249,36 @@ export async function decideEntry(
 		method: 'POST',
 		body: values
 	});
+}
+
+/**
+ * Request a correction of one of the caller's approved entries: the corrected
+ * values, the reason and the entry's `rowVersion` (T11, T13).
+ */
+export async function correctEntry(
+	id: number,
+	values: TimeEntryInput & { rowVersion: number; reason: string }
+): Promise<TimeEntrySaved> {
+	guard();
+	if (tauri()) return invokeCommand<TimeEntrySaved>('time_entries_correct', { id, values });
+	return httpRequest<TimeEntrySaved>(`/api/time-entries/${id}/correct`, {
+		method: 'POST',
+		body: values
+	});
+}
+
+/** The corrections of one of the caller's entries, newest first. */
+export async function listEntryCorrections(id: number): Promise<TimeEntry[]> {
+	guard();
+	if (tauri()) return invokeCommand<TimeEntry[]>('time_entries_corrections', { id });
+	return httpRequest<TimeEntry[]>(`/api/time-entries/${id}/corrections`, { method: 'GET' });
+}
+
+/** Corrections waiting for accounting's approval (empty for everyone else). */
+export async function listPendingCorrections(): Promise<CorrectionPair[]> {
+	guard();
+	if (tauri()) return invokeCommand<CorrectionPair[]>('time_entries_pending_corrections');
+	return httpRequest<CorrectionPair[]>('/api/time-entries/corrections', { method: 'GET' });
 }
 
 /** A project's hours (amounts: `ViewProjectAmounts`). */
