@@ -56,6 +56,7 @@ use cost_domain::{Date, FiscalCalendar};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
+use crate::closeouts::{refuse_settled, settled_check_sql};
 use crate::customers::{clean_optional, field_error, now_expr, stale_version_error};
 use crate::orders::{
     execute, fetch_all, fetch_optional, in_tx, on_pool, placeholders, scalar, MAX_TEXT_LEN,
@@ -76,6 +77,8 @@ pub const DIRECT_TYPES: [CostType; 4] = [
 ];
 
 /// One allocation line (配分先) of a split cost.
+const SETTLED_MESSAGE: &str = "精算完了の案件には直接費・発注を登録できません";
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AllocationLine {
@@ -1039,10 +1042,7 @@ impl DirectCostsService {
                 field_errors: vec![field_error(field, "見つかりません")],
             }),
             Some((status,)) if status == "settled" => Err(BantoError::Validation {
-                field_errors: vec![field_error(
-                    field,
-                    "精算完了の案件には直接費・発注を登録できません",
-                )],
+                field_errors: vec![field_error(field, SETTLED_MESSAGE)],
             }),
             Some(_) => Ok(()),
         }
@@ -1327,6 +1327,7 @@ impl DirectCostsService {
              VALUES (?, ?, ?, ?)",
         );
         let date = r.booked_on.to_string();
+        let settled = settled_check_sql(self.db.dialect());
         let result: Result<i64, BantoError> = async {
             Ok(in_tx!(&self.db, tx => {
                 let id: i64 = scalar!(&mut *tx, insert, user_id, r.kind.as_str(), r.ref_id,
@@ -1336,6 +1337,13 @@ impl DirectCostsService {
                     &r.voucher_no, &r.reason, &r.allocation_basis, &r.request_id)?;
                 for (n, (project, amount)) in r.allocations.iter().enumerate() {
                     execute!(&mut *tx, alloc, id, n as i64 + 1, *project, *amount)?;
+                }
+                if let Some(p) = r.project_id {
+                    refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
+                }
+                for (n, (project, _)) in r.allocations.iter().enumerate() {
+                    refuse_settled!(&mut *tx, settled, *project,
+                        &format!("allocations.{n}.projectId"), SETTLED_MESSAGE);
                 }
                 id
             }))
@@ -1402,6 +1410,7 @@ impl DirectCostsService {
         );
         let date = r.booked_on.to_string();
         let version = cost.row_version;
+        let settled = settled_check_sql(self.db.dialect());
         in_tx!(&self.db, tx => {
             if execute!(&mut *tx, update, r.adjustment_kind.map(AdjustmentKind::as_str),
                 r.project_id, r.phase_id, r.cost_type.as_str(), r.vendor_id,
@@ -1414,6 +1423,13 @@ impl DirectCostsService {
             execute!(&mut *tx, clear, id)?;
             for (n, (project, amount)) in r.allocations.iter().enumerate() {
                 execute!(&mut *tx, alloc, id, n as i64 + 1, *project, *amount)?;
+            }
+            if let Some(p) = r.project_id {
+                refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
+            }
+            for (n, (project, _)) in r.allocations.iter().enumerate() {
+                refuse_settled!(&mut *tx, settled, *project,
+                    &format!("allocations.{n}.projectId"), SETTLED_MESSAGE);
             }
         });
         self.notify(RESOURCE);
@@ -2039,9 +2055,17 @@ impl DirectCostsService {
         );
         let date = ordered_on.expect("checked").to_string();
         let cost_type = cost_type.expect("checked").as_str();
-        let result: Result<i64, BantoError> = on_pool!(&self.db, pool => scalar!(pool, sql,
-            project_id, input.vendor_id, input.phase_id, cost_type, &description, &date,
-            input.amount, actor_user_id, actor_user_id, &request_id));
+        let settled = settled_check_sql(self.db.dialect());
+        let result: Result<i64, BantoError> = async {
+            Ok(in_tx!(&self.db, tx => {
+                let id: i64 = scalar!(&mut *tx, sql, project_id, input.vendor_id,
+                    input.phase_id, cost_type, &description, &date, input.amount,
+                    actor_user_id, actor_user_id, &request_id)?;
+                refuse_settled!(&mut *tx, settled, project_id, "projectId", SETTLED_MESSAGE);
+                id
+            }))
+        }
+        .await;
         let id = match result {
             Ok(id) => id,
             Err(BantoError::Storage(m)) if m.to_lowercase().contains("unique") => {
@@ -2088,12 +2112,16 @@ impl DirectCostsService {
             self.now()
         ));
         let date = ordered_on.expect("checked").to_string();
-        if on_pool!(&self.db, pool => execute!(pool, sql, input.vendor_id, input.phase_id,
-            &description, &date, actor_user_id, id, order.row_version))?
-            == 0
-        {
-            return Err(stale_version_error());
-        }
+        let settled = settled_check_sql(self.db.dialect());
+        let project_id = order.project_id;
+        in_tx!(&self.db, tx => {
+            if execute!(&mut *tx, sql, input.vendor_id, input.phase_id, &description, &date,
+                actor_user_id, id, order.row_version)? == 0
+            {
+                return Err(stale_version_error());
+            }
+            refuse_settled!(&mut *tx, settled, project_id, "projectId", SETTLED_MESSAGE);
+        });
         self.notify(ORDER_RESOURCE);
         self.order(id).await
     }
@@ -2150,6 +2178,8 @@ impl DirectCostsService {
             cancelled: order.cancelled_amount,
         };
         let key = id.to_string();
+        let settled = settled_check_sql(self.db.dialect());
+        let project_id = order.project_id;
         in_tx!(&self.db, tx => {
             if let Some(lock) = &lock {
                 let _: Vec<(i64,)> = fetch_all!(&mut *tx, lock, id)?;
@@ -2157,6 +2187,7 @@ impl DirectCostsService {
             if execute!(&mut *tx, bump, actor_user_id, id, input.row_version)? == 0 {
                 return Err(stale_version_error());
             }
+            refuse_settled!(&mut *tx, settled, project_id, "projectId", SETTLED_MESSAGE);
             let rows: Vec<LedgerRow> = fetch_all!(&mut *tx, ledger_sql)?;
             let allocs: Vec<(i64, i64, i64)> = fetch_all!(&mut *tx, alloc_sql)?;
             let (entries, allocations) = ledger_of(&rows, &allocs);

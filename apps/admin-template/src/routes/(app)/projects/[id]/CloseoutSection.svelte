@@ -11,6 +11,9 @@
 	 * (accounting) approves them. A waiver is sent with the amount shown, so
 	 * an amount that changed meanwhile is refused and the check is read again.
 	 *
+	 * Records processed in the other sections do not notify this one: 「確認し
+	 * 直す」 reads the check again and keeps the reasons typed so far.
+	 *
 	 * Reading needs `ViewProjectAmounts`; settling `SettleProject`. A
 	 * `forbidden` read hides the section's content.
 	 */
@@ -289,6 +292,14 @@
 				onclick={settle}
 			>
 				{m['closeout.settle']()}
+			</button>
+			<button
+				type="button"
+				class="banto-btn banto-btn--secondary"
+				disabled={busy}
+				onclick={() => void load(projectId)}
+			>
+				{m['closeout.recheck']()}
 			</button>
 		</div>
 	{/if}

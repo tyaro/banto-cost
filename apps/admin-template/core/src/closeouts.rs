@@ -40,6 +40,33 @@ use crate::orders::{
 
 pub const RESOURCE: &str = "project_closeouts";
 
+/// The status read a writer runs in its own transaction, after its write, to
+/// refuse a record on a project settled meanwhile (T13): on SQLite the
+/// writer then holds the write lock, so a settlement cannot commit between
+/// the read and its commit; on Postgres `FOR SHARE` waits for a settlement
+/// holding the row and makes a later one wait for the writer.
+pub(crate) fn settled_check_sql(dialect: banto_storage::Dialect) -> String {
+    let sql = match dialect {
+        banto_storage::Dialect::Sqlite => "SELECT status FROM projects WHERE id = ?",
+        banto_storage::Dialect::Postgres => "SELECT status FROM projects WHERE id = ? FOR SHARE",
+    };
+    placeholders(dialect, sql)
+}
+
+/// Refuse (`return Err`) when `$project` is settled, reading with `$exec`
+/// inside the writer's transaction ([`settled_check_sql`]).
+macro_rules! refuse_settled {
+    ($exec:expr, $sql:expr, $project:expr, $field:expr, $message:expr) => {{
+        let row: Option<(String,)> = fetch_optional!($exec, $sql, $project)?;
+        if row.is_some_and(|(status,)| status == "settled") {
+            return Err(BantoError::Validation {
+                field_errors: vec![crate::customers::field_error($field, $message)],
+            });
+        }
+    }};
+}
+pub(crate) use refuse_settled;
+
 /// One item that blocks the settlement.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -898,6 +925,40 @@ mod tests {
         let detail = audit_detail(p, &rec);
         assert_eq!(detail["waivers"].as_array().unwrap().len(), 4);
         assert!(!detail.to_string().contains("200000"), "no amounts");
+    }
+
+    /// What the writers run after their write (PR #20 review): a record that
+    /// passed the open-project check before a settlement committed is still
+    /// refused in its own transaction.
+    async fn write_then_check(db: &Db, project: i64) -> Result<(), BantoError> {
+        let insert = placeholders(
+            db.dialect(),
+            "INSERT INTO time_entries (work_date, user_id, project_id, phase_id, minutes, \
+             status) VALUES ('2026-02-01', 1, ?, 1, 60, 'draft')",
+        );
+        let settled = settled_check_sql(db.dialect());
+        in_tx!(db, tx => {
+            execute!(&mut *tx, insert, project)?;
+            refuse_settled!(&mut *tx, settled, project, "projectId", "精算完了");
+        });
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn t13_a_write_racing_a_settlement_is_refused_in_its_transaction() {
+        let db = fixture().await;
+        let p = ordered_project(&db, "P-S04", vec![line(None, 1_000)]).await;
+        write_then_check(&db, p).await.unwrap();
+        set_status(&db, p, "settled").await;
+        let err = write_then_check(&db, p).await.unwrap_err();
+        assert_eq!(fields(err)[0].0, "projectId");
+        // Rolled back: only the first entry is there.
+        let count = placeholders(
+            db.dialect(),
+            "SELECT CAST(COUNT(*) AS BIGINT) FROM time_entries WHERE project_id = ?",
+        );
+        let n: i64 = on_pool!(&db, pool => scalar!(pool, count, p)).unwrap();
+        assert_eq!(n, 1);
     }
 
     #[tokio::test]

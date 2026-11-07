@@ -1394,6 +1394,7 @@
   "closeout.reasonRequired": "理由を入力してください",
   "closeout.note": "備考",
   "closeout.settle": "精算完了にする",
+  "closeout.recheck": "確認し直す",
   "closeout.settleConfirm": "精算完了にしますか？精算完了の案件には工数・直接費・発注・売上を記録できなくなり、元に戻せません。",
   "closeout.settled": "精算完了にしました",
   "closeout.settledOn": "精算完了日 {date}",

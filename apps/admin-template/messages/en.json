@@ -1394,6 +1394,7 @@
   "closeout.reasonRequired": "Enter a reason",
   "closeout.note": "Note",
   "closeout.settle": "Settle the project",
+  "closeout.recheck": "Check again",
   "closeout.settleConfirm": "Settle this project? A settled project takes no more hours, costs, orders or revenue, and this cannot be undone.",
   "closeout.settled": "The project was settled",
   "closeout.settledOn": "Settled on {date}",
