@@ -483,13 +483,15 @@
 									<td>
 										{#if canWrite}
 											<div class="row-actions">
-												<button
-													type="button"
-													class="banto-btn banto-btn--secondary"
-													onclick={() =>
-														openForm({ cost: null, target: null, mode: 'cost', orderId: o.id })}
-													>{m['costs.realize']()}</button
-												>
+												{#if o.remaining > 0}
+													<button
+														type="button"
+														class="banto-btn banto-btn--secondary"
+														onclick={() =>
+															openForm({ cost: null, target: null, mode: 'cost', orderId: o.id })}
+														>{m['costs.realize']()}</button
+													>
+												{/if}
 												<button
 													type="button"
 													class="banto-btn banto-btn--ghost"
