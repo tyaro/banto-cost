@@ -23,6 +23,21 @@ impl CostType {
         Self::Travel,
         Self::Other,
     ];
+
+    /// DB・通信で使う文字列。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Labor => "labor",
+            Self::Material => "material",
+            Self::Outsource => "outsource",
+            Self::Travel => "travel",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.as_str() == s)
+    }
 }
 
 /// 費目別の金額。

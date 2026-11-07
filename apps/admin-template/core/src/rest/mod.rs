@@ -72,6 +72,11 @@
 //! | GET    | `/api/time-entries/approvals` | - | `TimeEntry[]` (any role; scope `approval_projects`, activities with `finance.close`) |
 //! | POST   | `/api/time-entries/{id}/decide` | `DecisionInput` | `TimeEntry` (editor+ + `Approve` / `ApproveCommon`, self-approval allowed and audited) |
 //! | GET    | `/api/projects/{id}/time-summary` | - | `ProjectTimeSummary` (any role + `ViewProjectAmounts`) |
+//! | GET    | `/api/projects/{id}/budget` | - | `BudgetOverview` (any role + `ViewProjectAmounts`) |
+//! | POST   | `/api/projects/{id}/budget/draft` | - | `DraftCreated` (editor+ + `ManageProject`; the existing draft when there is one) |
+//! | PUT    | `/api/budget-versions/{id}` | `BudgetDraftInput` | `BudgetVersion` (editor+ + `ManageProject`, draft only) |
+//! | DELETE | `/api/budget-versions/{id}?rowVersion=` | - | 204 (editor+ + `ManageProject`, draft only) |
+//! | POST   | `/api/budget-versions/{id}/approve` | `BudgetVersionInput` | `BudgetVersion` (editor+ + `ApproveBudget`, self-approval allowed and audited) |
 //! | GET    | `/api/ui-settings/{key}` | -          | `{value: string \| null}` (any role) |
 //! | PUT    | `/api/ui-settings/{key}` | `{value}`  | 204 (any role)          |
 //! | POST   | `/api/audit-log/list?asOfId=` | `ListParams` | `AuditLogList` (`ListResult` + `asOfId`/`deletionEpoch`, admin; #248) |
@@ -239,6 +244,7 @@ use crate::system_info::SystemInfoService;
 use crate::users::{Role, UsersService};
 
 mod authz;
+mod budgets;
 mod projects;
 #[cfg(test)]
 mod tests;
@@ -284,6 +290,8 @@ pub struct Services {
     /// banto-cost P4b: phase / common-activity masters and time entries.
     pub work_masters: crate::work_masters::WorkMastersService,
     pub time_entries: crate::time_entries::TimeEntriesService,
+    /// banto-cost P4c: budget versions.
+    pub budgets: crate::budgets::BudgetsService,
     /// CPU/memory probe (ADR-0013, Issue #185), or `None` when the
     /// `system-metrics` feature is off (or the host platform is
     /// unsupported) - the app layer builds the `Some` case, see
@@ -324,6 +332,7 @@ pub fn api_router(
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics,
     } = services;
     let business = projects::BusinessServices {
@@ -334,6 +343,7 @@ pub fn api_router(
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         authz: authz.clone(),
         users: users.clone(),
     };
@@ -400,6 +410,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(time::time_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(budgets::budget_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(budgets::budget_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

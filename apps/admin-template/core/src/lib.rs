@@ -6,6 +6,7 @@
 
 pub mod approval;
 pub mod assets;
+pub mod budgets;
 pub mod calc_basis;
 pub mod customers;
 pub mod db;

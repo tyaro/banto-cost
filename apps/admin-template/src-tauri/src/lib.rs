@@ -30,6 +30,10 @@ use admin_template_core::authz::{
     MemberKind, Operation, Policy, ProjectMember, ProjectScope, Subject,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
+use admin_template_core::budgets::{
+    BudgetDraftInput, BudgetOverview, BudgetVersion, BudgetVersionInput, BudgetsService,
+    DraftCreated, RESOURCE as BUDGET_RESOURCE,
+};
 use admin_template_core::calc_basis::{
     audit_detail as calc_basis_audit_detail, CalcBasisService, CalcValueInput, CalcValueRow,
     CompanyBasis, ImpactPreview, ProjectBasis,
@@ -206,6 +210,7 @@ struct AppState {
     /// banto-cost P4b: phase / common-activity masters and time entries.
     work_masters: WorkMastersService,
     time_entries: TimeEntriesService,
+    budgets: BudgetsService,
     /// CPU/memory probe (ADR-0013, Issue #185): `Some` when the
     /// `system-metrics` feature is on and the host platform is supported;
     /// `None` otherwise, in which case the `system_info` command reports
@@ -1928,6 +1933,7 @@ async fn start_embedded_server(
     calc_basis: CalcBasisService,
     work_masters: WorkMastersService,
     time_entries: TimeEntriesService,
+    budgets: BudgetsService,
     metrics: Option<MetricsProbe>,
     auth: AuthState,
     events: broadcast::Sender<ServerEvent>,
@@ -1956,6 +1962,7 @@ async fn start_embedded_server(
         calc_basis,
         work_masters,
         time_entries,
+        budgets,
         metrics,
     };
     // Issue #219 (`docs/design/lan-reach-check-design.md` §5.2): the one
@@ -2556,6 +2563,7 @@ async fn server_apply_body(
             state.calc_basis.clone(),
             state.work_masters.clone(),
             state.time_entries.clone(),
+            state.budgets.clone(),
             state.metrics.clone(),
             state.rest_auth.clone(),
             state.events.clone(),
@@ -4454,6 +4462,192 @@ async fn project_time_summary_body(
     state.time_entries.project_summary(project_id).await
 }
 
+// --- banto-cost P4c: budget versions -----------------------------------------
+// Twins of `/api/projects/{id}/budget*` and `/api/budget-versions/*`
+// (`admin_template_core::rest::budgets`): the same role floors, the same
+// `Operation`s through `authorize_audited` (`ViewProjectAmounts`,
+// `ManageProject`, `ApproveBudget` with `APPROVAL_POLICY`), the same audit
+// actions and detail (`BudgetVersion::audit_detail`, no amounts).
+
+#[tauri::command]
+async fn project_budget(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<BudgetOverview, BantoError> {
+    project_budget_body(&state, project_id).await
+}
+
+async fn project_budget_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<BudgetOverview, BantoError> {
+    let identity = require_role(state, Role::Viewer, BUDGET_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        BUDGET_RESOURCE,
+    )
+    .await?;
+    state.budgets.overview(project_id).await
+}
+
+#[tauri::command]
+async fn budget_draft_create(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<DraftCreated, BantoError> {
+    budget_draft_create_body(&state, project_id).await
+}
+
+async fn budget_draft_create_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<DraftCreated, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageProject { project_id },
+        BUDGET_RESOURCE,
+    )
+    .await?;
+    let created = state.budgets.create_draft(project_id, user_id).await?;
+    if !created.replayed {
+        record_ok(
+            &state.audit,
+            &actor,
+            "create",
+            BUDGET_RESOURCE,
+            Some(&created.draft.id.to_string()),
+            Some(created.draft.audit_detail()),
+        )
+        .await;
+    }
+    Ok(created)
+}
+
+#[tauri::command]
+async fn budget_draft_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: BudgetDraftInput,
+) -> Result<BudgetVersion, BantoError> {
+    budget_draft_update_body(&state, id, values).await
+}
+
+async fn budget_draft_update_body(
+    state: &AppState,
+    id: i64,
+    values: BudgetDraftInput,
+) -> Result<BudgetVersion, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let version = state.budgets.get(id).await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageProject {
+            project_id: version.project_id,
+        },
+        BUDGET_RESOURCE,
+    )
+    .await?;
+    let saved = state.budgets.update_draft(id, values, user_id).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        BUDGET_RESOURCE,
+        Some(&id.to_string()),
+        Some(saved.audit_detail()),
+    )
+    .await;
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn budget_draft_delete(
+    state: State<'_, AppState>,
+    id: i64,
+    row_version: i64,
+) -> Result<(), BantoError> {
+    budget_draft_delete_body(&state, id, row_version).await
+}
+
+async fn budget_draft_delete_body(
+    state: &AppState,
+    id: i64,
+    row_version: i64,
+) -> Result<(), BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let version = state.budgets.get(id).await?;
+    business_guard(
+        state,
+        &actor,
+        Operation::ManageProject {
+            project_id: version.project_id,
+        },
+        BUDGET_RESOURCE,
+    )
+    .await?;
+    state.budgets.delete_draft(id, row_version).await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "delete",
+        BUDGET_RESOURCE,
+        Some(&id.to_string()),
+        Some(version.audit_detail()),
+    )
+    .await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn budget_draft_approve(
+    state: State<'_, AppState>,
+    id: i64,
+    values: BudgetVersionInput,
+) -> Result<BudgetVersion, BantoError> {
+    budget_draft_approve_body(&state, id, values).await
+}
+
+async fn budget_draft_approve_body(
+    state: &AppState,
+    id: i64,
+    values: BudgetVersionInput,
+) -> Result<BudgetVersion, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let version = state.budgets.get(id).await?;
+    let (_, user_id, allowed) = business_guard_with(
+        state,
+        &actor,
+        Operation::ApproveBudget {
+            project_id: version.project_id,
+            submitted_by: version.updated_by.unwrap_or(0),
+        },
+        admin_template_core::approval::APPROVAL_POLICY,
+        BUDGET_RESOURCE,
+    )
+    .await?;
+    let approved = state
+        .budgets
+        .approve(&version, values.row_version, user_id)
+        .await?;
+    let mut detail = approved.audit_detail();
+    detail["selfApproval"] = serde_json::json!(allowed.self_approval_exception);
+    record_ok(
+        &state.audit,
+        &actor,
+        "approve",
+        BUDGET_RESOURCE,
+        Some(&id.to_string()),
+        Some(detail),
+    )
+    .await;
+    Ok(approved)
+}
+
 /// `admin`-only (spec M10): the user-management screen's account list.
 #[tauri::command]
 async fn users_list(state: State<'_, AppState>) -> Result<Vec<UserSummary>, BantoError> {
@@ -4931,6 +5125,8 @@ pub fn run() {
             // banto-cost P4b.
             let work_masters = WorkMastersService::new(db.clone()).with_events(events.clone());
             let time_entries = TimeEntriesService::new(db.clone()).with_events(events.clone());
+            // banto-cost P4c.
+            let budgets = BudgetsService::new(db.clone()).with_events(events.clone());
             // CPU/memory probe (ADR-0013, Issue #185): built once, here,
             // same "share one stateful sampler" reasoning as `banto-serve`'s
             // main() - see `SystemMetricsSampler::sample`'s doc comment for
@@ -5158,6 +5354,7 @@ pub fn run() {
                     calc_basis.clone(),
                     work_masters.clone(),
                     time_entries.clone(),
+                    budgets.clone(),
                     metrics.clone(),
                     rest_auth.clone(),
                     events.clone(),
@@ -5229,6 +5426,7 @@ pub fn run() {
                 calc_basis,
                 work_masters,
                 time_entries,
+                budgets,
                 metrics,
                 started_at,
             });
@@ -5313,6 +5511,11 @@ pub fn run() {
             time_entries_approvals,
             time_entries_decide,
             project_time_summary,
+            project_budget,
+            budget_draft_create,
+            budget_draft_update,
+            budget_draft_delete,
+            budget_draft_approve,
             users_update,
             users_reset_password,
             users_delete,
@@ -5387,6 +5590,7 @@ mod tests {
             calc_basis: CalcBasisService::new(pool.clone()),
             work_masters: WorkMastersService::new(pool.clone()),
             time_entries: TimeEntriesService::new(pool.clone()),
+            budgets: BudgetsService::new(pool.clone()),
             // ADR-0013: no probe wired in this minimal test state - these
             // tests exercise command bodies that never touch `metrics`.
             metrics: None,
@@ -5448,6 +5652,7 @@ mod tests {
             calc_basis: CalcBasisService::new(pool.clone()),
             work_masters: WorkMastersService::new(pool.clone()),
             time_entries: TimeEntriesService::new(pool.clone()),
+            budgets: BudgetsService::new(pool.clone()),
             metrics: None,
             started_at: std::time::Instant::now(),
         }
@@ -10290,6 +10495,190 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.resource == "time_entries" && r.action == "denied" && r.origin == "tauri"));
+    }
+
+    // --- banto-cost P4c ----------------------------------------------------
+    // Tauri twin of `rest::tests::t09_t12_rest_budget_versions_keep_the_original_and_follow_scope`.
+
+    #[tokio::test]
+    async fn t09_t12_tauri_budget_versions_keep_the_original_and_follow_scope() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[Capability::ProjectManage, Capability::AmountView],
+        )
+        .await
+        .expect("grant editor");
+        authz_capabilities_set_body(
+            &state,
+            admin.id,
+            &[Capability::FinanceRate, Capability::AmountView],
+        )
+        .await
+        .expect("grant admin");
+        calc_basis_add_body(
+            &state,
+            serde_json::from_value(serde_json::json!({
+                "itemKey": "budget_rate",
+                "validFrom": "2020-01-01",
+                "value": 5_000,
+                "reason": "標準"
+            }))
+            .expect("input"),
+        )
+        .await
+        .expect("rate");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let project = projects_create_body(&state, project_input("P-B01", editor.id))
+            .await
+            .expect("manager registers a project");
+        let conversion: ConversionRequest = serde_json::from_value(serde_json::json!({
+            "rowVersion": project.row_version,
+            "convertedOn": "2026-11-20",
+            "confirmedAmount": 4_000_000,
+            "basis": "注文書受領",
+            "plannedStart": "2026-12-01",
+            "plannedEnd": "2027-03-31",
+            "revenuePlan": [{ "month": "2027-03", "amount": 4_000_000 }],
+            "scope": "whole"
+        }))
+        .expect("input");
+        order_convert_body(&state, project.id, conversion)
+            .await
+            .expect("convert");
+        let first = budget_draft_create_body(&state, project.id)
+            .await
+            .expect("draft");
+        let again = budget_draft_create_body(&state, project.id)
+            .await
+            .expect("retry");
+        assert!(again.replayed);
+        assert_eq!(first.draft.id, again.draft.id);
+        let draft: BudgetDraftInput = serde_json::from_value(serde_json::json!({
+            "rowVersion": first.draft.row_version,
+            "lines": [
+                { "phaseId": 1, "costType": "labor", "plannedMinutes": 12_000 },
+                { "costType": "material", "amount": 900_000 },
+                { "costType": "outsource", "amount": 500_000 },
+                { "costType": "travel", "amount": 150_000 },
+                { "costType": "other", "amount": 50_000 }
+            ]
+        }))
+        .expect("input");
+        let saved = budget_draft_update_body(&state, first.draft.id, draft)
+            .await
+            .expect("save");
+        assert_eq!(saved.total, Some(2_600_000));
+
+        // Out of the project's scope: no drafting, approving or reading (T12).
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        assert!(matches!(
+            budget_draft_create_body(&state, project.id).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            budget_draft_approve_body(
+                &state,
+                saved.id,
+                BudgetVersionInput {
+                    row_version: saved.row_version
+                }
+            )
+            .await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            project_budget_body(&state, project.id).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let v1 = budget_draft_approve_body(
+            &state,
+            saved.id,
+            BudgetVersionInput {
+                row_version: saved.row_version,
+            },
+        )
+        .await
+        .expect("self-approval");
+        assert_eq!(v1.version_no, Some(1));
+
+        // A change needs its reason (T09).
+        let d2 = budget_draft_create_body(&state, project.id)
+            .await
+            .expect("draft 2")
+            .draft;
+        assert_eq!(d2.lines.len(), 5);
+        assert!(matches!(
+            budget_draft_approve_body(
+                &state,
+                d2.id,
+                BudgetVersionInput {
+                    row_version: d2.row_version
+                }
+            )
+            .await,
+            Err(BantoError::Validation { .. })
+        ));
+        let change: BudgetDraftInput = serde_json::from_value(serde_json::json!({
+            "rowVersion": d2.row_version,
+            "reason": "追加工事",
+            "lines": [{ "phaseId": 1, "costType": "labor", "plannedMinutes": 14_400 }]
+        }))
+        .expect("input");
+        let d2 = budget_draft_update_body(&state, d2.id, change)
+            .await
+            .expect("save");
+        budget_draft_approve_body(
+            &state,
+            d2.id,
+            BudgetVersionInput {
+                row_version: d2.row_version,
+            },
+        )
+        .await
+        .expect("approve change");
+        let overview = project_budget_body(&state, project.id)
+            .await
+            .expect("overview");
+        assert_eq!(overview.original.as_ref().unwrap().total, Some(2_600_000));
+        assert_eq!(overview.current.as_ref().unwrap().version_no, Some(2));
+        assert_eq!(overview.history.len(), 2);
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        let approvals: Vec<_> = rows
+            .iter()
+            .filter(|r| r.resource == "budgets" && r.action == "approve")
+            .collect();
+        assert_eq!(approvals.len(), 2);
+        for row in approvals {
+            let detail = row.detail.clone().unwrap_or_default();
+            assert!(detail.contains("\"selfApproval\":true"));
+            assert!(!detail.contains("2600000"));
+        }
+        assert!(rows
+            .iter()
+            .any(|r| r.resource == "budgets" && r.action == "denied" && r.origin == "tauri"));
     }
 
     #[tokio::test]

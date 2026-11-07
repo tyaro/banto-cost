@@ -924,7 +924,11 @@ impl TimeEntriesService {
 }
 
 /// The `calc_values` row a resolved value came from.
-fn row_of(rows: &[CalcValueRow], source: &Source, project_id: Option<i64>) -> Option<i64> {
+pub(crate) fn row_of(
+    rows: &[CalcValueRow],
+    source: &Source,
+    project_id: Option<i64>,
+) -> Option<i64> {
     match source {
         Source::Company {
             version,

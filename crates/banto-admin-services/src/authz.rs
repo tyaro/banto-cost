@@ -210,10 +210,17 @@ pub enum Operation {
     /// amounts presupposes seeing them, so this also needs `amount.view`
     /// (PR #9 review: the saved version is returned with its amounts).
     EditPipeline { project_id: i64 },
-    /// Budget drafts and remaining-cost outlook of a project.
+    /// Budget drafts and remaining-cost outlook of a project: its manager
+    /// (`project.manage`). Drafting amounts presupposes seeing them, so this
+    /// also needs `amount.view` (banto-cost P4c).
     ManageProject { project_id: i64 },
     /// Approve a record someone submitted against a project.
     Approve { project_id: i64, submitted_by: i64 },
+    /// Approve a budget draft (banto-cost P4c, T09): as [`Operation::Approve`]
+    /// (the project's manager or accounting, self-approval by policy), and
+    /// the amounts must be visible (`amount.view`). `submitted_by` is the
+    /// person who last saved the draft.
+    ApproveBudget { project_id: i64, submitted_by: i64 },
     /// Approve hours someone submitted against a common activity. No project
     /// manager owns them, so accounting (`finance.close`) decides (P4b).
     ApproveCommon { submitted_by: i64 },
@@ -268,6 +275,7 @@ impl Operation {
             Operation::EditPipeline { .. } => "edit_pipeline",
             Operation::ManageProject { .. } => "manage_project",
             Operation::Approve { .. } => "approve",
+            Operation::ApproveBudget { .. } => "approve_budget",
             Operation::ApproveCommon { .. } => "approve_common",
             Operation::ViewRates => "view_rates",
             Operation::EditRates => "edit_rates",
@@ -292,6 +300,7 @@ impl Operation {
             | Operation::EditPipeline { project_id }
             | Operation::ManageProject { project_id }
             | Operation::Approve { project_id, .. }
+            | Operation::ApproveBudget { project_id, .. }
             | Operation::EditProject { project_id }
             | Operation::EditOrder { project_id }
             | Operation::OverrideCalcBasis { project_id, .. } => Some(project_id),
@@ -402,12 +411,20 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         }
         Operation::ManageProject { project_id } => {
             require(subject, Capability::ProjectManage)?;
+            require(subject, Capability::AmountView)?;
             require_scope(subject.holds(project_id, MemberKind::Manager), project_id)?;
         }
         Operation::Approve {
             project_id,
             submitted_by,
+        }
+        | Operation::ApproveBudget {
+            project_id,
+            submitted_by,
         } => {
+            if matches!(op, Operation::ApproveBudget { .. }) {
+                require(subject, Capability::AmountView)?;
+            }
             let as_manager = subject.has(Capability::ProjectManage)
                 && subject.holds(project_id, MemberKind::Manager);
             let as_finance = subject.has(Capability::FinanceClose);
@@ -1074,6 +1091,82 @@ mod tests {
                 &[(P1, MemberKind::Manager)]
             )),
             ProjectScope::Only(BTreeSet::new())
+        );
+    }
+
+    #[test]
+    fn t09_budget_drafts_and_approval_need_amounts_and_scope() {
+        let pm = subject(
+            20,
+            &[Capability::ProjectManage, Capability::AmountView],
+            &[(P1, MemberKind::Manager)],
+        );
+        allow(&pm, Operation::ManageProject { project_id: P1 });
+        assert_eq!(
+            deny(&pm, Operation::ManageProject { project_id: P2 }),
+            Denial::OutOfProjectScope { project_id: P2 }
+        );
+        let blind = subject(
+            21,
+            &[Capability::ProjectManage],
+            &[(P1, MemberKind::Manager)],
+        );
+        assert_eq!(
+            deny(&blind, Operation::ManageProject { project_id: P1 }),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        let own = Operation::ApproveBudget {
+            project_id: P1,
+            submitted_by: 20,
+        };
+        assert_eq!(deny(&pm, own), Denial::SelfApproval);
+        let exception = Policy {
+            allow_self_approval: true,
+        };
+        assert_eq!(
+            authorize(&pm, own, exception),
+            Ok(Allowed {
+                self_approval_exception: true
+            })
+        );
+        assert_eq!(
+            deny(
+                &blind,
+                Operation::ApproveBudget {
+                    project_id: P1,
+                    submitted_by: 9
+                }
+            ),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+        // Accounting approves any project's budget when it sees amounts.
+        let finance = subject(22, &[Capability::FinanceClose, Capability::AmountView], &[]);
+        allow(
+            &finance,
+            Operation::ApproveBudget {
+                project_id: P2,
+                submitted_by: 20,
+            },
+        );
+        // A worker on the project cannot draft or approve.
+        let worker = subject(
+            23,
+            &[Capability::TimeEntry, Capability::AmountView],
+            &[(P1, MemberKind::Worker)],
+        );
+        assert_eq!(
+            deny(&worker, Operation::ManageProject { project_id: P1 }),
+            Denial::MissingCapability(Capability::ProjectManage)
+        );
+        assert_eq!(
+            deny(
+                &worker,
+                Operation::ApproveBudget {
+                    project_id: P1,
+                    submitted_by: 20
+                }
+            ),
+            Denial::MissingCapability(Capability::ProjectManage)
         );
     }
 

@@ -458,7 +458,20 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'time_entries_update', rest: 'PUT /api/time-entries/{id}', role: 'Editor' },
 		{ tauri: 'time_entries_delete', rest: 'DELETE /api/time-entries/{id}', role: 'Editor' },
 		{ tauri: 'time_entries_submit', rest: 'POST /api/time-entries/{id}/submit', role: 'Editor' },
-		{ tauri: 'time_entries_decide', rest: 'POST /api/time-entries/{id}/decide', role: 'Editor' }
+		{ tauri: 'time_entries_decide', rest: 'POST /api/time-entries/{id}/decide', role: 'Editor' },
+		// banto-cost P4c: 予算版。editor 床＋authorize_audited（承認は APPROVAL_POLICY）。
+		{
+			tauri: 'budget_draft_create',
+			rest: 'POST /api/projects/{id}/budget/draft',
+			role: 'Editor'
+		},
+		{ tauri: 'budget_draft_update', rest: 'PUT /api/budget-versions/{id}', role: 'Editor' },
+		{ tauri: 'budget_draft_delete', rest: 'DELETE /api/budget-versions/{id}', role: 'Editor' },
+		{
+			tauri: 'budget_draft_approve',
+			rest: 'POST /api/budget-versions/{id}/approve',
+			role: 'Editor'
+		}
 	];
 
 	// ロール床を照合したい読み取り系の対（CR-6）。読み取りは rule 8 の存在対称の
@@ -511,7 +524,9 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'project_time_summary',
 			rest: 'GET /api/projects/{id}/time-summary',
 			role: 'Viewer'
-		}
+		},
+		// banto-cost P4c の読み取り。
+		{ tauri: 'project_budget', rest: 'GET /api/projects/{id}/budget', role: 'Viewer' }
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -583,6 +598,7 @@ const isAllowedPackageImport = (spec) =>
 		'projects_get',
 		'projects_list',
 		'project_time_summary',
+		'project_budget',
 		'time_entries_approvals',
 		'time_entries_list',
 		// Issue #219 PR-C2: the reach check of the live listener (admin, like
@@ -623,6 +639,7 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/time-entries',
 		'GET /api/time-entries/approvals',
 		'GET /api/projects/{id}/time-summary',
+		'GET /api/projects/{id}/budget',
 		'POST /api/customers/list',
 		'POST /api/projects/list',
 		'GET /api/ui-settings/{key}',
