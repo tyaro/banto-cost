@@ -21,6 +21,7 @@ pub mod orders;
 pub mod pipeline;
 pub mod portfolio;
 pub mod projects;
+pub mod reports;
 pub mod rest;
 pub mod time_access;
 pub mod time_entries;

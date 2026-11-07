@@ -5162,6 +5162,137 @@ async fn closing_reopen(
     Ok(reopened)
 }
 
+// --- banto-cost P6c: 月別収支と CSV (T12・T15) -----------------------------------
+// Twins of `/api/projects/{id}/monthly`, `/api/projects/{id}/monthly.csv`,
+// `/api/reports/portfolio.csv` and `/api/reports/period-monthly.csv`
+// (`admin_template_core::rest::reports`): any role, then the same decision
+// (`ViewProjectAmounts` through `authorize_audited`, or the same scopes as the
+// overall list: rows admin all / `visible_projects`, amounts
+// `amount_projects`), the same audit action `export` and detail
+// (`CsvExport::audit_detail`: the kind, its key and the row count).
+
+use admin_template_core::reports::{CsvExport, ProjectMonthly, RESOURCE as REPORTS_RESOURCE};
+
+#[tauri::command]
+async fn project_monthly(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<ProjectMonthly, BantoError> {
+    project_monthly_body(&state, project_id).await
+}
+
+async fn project_monthly_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<ProjectMonthly, BantoError> {
+    let identity = require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        REPORTS_RESOURCE,
+    )
+    .await?;
+    state.forecasts.reports().project_monthly(project_id).await
+}
+
+#[tauri::command]
+async fn project_monthly_csv(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<CsvExport, BantoError> {
+    project_monthly_csv_body(&state, project_id).await
+}
+
+async fn project_monthly_csv_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<CsvExport, BantoError> {
+    let identity = require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        REPORTS_RESOURCE,
+    )
+    .await?;
+    let csv = state
+        .forecasts
+        .reports()
+        .project_monthly_csv(project_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &identity,
+        "export",
+        REPORTS_RESOURCE,
+        Some(&project_id.to_string()),
+        Some(csv.audit_detail("project_monthly", serde_json::json!(project_id))),
+    )
+    .await;
+    Ok(csv)
+}
+
+#[tauri::command]
+async fn portfolio_csv(state: State<'_, AppState>) -> Result<CsvExport, BantoError> {
+    portfolio_csv_body(&state).await
+}
+
+async fn portfolio_csv_body(state: &AppState) -> Result<CsvExport, BantoError> {
+    let identity = require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
+    let subject = caller_subject(state).await?;
+    let visible = if identity.role.is_admin() {
+        ProjectScope::All
+    } else {
+        visible_projects(&subject)
+    };
+    let amounts = amount_projects(&subject);
+    let csv = state
+        .forecasts
+        .reports()
+        .portfolio_csv(&visible, &amounts)
+        .await?;
+    record_ok(
+        &state.audit,
+        &identity,
+        "export",
+        REPORTS_RESOURCE,
+        None,
+        Some(csv.audit_detail("portfolio", serde_json::Value::Null)),
+    )
+    .await;
+    Ok(csv)
+}
+
+#[tauri::command]
+async fn period_monthly_csv(
+    state: State<'_, AppState>,
+    period: i32,
+) -> Result<CsvExport, BantoError> {
+    period_monthly_csv_body(&state, period).await
+}
+
+async fn period_monthly_csv_body(state: &AppState, period: i32) -> Result<CsvExport, BantoError> {
+    let identity = require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
+    let subject = caller_subject(state).await?;
+    let amounts = amount_projects(&subject);
+    let csv = state
+        .forecasts
+        .reports()
+        .period_monthly_csv(period, &amounts)
+        .await?;
+    record_ok(
+        &state.audit,
+        &identity,
+        "export",
+        REPORTS_RESOURCE,
+        None,
+        Some(csv.audit_detail("period_monthly", serde_json::json!(period))),
+    )
+    .await;
+    Ok(csv)
+}
+
 // --- banto-cost P4d: vendors, direct costs and purchase orders ---------------
 // Twins of `/api/vendors/*`, `/api/direct-costs/*`, `/api/purchase-orders/*`
 // and `/api/projects/{id}/costs` (`admin_template_core::rest::costs`): the
@@ -6477,6 +6608,10 @@ pub fn run() {
             closing_get,
             closing_close,
             closing_reopen,
+            project_monthly,
+            project_monthly_csv,
+            portfolio_csv,
+            period_monthly_csv,
             vendors_list,
             vendors_create,
             vendors_update,
@@ -11091,6 +11226,123 @@ mod tests {
 
     // --- banto-cost P3b ----------------------------------------------------
     // Tauri twin of `rest::tests::t23_t26_t27_rest_order_revenue_and_outlook`.
+
+    // REST twin: `t12_t15_rest_monthly_figures_and_csv_follow_scope`.
+    #[tokio::test]
+    async fn t12_t15_tauri_monthly_figures_and_csv_follow_scope() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[
+                Capability::ProjectManage,
+                Capability::AmountView,
+                Capability::FinanceClose,
+            ],
+        )
+        .await
+        .expect("grant editor");
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let own = projects_create_body(&state, project_input("P-M01", editor.id))
+            .await
+            .expect("manager registers a project");
+        let conversion: ConversionRequest = serde_json::from_value(serde_json::json!({
+            "rowVersion": own.row_version,
+            "convertedOn": "2027-04-01",
+            "confirmedAmount": 1_000_000,
+            "basis": "注文書受領",
+            "plannedStart": "2027-04-01",
+            "plannedEnd": "2027-07-31",
+            "revenuePlan": [
+                { "month": "2027-05", "amount": 600_000 },
+                { "month": "2027-07", "amount": 400_000 }
+            ],
+            "scope": "whole"
+        }))
+        .expect("input");
+        order_convert_body(&state, own.id, conversion)
+            .await
+            .expect("convert");
+        for (on, amount) in [("2027-05-31", 600_000), ("2027-07-31", 400_000)] {
+            let recognition: RecognitionInput = serde_json::from_value(serde_json::json!({
+                "recognizedOn": on, "amount": amount, "basis": "検収"
+            }))
+            .expect("input");
+            revenue_recognition_create_body(&state, own.id, recognition)
+                .await
+                .expect("recognize");
+        }
+
+        let monthly = project_monthly_body(&state, own.id)
+            .await
+            .expect("manager sees the months");
+        assert!(monthly.spans_periods);
+        assert_eq!(monthly.lines.len(), 3);
+        assert_eq!(monthly.total.revenue, 1_000_000);
+        let csv = project_monthly_csv_body(&state, own.id)
+            .await
+            .expect("manager exports");
+        assert!(csv.content.contains("集計条件,案件,P-M01"));
+        assert_eq!(csv.row_count, 3);
+        let mine = portfolio_csv_body(&state).await.expect("portfolio csv");
+        assert!(mine.content.contains(",1000000,"));
+        let period = period_monthly_csv_body(&state, 14)
+            .await
+            .expect("period csv");
+        assert_eq!(period.row_count, 2);
+        assert!(matches!(
+            period_monthly_csv_body(&state, 0).await,
+            Err(BantoError::Validation { .. })
+        ));
+
+        // The admin is not on the project: no figures, rows without amounts.
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        assert!(matches!(
+            project_monthly_body(&state, own.id).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            project_monthly_csv_body(&state, own.id).await,
+            Err(BantoError::Forbidden)
+        ));
+        let theirs = portfolio_csv_body(&state).await.expect("portfolio csv");
+        let row = theirs
+            .content
+            .split("\r\n")
+            .find(|l| l.starts_with("P-M01,"))
+            .expect("row visible")
+            .to_string();
+        assert!(!row.contains("1000000"), "{row}");
+        assert_eq!(
+            period_monthly_csv_body(&state, 14)
+                .await
+                .expect("period csv")
+                .row_count,
+            0
+        );
+        let exports = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit")
+            .rows
+            .into_iter()
+            .filter(|e| e.resource == "reports" && e.action == "export")
+            .count();
+        assert_eq!(exports, 5);
+    }
 
     #[tokio::test]
     async fn t23_t26_t27_tauri_order_revenue_and_outlook() {

@@ -595,7 +595,20 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'project_closeout_get', rest: 'GET /api/projects/{id}/closeout', role: 'Viewer' },
 		// banto-cost P6b の読み取り。
 		{ tauri: 'closing_months', rest: 'GET /api/closing', role: 'Viewer' },
-		{ tauri: 'closing_get', rest: 'GET /api/closing/{month}', role: 'Viewer' }
+		{ tauri: 'closing_get', rest: 'GET /api/closing/{month}', role: 'Viewer' },
+		// banto-cost P6c の読み取り（CSV は出力を監査に残す読み取り）。
+		{ tauri: 'project_monthly', rest: 'GET /api/projects/{id}/monthly', role: 'Viewer' },
+		{
+			tauri: 'project_monthly_csv',
+			rest: 'GET /api/projects/{id}/monthly.csv',
+			role: 'Viewer'
+		},
+		{ tauri: 'portfolio_csv', rest: 'GET /api/reports/portfolio.csv', role: 'Viewer' },
+		{
+			tauri: 'period_monthly_csv',
+			rest: 'GET /api/reports/period-monthly.csv',
+			role: 'Viewer'
+		}
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -674,6 +687,10 @@ const isAllowedPackageImport = (spec) =>
 		'project_closeout_get',
 		'closing_months',
 		'closing_get',
+		'project_monthly',
+		'project_monthly_csv',
+		'portfolio_csv',
+		'period_monthly_csv',
 		'vendors_list',
 		'direct_costs_list',
 		'direct_costs_approvals',
@@ -727,6 +744,10 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/projects/{id}/closeout',
 		'GET /api/closing',
 		'GET /api/closing/{month}',
+		'GET /api/projects/{id}/monthly',
+		'GET /api/projects/{id}/monthly.csv',
+		'GET /api/reports/portfolio.csv',
+		'GET /api/reports/period-monthly.csv',
 		'GET /api/portfolio',
 		'GET /api/vendors',
 		'GET /api/direct-costs',

@@ -5649,3 +5649,178 @@ async fn t11_rest_time_corrections_are_requested_by_the_owner_and_approved_by_ac
     assert!(!detail.contains("工程の誤り"));
     assert!(detail.contains("correctsId"));
 }
+
+// Tauri twin: `t12_t15_tauri_monthly_figures_and_csv_follow_scope`.
+#[tokio::test]
+async fn t12_t15_rest_monthly_figures_and_csv_follow_scope() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["project.manage", "amount.view", "finance.close"]),
+    )
+    .await;
+    grant(&router, &admin, 1, json!(["amount.view"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-M01", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": project["rowVersion"],
+                "convertedOn": "2027-04-01",
+                "confirmedAmount": 1_000_000,
+                "basis": "注文書受領",
+                "plannedStart": "2027-04-01",
+                "plannedEnd": "2027-07-31",
+                "revenuePlan": [
+                    { "month": "2027-05", "amount": 600_000 },
+                    { "month": "2027-07", "amount": 400_000 }
+                ],
+                "scope": "whole"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    for (on, amount) in [("2027-05-31", 600_000), ("2027-07-31", 400_000)] {
+        let response = router
+            .clone()
+            .oneshot(post_json_auth(
+                &format!("/api/projects/{id}/order/recognitions"),
+                &editor,
+                json!({ "recognizedOn": on, "amount": amount, "basis": "検収" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // The manager sees the months across 第13期 and 第14期.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/monthly"), &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let monthly = body_json(response).await;
+    assert_eq!(monthly["spansPeriods"], true);
+    assert_eq!(monthly["lines"].as_array().unwrap().len(), 3);
+    assert_eq!(monthly["total"]["revenue"], 1_000_000);
+    assert_eq!(monthly["periods"][1]["period"], 14);
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            &format!("/api/projects/{id}/monthly.csv"),
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let csv = body_json(response).await;
+    let content = csv["content"].as_str().unwrap();
+    assert!(content.starts_with('\u{feff}'));
+    assert!(content.contains("集計条件,案件,P-M01"), "{content}");
+    assert_eq!(csv["rowCount"], 3);
+
+    // Not on the project (admin with amount.view, viewer): no figures (T12).
+    for token in [&admin, &viewer] {
+        for path in [
+            format!("/api/projects/{id}/monthly"),
+            format!("/api/projects/{id}/monthly.csv"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(get_auth(&path, token))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+        }
+    }
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "reports"));
+
+    // The overall list CSV: the admin sees the row, no amount.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/reports/portfolio.csv", &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let theirs = body_json(response).await;
+    let row = theirs["content"]
+        .as_str()
+        .unwrap()
+        .split("\r\n")
+        .find(|l| l.starts_with("P-M01,"))
+        .unwrap()
+        .to_string();
+    assert!(!row.contains("1000000"), "{row}");
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/reports/portfolio.csv", &editor))
+        .await
+        .unwrap();
+    let mine = body_json(response).await;
+    assert!(mine["content"].as_str().unwrap().contains(",1000000,"));
+
+    // The period CSV lists the amount scope only.
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/reports/period-monthly.csv?period=14",
+            &admin,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["rowCount"], 0);
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/reports/period-monthly.csv?period=14",
+            &editor,
+        ))
+        .await
+        .unwrap();
+    let period = body_json(response).await;
+    // June (no record, kept so the cumulative runs on) and July.
+    assert_eq!(period["rowCount"], 2);
+    assert!(period["content"].as_str().unwrap().contains("P-M01,"));
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/reports/period-monthly.csv?period=0",
+            &editor,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Exports are audited with the kind and the row count, no amount.
+    let entries = audit.list(ListParams::default()).await.unwrap().rows;
+    let exports: Vec<_> = entries
+        .iter()
+        .filter(|e| e.resource == "reports" && e.action == "export")
+        .collect();
+    assert_eq!(exports.len(), 5);
+    for e in exports {
+        let detail = format!("{:?}", e.detail);
+        assert!(!detail.contains("1000000"), "{detail}");
+        assert!(!detail.contains("P-M01"), "{detail}");
+    }
+}

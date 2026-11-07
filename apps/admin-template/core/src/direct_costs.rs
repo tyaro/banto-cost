@@ -388,6 +388,18 @@ impl Ledger {
         &self.all
     }
 
+    /// The months of the approved records' booked dates (company-wide),
+    /// oldest first: the only months whose [`Ledger::until`] at the month
+    /// end can differ from the previous month's (T15).
+    pub fn months(&self) -> Vec<cost_domain::YearMonth> {
+        let set: std::collections::BTreeSet<cost_domain::YearMonth> = self
+            .rows
+            .iter()
+            .filter_map(|r| Date::parse(&r.8).map(Date::year_month))
+            .collect();
+        set.into_iter().collect()
+    }
+
     /// The ledger as it stood on `until`: approved records booked up to
     /// then, resolved among themselves. A confirmation or an adjustment
     /// booked later is left out with its effect, so a provisional confirmed
@@ -1812,9 +1824,11 @@ impl DirectCostsService {
             .into_iter()
             .map(|c| scoped_to(c, project_id))
             .collect();
-        let postings = self.postings().await?;
+        let ledger = self.ledger().await?;
+        let postings = ledger.all().to_vec();
         let key = project_id.to_string();
-        let summary = ledger::summarize(&postings, &key, &FiscalCalendar::COMPANY_DEFAULT);
+        let cal = FiscalCalendar::COMPANY_DEFAULT;
+        let summary = ledger::summarize(&postings, &key, &cal);
         let by_type = |b: &cost_domain::forecast::ByCostType| -> Vec<CostTypeAmount> {
             DIRECT_TYPES
                 .iter()
@@ -1824,17 +1838,29 @@ impl DirectCostsService {
                 })
                 .collect()
         };
-        let cal = FiscalCalendar::COMPANY_DEFAULT;
-        let months = summary
-            .by_month
-            .iter()
-            .map(|(ym, b)| MonthCosts {
-                month: ym.to_string(),
-                period: cal.period_of(*ym),
-                by_type: by_type(b),
-                total: b.total(),
-            })
-            .collect();
+        // By month on the monthly close's basis (T15): the ledger at each
+        // month end less the previous month end, so a provisional confirmed
+        // in a later month stays in its month and the later month carries
+        // the difference (as `closing` and `reports`). The months add up to
+        // the cumulative above.
+        let mut months = Vec::new();
+        let mut prev = cost_domain::forecast::ByCostType::default();
+        for ym in ledger.months() {
+            let at_end = ledger::summarize(&ledger.until(ym.last_day())?, &key, &cal).cumulative;
+            let mut delta = cost_domain::forecast::ByCostType::default();
+            for t in DIRECT_TYPES {
+                delta.add(t, at_end.get(t) - prev.get(t));
+            }
+            if DIRECT_TYPES.iter().any(|t| delta.get(*t) != 0) {
+                months.push(MonthCosts {
+                    month: ym.to_string(),
+                    period: cal.period_of(ym),
+                    by_type: by_type(&delta),
+                    total: delta.total(),
+                });
+            }
+            prev = at_end;
+        }
         let (pending, provisional) = self.tallies(project_id).await?;
         let orders = self.orders_of(project_id, &postings).await?;
         Ok(ProjectCosts {

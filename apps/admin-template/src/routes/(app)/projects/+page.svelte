@@ -15,6 +15,11 @@
 	 * may see (`amount_projects`); the others show "—". Each forecast keeps its
 	 * own base date; the summary counts the ones that need an update instead of
 	 * adding new actuals to old remaining costs (spec §7.5).
+	 *
+	 * CSV (banto-cost P6c, spec §9, T12・T15): the overall list and a fiscal
+	 * period's figures by project and month. The server builds both with the
+	 * same scopes as the screens (amounts only where visible), the output
+	 * time and the conditions, formulas neutralized.
 	 */
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -26,13 +31,20 @@
 		type GridColumn
 	} from '@banto/grid-svelte';
 	import type { FormSchema } from '@banto/forms';
-	import { createListResource, getResource } from '@banto/admin-core';
+	import { createListResource, getResource, isProviderError, notify } from '@banto/admin-core';
 	import { Plus } from '@lucide/svelte';
 	import * as m from '#lib/paraglide/messages.js';
 	import { gridMessages } from '#lib/banto/i18n.js';
 	import { formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
 	import { getPortfolio, type Portfolio, type PortfolioRow } from '#lib/banto/forecastAdmin.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
+	import {
+		exportPeriodMonthly,
+		exportPortfolio,
+		periodOf,
+		saveCsv,
+		type CsvExport
+	} from '#lib/banto/reportsAdmin.js';
 	import { alertLabel, formatPermille, isSevereAlert } from '#lib/banto/forecastFormat.js';
 	import type { Project } from '#lib/banto/resources/projects.js';
 	import { sessionStore } from '#lib/session.svelte.js';
@@ -205,6 +217,30 @@
 	const gridState = new GridState<Row>(columns);
 
 	const forbidden = $derived(isForbiddenError(list.error));
+
+	// CSV (P6c). The period defaults to the current one (6月開始).
+	let period = $state(String(periodOf(new Date())));
+	let exporting = $state(false);
+	async function runExport(make: () => Promise<CsvExport>) {
+		exporting = true;
+		try {
+			const csv = await make();
+			saveCsv(csv);
+			notify('success', m['reports.exported']({ count: csv.rowCount }));
+		} catch (err) {
+			notify('error', isProviderError(err) ? err.message : String(err));
+		} finally {
+			exporting = false;
+		}
+	}
+	function exportPeriod() {
+		const n = Number(period);
+		if (!Number.isInteger(n) || n < 1 || n > 999) {
+			notify('error', m['reports.invalidPeriod']());
+			return;
+		}
+		void runExport(() => exportPeriodMonthly(n));
+	}
 </script>
 
 <div class="page">
@@ -293,6 +329,31 @@
 		{:else if portfolioError}
 			<p class="note">{m['portfolio.loadError']()}</p>
 		{/if}
+		{#if isPipelineAvailable()}
+			<section class="exports" aria-label={m['reports.title']()}>
+				<button
+					type="button"
+					class="banto-btn banto-btn--secondary"
+					disabled={exporting}
+					onclick={() => void runExport(exportPortfolio)}
+				>
+					{m['reports.portfolioCsv']()}
+				</button>
+				<label class="period">
+					<span>{m['reports.period']()}</span>
+					<input class="banto-input" type="number" min="1" max="999" bind:value={period} />
+				</label>
+				<button
+					type="button"
+					class="banto-btn banto-btn--secondary"
+					disabled={exporting}
+					onclick={exportPeriod}
+				>
+					{m['reports.periodCsv']()}
+				</button>
+				<p class="note">{m['reports.description']()}</p>
+			</section>
+		{/if}
 		<div class="grid-wrap">
 			<BantoGrid
 				{rows}
@@ -368,6 +429,28 @@
 	}
 
 	/* BantoGrid virtualizes, so it needs a definite height (component shape). */
+	.exports {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--banto-space-2);
+	}
+
+	.exports .note {
+		flex-basis: 100%;
+	}
+
+	.period {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--banto-space-1);
+		font-size: var(--banto-font-size-sm);
+	}
+
+	.period input {
+		width: 5rem;
+	}
+
 	.grid-wrap {
 		height: 70vh;
 		min-height: 320px;
