@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "admin-template"
-version = "6.10.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "admin-template-core",
  "admin-template-fw-elev",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "admin-template-core"
-version = "6.10.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "axum",
  "banto-admin-services",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "admin-template-fw-elev"
-version = "6.10.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "embed-resource",
  "serde_json",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "banto-admin-services"
-version = "6.10.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "argon2",
  "banto-core",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "banto-core"
-version = "6.10.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "banto-server"
-version = "6.10.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "async-stream",
  "axum",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "banto-storage"
-version = "6.10.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "banto-core",
  "serde_json",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "cost-domain"
-version = "6.10.0"
+version = "0.1.0-beta.1"
 
 [[package]]
 name = "cpufeatures"

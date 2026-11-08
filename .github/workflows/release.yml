@@ -1,0 +1,123 @@
+# リリース（Windows インストーラを GitHub Releases に添付する）。
+#
+# - `v*` タグの push: windows-latest で NSIS インストーラを作り、そのタグの
+#   GitHub Release を作って添付する。タグ名に `-` を含む版（例 v0.1.0-beta.1）は
+#   プレリリースにする。リリースノートは CHANGELOG.md の `## [X.Y.Z…]` 節。
+# - このファイルを変える pull_request と workflow_dispatch: ビルドだけを行い、
+#   インストーラを Actions の成果物として残す（リリースは作らない）。
+#
+# ビルドは `pnpm --filter banto-cost-app tauri:build:windows`
+# （= `tauri build --features embed-ui --config src-tauri/tauri.fw-elev.conf.json`）。
+# beforeBuildCommand が UI のビルドとファイアウォール用 helper（externalBin）を作る。
+# コード署名はしない（初回起動時に SmartScreen の警告が出る）。
+#
+# サードパーティ Action は ci.yml と同じくコミット SHA でピン留めする
+# （例外: dtolnay/rust-toolchain@stable）。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows installer (NSIS)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: release
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # タグの push ではタグ名とマニフェストの版番号の一致を確かめる。
+      - name: Check versions
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            node scripts/check-versions.mjs --tag "${GITHUB_REF_NAME}"
+          else
+            node scripts/check-versions.mjs
+          fi
+
+      - name: Build installer
+        run: pnpm --filter banto-cost-app --fail-if-no-match tauri:build:windows
+
+      - name: Collect installer
+        id: collect
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(target/release/bundle/nsis/*.exe)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::NSIS インストーラが見つからない（target/release/bundle/nsis/*.exe）"
+            exit 1
+          fi
+          mkdir -p dist-release
+          cp "${files[@]}" dist-release/
+          ls -l dist-release
+
+      - name: Upload installer (artifact)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: banto-cost-windows-installer
+          path: dist-release/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          # CHANGELOG.md の `## [<version>]` から次の `## [` の前までをノートにする。
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md に ## [${version}] の節がない"
+            exit 1
+          fi
+          flags=()
+          case "$version" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$tag" dist-release/*.exe \
+            --title "banto-cost ${tag}" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            "${flags[@]}"
