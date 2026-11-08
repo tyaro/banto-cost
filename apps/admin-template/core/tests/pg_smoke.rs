@@ -874,6 +874,104 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .expect("cancel on Postgres");
         assert_eq!(view.posted_total, 0);
         assert_eq!(fixed.list().await.unwrap()[0].posted_count, 0);
+
+        // banto-cost P7c: 定期売上 on Postgres (the plan rewrite in the
+        // agreement's transaction, the recognition through the orders
+        // service, the close's warning).
+        use admin_template_core::orders::{ConversionRequest, OrdersService};
+        use admin_template_core::recurring_revenue::AgreementInput;
+        let monthly = projects
+            .create(
+                ProjectInput {
+                    code: "P-PG-R".into(),
+                    name: "架空の年間保守".into(),
+                    customer_id: customer.id,
+                    manager_user_id: manager,
+                    status: "negotiating".into(),
+                    planned_start: None,
+                    planned_end: None,
+                    order_no: None,
+                    department: None,
+                    note: None,
+                    row_version: None,
+                },
+                None,
+            )
+            .await
+            .expect("monthly-contract project on Postgres");
+        let lead: PipelineVersionInput = serde_json::from_value(serde_json::json!({
+            "stage": "negotiating",
+            "expectedAmount": 1_200_000,
+            "probabilityPct": 90,
+            "expectedOrderMonth": "2026-06",
+            "basis": "年間保守の更新",
+            "revenuePlan": [{ "amount": 1_200_000 }],
+            "adopt": true
+        }))
+        .unwrap();
+        pipeline
+            .create_version(monthly.id, lead, Some(manager))
+            .await
+            .expect("version on Postgres");
+        let row_version = projects.get(monthly.id).await.unwrap().row_version;
+        let conversion: ConversionRequest = serde_json::from_value(serde_json::json!({
+            "rowVersion": row_version,
+            "convertedOn": "2026-06-01",
+            "confirmedAmount": 1_200_000,
+            "basis": "年間保守契約",
+            "plannedStart": "2026-06-01",
+            "plannedEnd": "2027-05-31",
+            "revenuePlan": [{ "amount": 1_200_000 }],
+            "scope": "whole"
+        }))
+        .unwrap();
+        OrdersService::new(db.clone())
+            .convert(monthly.id, conversion, Some(manager))
+            .await
+            .expect("convert on Postgres");
+        let recurring = forecasts.recurring_revenue();
+        let agreement = recurring
+            .create(
+                AgreementInput {
+                    project_id: Some(monthly.id),
+                    monthly_amount: Some(100_000),
+                    from_month: "2026-06".into(),
+                    to_month: "2027-05".into(),
+                    ..Default::default()
+                },
+                Some(manager),
+            )
+            .await
+            .expect("agreement on Postgres");
+        assert_eq!(agreement.contract_total, 1_200_000);
+        let r = recurring
+            .recognize_month("2026-10", Some(manager))
+            .await
+            .expect("recognize on Postgres");
+        assert_eq!(r.recognized, 1);
+        let again = recurring
+            .recognize_month("2026-10", Some(manager))
+            .await
+            .unwrap();
+        assert_eq!(again.recognized, 0, "once a month");
+        let mut longer = AgreementInput {
+            project_id: Some(monthly.id),
+            monthly_amount: Some(100_000),
+            from_month: "2026-06".into(),
+            to_month: "2027-05".into(),
+            description: Some("備考".into()),
+            ..Default::default()
+        };
+        longer.row_version = agreement.row_version;
+        recurring
+            .update(agreement.id, longer, Some(manager))
+            .await
+            .expect("regenerate on Postgres");
+        let month = closing.get("2026-11").await.unwrap();
+        assert!(month
+            .warnings
+            .iter()
+            .any(|w| w.code == "recurring_unrecognized"));
     }
 }
 

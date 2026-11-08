@@ -14,7 +14,8 @@ import { getBantoMode } from './setup';
 import { demoModeError, httpRequest, invokeCommand, isPipelineAvailable } from './pipelineAdmin';
 
 export type MonthStatus = 'open' | 'closed' | 'reopened';
-export type WarningCode = 'missing_rate' | 'provisional' | 'fixed_unposted';
+export type WarningCode =
+	'missing_rate' | 'provisional' | 'fixed_unposted' | 'recurring_unrecognized';
 
 /** Mirrors `admin_template_core::closing::MonthRow`. */
 export interface MonthRow {

@@ -531,7 +531,7 @@ pub(crate) fn issue_code(issue: &RevenueIssue) -> String {
 }
 
 /// A refused revenue write as field errors on `field`.
-fn revenue_errors(field: &str, issues: &[RevenueIssue]) -> BantoError {
+pub(crate) fn revenue_errors(field: &str, issues: &[RevenueIssue]) -> BantoError {
     let mut errors: Vec<FieldError> = Vec::new();
     for issue in issues {
         let message = match issue {
@@ -667,6 +667,63 @@ enum PlanOp {
     Update(i64, i64),
     Delete(i64),
     Insert(Option<String>, i64),
+}
+
+/// A checked rewrite of a project's revenue plan (see
+/// [`OrdersService::prepare_plan_rewrite`]).
+pub(crate) struct PlanRewrite {
+    /// The `revenue_version` the rewrite was checked on (T13).
+    pub(crate) version: i64,
+    ops: Vec<PlanOp>,
+    pub(crate) guard: String,
+    pub(crate) update: String,
+    pub(crate) delete: String,
+    pub(crate) insert: String,
+}
+
+/// Write a [`PlanRewrite`] in the transaction `$tx`: bump the project's
+/// `revenue_version` from the checked one (stale otherwise) and apply the
+/// line changes.
+macro_rules! write_plan_rewrite {
+    ($tx:expr, $rw:expr, $project_id:expr) => {{
+        let rw = &$rw;
+        let project_id: i64 = $project_id;
+        if execute!($tx, rw.guard, project_id, rw.version)? == 0 {
+            return Err(stale_version_error());
+        }
+        for op in rw.ops() {
+            match op {
+                PlanOpRef::Update(id, amount) => {
+                    execute!($tx, rw.update, amount, id, project_id)?;
+                }
+                PlanOpRef::Delete(id) => {
+                    execute!($tx, rw.delete, id, project_id)?;
+                }
+                PlanOpRef::Insert(month, amount) => {
+                    execute!($tx, rw.insert, project_id, month, amount)?;
+                }
+            }
+        }
+    }};
+}
+
+pub(crate) use write_plan_rewrite;
+
+/// A line change of a [`PlanRewrite`], as the macro writes it.
+pub(crate) enum PlanOpRef<'a> {
+    Update(i64, i64),
+    Delete(i64),
+    Insert(&'a Option<String>, i64),
+}
+
+impl PlanRewrite {
+    pub(crate) fn ops(&self) -> impl Iterator<Item = PlanOpRef<'_>> {
+        self.ops.iter().map(|op| match op {
+            PlanOp::Update(id, amount) => PlanOpRef::Update(*id, *amount),
+            PlanOp::Delete(id) => PlanOpRef::Delete(*id),
+            PlanOp::Insert(month, amount) => PlanOpRef::Insert(month, *amount),
+        })
+    }
 }
 
 /// Diff the stored lines against the domain's new lines. A line some
@@ -1172,14 +1229,15 @@ impl OrdersService {
             &mut errors,
         );
         validation(errors)?;
-        let ops = if input.approve {
-            let next = revenue
+        // A rejection leaves the plan as it is (no line changes).
+        let next = if input.approve {
+            revenue
                 .apply_change(change.delta_amount, ym(&change.plan_month))
-                .map_err(|issues| revenue_errors("deltaAmount", &issues))?;
-            plan_ops(&state, &next)
+                .map_err(|issues| revenue_errors("deltaAmount", &issues))?
         } else {
-            Vec::new()
+            revenue
         };
+        let rewrite = self.plan_rewrite(&state, &next);
         let status = if input.approve {
             ChangeStatus::Approved
         } else {
@@ -1190,11 +1248,9 @@ impl OrdersService {
              decision_note = ? WHERE id = ? AND project_id = ? AND status = 'pending'",
             self.now()
         ));
-        let version = state.project.revenue_version;
         self.write_plan(
             project_id,
-            version,
-            ops,
+            rewrite,
             Some(Decision {
                 sql: decide,
                 status,
@@ -1209,38 +1265,46 @@ impl OrdersService {
     }
 
     /// Apply plan ops (plus an optional change decision) behind the guard.
+    /// The plan line changes `next` needs, with the statements to write
+    /// them (checked on `version`, the project's `revenue_version`).
+    fn plan_rewrite(&self, state: &State, next: &OrderedRevenue) -> PlanRewrite {
+        PlanRewrite {
+            version: state.project.revenue_version,
+            ops: plan_ops(state, next),
+            guard: self.guard_sql(),
+            update: self.sql("UPDATE revenue_plan SET amount = ? WHERE id = ? AND project_id = ?"),
+            delete: self.sql("DELETE FROM revenue_plan WHERE id = ? AND project_id = ?"),
+            insert: self
+                .sql("INSERT INTO revenue_plan (project_id, month, amount) VALUES (?, ?, ?)"),
+        }
+    }
+
+    /// Check a rewrite of an ordered (not settled) project's revenue plan:
+    /// `next` builds the new state from the current one (it must pass
+    /// `OrderedRevenue::check`). The caller writes it with
+    /// [`write_plan_rewrite!`] inside its own transaction (定期売上, P7c).
+    pub(crate) async fn prepare_plan_rewrite(
+        &self,
+        project_id: i64,
+        next: impl FnOnce(&OrderedRevenue) -> Result<OrderedRevenue, BantoError>,
+    ) -> Result<PlanRewrite, BantoError> {
+        let state = self.state(project_id).await?;
+        let revenue = state.require_ordered()?;
+        let next = next(&revenue)?;
+        Ok(self.plan_rewrite(&state, &next))
+    }
+
     async fn write_plan(
         &self,
         project_id: i64,
-        version: i64,
-        ops: Vec<PlanOp>,
+        rewrite: PlanRewrite,
         decision: Option<Decision>,
     ) -> Result<(), BantoError> {
-        let guard = self.guard_sql();
-        let update = self.sql("UPDATE revenue_plan SET amount = ? WHERE id = ? AND project_id = ?");
-        let delete = self.sql("DELETE FROM revenue_plan WHERE id = ? AND project_id = ?");
-        let insert =
-            self.sql("INSERT INTO revenue_plan (project_id, month, amount) VALUES (?, ?, ?)");
         in_tx!(&self.db, tx => {
-            if execute!(&mut *tx, guard, project_id, version)? == 0 {
-                return Err(stale_version_error());
-            }
+            write_plan_rewrite!(&mut *tx, rewrite, project_id);
             if let Some(d) = &decision {
                 if execute!(&mut *tx, d.sql, d.status.as_str(), d.actor, &d.note, d.change_id, project_id)? == 0 {
                     return Err(stale_version_error());
-                }
-            }
-            for op in &ops {
-                match op {
-                    PlanOp::Update(id, amount) => {
-                        execute!(&mut *tx, update, *amount, *id, project_id)?;
-                    }
-                    PlanOp::Delete(id) => {
-                        execute!(&mut *tx, delete, *id, project_id)?;
-                    }
-                    PlanOp::Insert(month, amount) => {
-                        execute!(&mut *tx, insert, project_id, month, *amount)?;
-                    }
                 }
             }
         });
@@ -1270,8 +1334,8 @@ impl OrdersService {
         let next = revenue
             .replan(&lines)
             .map_err(|issues| revenue_errors("lines", &issues))?;
-        let ops = plan_ops(&state, &next);
-        self.write_plan(project_id, version, ops, None).await?;
+        let rewrite = self.plan_rewrite(&state, &next);
+        self.write_plan(project_id, rewrite, None).await?;
         self.notify_changed();
         self.summary(project_id).await
     }

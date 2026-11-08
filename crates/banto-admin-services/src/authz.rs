@@ -271,6 +271,12 @@ pub enum Operation {
     /// amounts are per person like personal rates (`finance.rate`), and
     /// seeing them presupposes `amount.view`.
     ManageFixedCosts,
+    /// Recurring revenue (定期売上, banto-cost P7c, T38): view and change the
+    /// monthly-contract agreements (they regenerate the revenue plan) and
+    /// recognize a month for every agreement. Revenue recognition is
+    /// accounting's (`finance.close`) and the screen shows every monthly
+    /// contract's amounts (`amount.view`).
+    ManageRecurringRevenue,
     /// Company-wide aggregates and every project's details.
     ViewAllReports,
     /// Read masters (customers, phases): any company member.
@@ -329,6 +335,7 @@ impl Operation {
             Operation::FinanceClose => "finance_close",
             Operation::CloseMonth => "close_month",
             Operation::ManageFixedCosts => "manage_fixed_costs",
+            Operation::ManageRecurringRevenue => "manage_recurring_revenue",
             Operation::ViewAllReports => "view_all_reports",
             Operation::ViewMasters => "view_masters",
             Operation::EditMasters => "edit_masters",
@@ -366,6 +373,7 @@ impl Operation {
             | Operation::FinanceClose
             | Operation::CloseMonth
             | Operation::ManageFixedCosts
+            | Operation::ManageRecurringRevenue
             | Operation::ViewAllReports
             | Operation::ViewMasters
             | Operation::EditMasters
@@ -567,6 +575,10 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
         }
         Operation::ManageFixedCosts => {
             require(subject, Capability::FinanceRate)?;
+            require(subject, Capability::AmountView)?;
+        }
+        Operation::ManageRecurringRevenue => {
+            require(subject, Capability::FinanceClose)?;
             require(subject, Capability::AmountView)?;
         }
         Operation::ViewAllReports => {
@@ -1641,6 +1653,23 @@ mod tests {
         let blind = subject(3, &[Capability::FinanceRate], &[]);
         assert_eq!(
             deny(&blind, Operation::ManageFixedCosts),
+            Denial::MissingCapability(Capability::AmountView)
+        );
+    }
+
+    #[test]
+    fn t38_recurring_revenue_needs_finance_close_and_amount_view() {
+        let finance = subject(1, &[Capability::FinanceClose, Capability::AmountView], &[]);
+        allow(&finance, Operation::ManageRecurringRevenue);
+        // A project manager (or the rates holder) is not accounting.
+        let rates = subject(2, &[Capability::FinanceRate, Capability::AmountView], &[]);
+        assert_eq!(
+            deny(&rates, Operation::ManageRecurringRevenue),
+            Denial::MissingCapability(Capability::FinanceClose)
+        );
+        let blind = subject(3, &[Capability::FinanceClose], &[]);
+        assert_eq!(
+            deny(&blind, Operation::ManageRecurringRevenue),
             Denial::MissingCapability(Capability::AmountView)
         );
     }

@@ -25,6 +25,7 @@ pub mod outlook;
 pub mod pipeline;
 pub mod project;
 pub mod purchase;
+pub mod recurring;
 pub mod report;
 pub mod revenue;
 pub mod time;

@@ -538,6 +538,22 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'fixed_cost_posting_cancel',
 			rest: 'POST /api/fixed-costs/postings/{id}/cancel',
 			role: 'Editor'
+		},
+		// banto-cost P7c: 定期売上。editor 床＋authorize_audited（ManageRecurringRevenue）。
+		{
+			tauri: 'recurring_revenue_agreement_create',
+			rest: 'POST /api/recurring-revenue/agreements',
+			role: 'Editor'
+		},
+		{
+			tauri: 'recurring_revenue_agreement_update',
+			rest: 'PUT /api/recurring-revenue/agreements/{id}',
+			role: 'Editor'
+		},
+		{
+			tauri: 'recurring_revenue_month_recognize',
+			rest: 'POST /api/recurring-revenue/months/{month}/recognize',
+			role: 'Editor'
 		}
 	];
 
@@ -620,6 +636,17 @@ const isAllowedPackageImport = (spec) =>
 		// banto-cost P7b の読み取り。
 		{ tauri: 'fixed_cost_contracts', rest: 'GET /api/fixed-costs/contracts', role: 'Viewer' },
 		{ tauri: 'fixed_cost_month', rest: 'GET /api/fixed-costs/months/{month}', role: 'Viewer' },
+		// banto-cost P7c の読み取り。
+		{
+			tauri: 'recurring_revenue_agreements',
+			rest: 'GET /api/recurring-revenue/agreements',
+			role: 'Viewer'
+		},
+		{
+			tauri: 'recurring_revenue_month',
+			rest: 'GET /api/recurring-revenue/months/{month}',
+			role: 'Viewer'
+		},
 		// banto-cost P6c の読み取り（CSV は出力を監査に残す読み取り）。
 		{ tauri: 'project_monthly', rest: 'GET /api/projects/{id}/monthly', role: 'Viewer' },
 		{
@@ -713,6 +740,8 @@ const isAllowedPackageImport = (spec) =>
 		'closing_get',
 		'fixed_cost_contracts',
 		'fixed_cost_month',
+		'recurring_revenue_agreements',
+		'recurring_revenue_month',
 		'project_monthly',
 		'project_monthly_csv',
 		'portfolio_csv',
@@ -772,6 +801,8 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/closing/{month}',
 		'GET /api/fixed-costs/contracts',
 		'GET /api/fixed-costs/months/{month}',
+		'GET /api/recurring-revenue/agreements',
+		'GET /api/recurring-revenue/months/{month}',
 		'GET /api/projects/{id}/monthly',
 		'GET /api/projects/{id}/monthly.csv',
 		'GET /api/reports/portfolio.csv',

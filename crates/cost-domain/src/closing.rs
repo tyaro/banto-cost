@@ -60,6 +60,8 @@ pub struct MonthState {
     pub provisional_entries: usize,
     /// その月を期間に含むのに未計上の月額固定の取り決め（受注済みで精算前の案件だけ、T37）。
     pub unposted_fixed_costs: usize,
+    /// その月を期間に含むのに未計上の定期売上の取り決め（受注済みで精算前の案件だけ、T38）。
+    pub unrecognized_recurring: usize,
 }
 
 /// 締めを止める理由。
@@ -82,6 +84,10 @@ pub enum CloseWarning {
     FixedUnposted {
         contracts: usize,
     },
+    /// 未計上の定期売上。締めると、その月には再開するまで計上できない。
+    RecurringUnrecognized {
+        agreements: usize,
+    },
 }
 
 impl CloseWarning {
@@ -90,6 +96,7 @@ impl CloseWarning {
             Self::MissingRate { .. } => "missing_rate",
             Self::Provisional { .. } => "provisional",
             Self::FixedUnposted { .. } => "fixed_unposted",
+            Self::RecurringUnrecognized { .. } => "recurring_unrecognized",
         }
     }
 
@@ -97,6 +104,7 @@ impl CloseWarning {
         match self {
             Self::MissingRate { entries } | Self::Provisional { entries } => *entries,
             Self::FixedUnposted { contracts } => *contracts,
+            Self::RecurringUnrecognized { agreements } => *agreements,
         }
     }
 }
@@ -117,6 +125,11 @@ pub fn warnings(s: &MonthState) -> Vec<CloseWarning> {
     if s.unposted_fixed_costs > 0 {
         out.push(CloseWarning::FixedUnposted {
             contracts: s.unposted_fixed_costs,
+        });
+    }
+    if s.unrecognized_recurring > 0 {
+        out.push(CloseWarning::RecurringUnrecognized {
+            agreements: s.unrecognized_recurring,
         });
     }
     out
@@ -334,5 +347,20 @@ mod tests {
         assert_eq!(w, vec![CloseWarning::FixedUnposted { contracts: 2 }]);
         assert_eq!(w[0].code(), "fixed_unposted");
         assert_eq!(w[0].count(), 2);
+    }
+
+    #[test]
+    fn t38_unrecognized_recurring_revenue_warns_but_does_not_block_the_close() {
+        let s = MonthState {
+            unrecognized_recurring: 3,
+            ..Default::default()
+        };
+        let w = check_close(MonthStatus::Open, &s).unwrap();
+        assert_eq!(
+            w,
+            vec![CloseWarning::RecurringUnrecognized { agreements: 3 }]
+        );
+        assert_eq!(w[0].code(), "recurring_unrecognized");
+        assert_eq!(w[0].count(), 3);
     }
 }

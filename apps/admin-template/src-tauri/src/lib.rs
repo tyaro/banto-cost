@@ -68,6 +68,7 @@ use admin_template_core::pipeline::{
 };
 use admin_template_core::portfolio::Portfolio;
 use admin_template_core::projects::{Project, ProjectInput, ProjectsService};
+use admin_template_core::recurring_revenue::RESOURCE as RECURRING_RESOURCE;
 use admin_template_core::rest::{api_router, user_auth_state, Services};
 use admin_template_core::settings::{
     auth_server_combination_allowed, AuditSettings, AuthSettings, ServerSettings, SettingsService,
@@ -5385,6 +5386,187 @@ async fn fixed_cost_posting_cancel_body(
     Ok(view)
 }
 
+// --- banto-cost P7c: 定期売上 (T38) --------------------------------------------
+// Twins of `/api/recurring-revenue/agreements` (GET/POST),
+// `/api/recurring-revenue/agreements/{id}` (PUT),
+// `/api/recurring-revenue/months/{month}` (GET) and
+// `.../months/{month}/recognize` (`admin_template_core::rest::recurring_revenue`):
+// the same role floors (any role for reads, editor for writes), the same
+// `Operation::ManageRecurringRevenue` through `authorize_audited`, the same
+// audit actions and detail (`recurring_revenue::audit_detail`: no amount).
+
+#[tauri::command]
+async fn recurring_revenue_agreements(
+    state: State<'_, AppState>,
+) -> Result<Vec<admin_template_core::recurring_revenue::Agreement>, BantoError> {
+    recurring_revenue_agreements_body(&state).await
+}
+
+async fn recurring_revenue_agreements_body(
+    state: &AppState,
+) -> Result<Vec<admin_template_core::recurring_revenue::Agreement>, BantoError> {
+    let identity = require_role(state, Role::Viewer, RECURRING_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ManageRecurringRevenue,
+        RECURRING_RESOURCE,
+    )
+    .await?;
+    state.forecasts.recurring_revenue().list().await
+}
+
+#[tauri::command]
+async fn recurring_revenue_month(
+    state: State<'_, AppState>,
+    month: String,
+) -> Result<admin_template_core::recurring_revenue::MonthView, BantoError> {
+    recurring_revenue_month_body(&state, month).await
+}
+
+async fn recurring_revenue_month_body(
+    state: &AppState,
+    month: String,
+) -> Result<admin_template_core::recurring_revenue::MonthView, BantoError> {
+    let identity = require_role(state, Role::Viewer, RECURRING_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ManageRecurringRevenue,
+        RECURRING_RESOURCE,
+    )
+    .await?;
+    state.forecasts.recurring_revenue().month(&month).await
+}
+
+#[tauri::command]
+async fn recurring_revenue_agreement_create(
+    state: State<'_, AppState>,
+    values: admin_template_core::recurring_revenue::AgreementInput,
+) -> Result<admin_template_core::recurring_revenue::Agreement, BantoError> {
+    recurring_revenue_agreement_create_body(&state, values).await
+}
+
+async fn recurring_revenue_agreement_create_body(
+    state: &AppState,
+    values: admin_template_core::recurring_revenue::AgreementInput,
+) -> Result<admin_template_core::recurring_revenue::Agreement, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageRecurringRevenue,
+        RECURRING_RESOURCE,
+    )
+    .await?;
+    let a = state
+        .forecasts
+        .recurring_revenue()
+        .create(values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "create",
+        RECURRING_RESOURCE,
+        Some(&a.id.to_string()),
+        Some(admin_template_core::recurring_revenue::audit_detail(
+            "create",
+            Some(a.id),
+            None,
+            &[a.project_id],
+        )),
+    )
+    .await;
+    Ok(a)
+}
+
+#[tauri::command]
+async fn recurring_revenue_agreement_update(
+    state: State<'_, AppState>,
+    id: i64,
+    values: admin_template_core::recurring_revenue::AgreementInput,
+) -> Result<admin_template_core::recurring_revenue::Agreement, BantoError> {
+    recurring_revenue_agreement_update_body(&state, id, values).await
+}
+
+async fn recurring_revenue_agreement_update_body(
+    state: &AppState,
+    id: i64,
+    values: admin_template_core::recurring_revenue::AgreementInput,
+) -> Result<admin_template_core::recurring_revenue::Agreement, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageRecurringRevenue,
+        RECURRING_RESOURCE,
+    )
+    .await?;
+    let a = state
+        .forecasts
+        .recurring_revenue()
+        .update(id, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "update",
+        RECURRING_RESOURCE,
+        Some(&a.id.to_string()),
+        Some(admin_template_core::recurring_revenue::audit_detail(
+            "update",
+            Some(a.id),
+            None,
+            &[a.project_id],
+        )),
+    )
+    .await;
+    Ok(a)
+}
+
+#[tauri::command]
+async fn recurring_revenue_month_recognize(
+    state: State<'_, AppState>,
+    month: String,
+) -> Result<admin_template_core::recurring_revenue::RecognizeResult, BantoError> {
+    recurring_revenue_month_recognize_body(&state, month).await
+}
+
+async fn recurring_revenue_month_recognize_body(
+    state: &AppState,
+    month: String,
+) -> Result<admin_template_core::recurring_revenue::RecognizeResult, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) = business_guard(
+        state,
+        &actor,
+        Operation::ManageRecurringRevenue,
+        RECURRING_RESOURCE,
+    )
+    .await?;
+    let r = state
+        .forecasts
+        .recurring_revenue()
+        .recognize_month(&month, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "recognize",
+        RECURRING_RESOURCE,
+        Some(&r.view.month),
+        Some(admin_template_core::recurring_revenue::audit_detail(
+            "recognize",
+            None,
+            Some(&r.view.month),
+            &r.project_ids,
+        )),
+    )
+    .await;
+    Ok(r)
+}
+
 // --- banto-cost P6c: 月別収支と CSV (T12・T15) -----------------------------------
 // Twins of `/api/projects/{id}/monthly`, `/api/projects/{id}/monthly.csv`,
 // `/api/reports/portfolio.csv` and `/api/reports/period-monthly.csv`
@@ -6837,6 +7019,11 @@ pub fn run() {
             fixed_cost_contract_update,
             fixed_cost_month_post,
             fixed_cost_posting_cancel,
+            recurring_revenue_agreements,
+            recurring_revenue_month,
+            recurring_revenue_agreement_create,
+            recurring_revenue_agreement_update,
+            recurring_revenue_month_recognize,
             project_monthly,
             project_monthly_csv,
             portfolio_csv,
@@ -12559,6 +12746,128 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.resource == "fixed_costs" && r.action == "denied" && r.origin == "tauri"));
+    }
+
+    #[tokio::test]
+    async fn t38_tauri_recurring_revenue_needs_finance_close_and_recognizes_a_month_once() {
+        let state = admin_app_state().await;
+        seed_two_projects(&state).await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[Capability::ProjectManage, Capability::AmountView],
+        )
+        .await
+        .expect("grant editor");
+        authz_capabilities_set_body(
+            &state,
+            admin.id,
+            &[Capability::FinanceClose, Capability::AmountView],
+        )
+        .await
+        .expect("grant admin");
+
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let project = projects_create_body(&state, project_input("P-R01", editor.id))
+            .await
+            .expect("manager registers a project");
+        let conversion: ConversionRequest = serde_json::from_value(serde_json::json!({
+            "rowVersion": project.row_version,
+            "convertedOn": "2026-06-01",
+            "confirmedAmount": 3_600_000,
+            "basis": "年間保守契約",
+            "plannedStart": "2026-06-01",
+            "plannedEnd": "2027-05-31",
+            "revenuePlan": [{ "month": null, "amount": 3_600_000 }],
+            "scope": "whole"
+        }))
+        .expect("input");
+        order_convert_body(&state, project.id, conversion)
+            .await
+            .expect("convert");
+        let agreement = || -> admin_template_core::recurring_revenue::AgreementInput {
+            serde_json::from_value(serde_json::json!({
+                "projectId": project.id,
+                "monthlyAmount": 300_000,
+                "fromMonth": "2026-06",
+                "toMonth": "2027-05"
+            }))
+            .expect("input")
+        };
+        // The project manager is not accounting (no finance.close).
+        assert!(matches!(
+            recurring_revenue_agreements_body(&state).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            recurring_revenue_agreement_create_body(&state, agreement()).await,
+            Err(BantoError::Forbidden)
+        ));
+        assert!(matches!(
+            recurring_revenue_month_recognize_body(&state, "2026-06".into()).await,
+            Err(BantoError::Forbidden)
+        ));
+
+        state.set_session_for_test(Some(DesktopSession::Account(admin.clone())));
+        let created = recurring_revenue_agreement_create_body(&state, agreement())
+            .await
+            .expect("create");
+        assert_eq!(created.months, 12);
+        let r = recurring_revenue_month_recognize_body(&state, "2026-06".into())
+            .await
+            .expect("recognize");
+        assert_eq!(r.recognized, 1);
+        assert_eq!(r.view.recognized_on, "2026-06-30");
+        let again = recurring_revenue_month_recognize_body(&state, "2026-06".into())
+            .await
+            .expect("recognize again");
+        assert_eq!(again.recognized, 0);
+        let mut changed = agreement();
+        changed.monthly_amount = Some(250_000);
+        changed.row_version = created.row_version;
+        assert!(matches!(
+            recurring_revenue_agreement_update_body(&state, created.id, changed).await,
+            Err(BantoError::Validation { .. })
+        ));
+        let july = recurring_revenue_month_body(&state, "2026-07".into())
+            .await
+            .expect("month");
+        assert_eq!(july.due_count, 1);
+        assert_eq!(
+            recurring_revenue_agreements_body(&state)
+                .await
+                .expect("list")[0]
+                .recognized_total,
+            300_000
+        );
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        for row in rows.iter().filter(|r| r.resource == "recurring_revenues") {
+            let detail = row.detail.clone().unwrap_or_default();
+            assert!(!detail.contains("300000"), "{detail}");
+        }
+        assert!(rows
+            .iter()
+            .any(|r| r.resource == "recurring_revenues" && r.action == "recognize"));
+        assert!(rows.iter().any(|r| r.resource == "recurring_revenues"
+            && r.action == "denied"
+            && r.origin == "tauri"));
     }
 
     #[tokio::test]

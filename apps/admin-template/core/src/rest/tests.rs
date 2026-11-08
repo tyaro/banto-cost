@@ -6003,3 +6003,158 @@ async fn t37_rest_fixed_costs_need_finance_rate_and_post_a_month_once() {
         assert!(!detail.contains("二重払い"), "{detail}");
     }
 }
+
+#[tokio::test]
+async fn t38_rest_recurring_revenue_needs_finance_close_and_recognizes_a_month_once() {
+    let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["project.manage", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-R01", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": project["rowVersion"],
+                "convertedOn": "2026-06-01",
+                "confirmedAmount": 3_600_000,
+                "basis": "年間保守契約",
+                "plannedStart": "2026-06-01",
+                "plannedEnd": "2027-05-31",
+                "revenuePlan": [{ "month": null, "amount": 3_600_000 }],
+                "scope": "whole"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let agreement = json!({
+        "projectId": id,
+        "monthlyAmount": 300_000,
+        "fromMonth": "2026-06",
+        "toMonth": "2027-05"
+    });
+
+    // The project manager is not accounting (no finance.close).
+    for request in [
+        get_auth("/api/recurring-revenue/agreements", &editor),
+        get_auth("/api/recurring-revenue/months/2026-06", &editor),
+        post_json_auth(
+            "/api/recurring-revenue/agreements",
+            &editor,
+            agreement.clone(),
+        ),
+        post_json_auth(
+            "/api/recurring-revenue/months/2026-06/recognize",
+            &editor,
+            json!({}),
+        ),
+    ] {
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "recurring_revenues"));
+
+    grant(&router, &admin, 1, json!(["finance.close", "amount.view"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/recurring-revenue/agreements",
+            &admin,
+            agreement,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = body_json(response).await;
+    assert_eq!(created["months"], 12);
+    assert_eq!(created["contractTotal"], 3_600_000);
+
+    // A mismatching change is refused with the reason.
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/recurring-revenue/agreements/{}", created["id"]),
+            &admin,
+            json!({
+                "projectId": id,
+                "monthlyAmount": 250_000,
+                "fromMonth": "2026-06",
+                "toMonth": "2027-05",
+                "rowVersion": created["rowVersion"]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/recurring-revenue/months/2026-06/recognize",
+            &admin,
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let r = body_json(response).await;
+    assert_eq!(r["recognized"], 1);
+    assert_eq!(r["view"]["recognizedOn"], "2026-06-30");
+    assert_eq!(r["view"]["lines"][0]["state"], "recognized");
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/recurring-revenue/months/2026-06/recognize",
+            &admin,
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["recognized"], 0, "二度計上しない");
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/recurring-revenue/months/2026-07", &admin))
+        .await
+        .unwrap();
+    let july = body_json(response).await;
+    assert_eq!(july["dueCount"], 1);
+    assert_eq!(july["dueTotal"], 300_000);
+
+    // The audit keeps the action, the month and the project, no amount.
+    let entries = audit.list(ListParams::default()).await.unwrap().rows;
+    let writes: Vec<_> = entries
+        .iter()
+        .filter(|e| e.resource == "recurring_revenues" && e.action != "denied")
+        .collect();
+    let actions: Vec<&str> = writes.iter().map(|e| e.action.as_str()).collect();
+    for action in ["create", "recognize"] {
+        assert!(actions.contains(&action), "{actions:?}");
+    }
+    for e in writes {
+        let detail = format!("{:?}", e.detail);
+        assert!(
+            !detail.contains("300000") && !detail.contains("3600000"),
+            "{detail}"
+        );
+    }
+}
