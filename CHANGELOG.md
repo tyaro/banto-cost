@@ -22,6 +22,7 @@
 
 ## [Unreleased]
 
+- banto-cost: テンプレートの管理 API（利用者 `usersAdmin.ts`・監査ログ `auditLogAdmin.ts`・バックアップ `backupsAdmin.ts`・システム情報 `systemAdmin.ts`・認証設定 `authAdmin.ts`・サーバー設定 `serverAdmin.ts`）も、`401`／`unauthorized` を受けたら業務 API と同じくセッション管理に確認を頼むようにした。
 - banto-cost: ログインやログアウトで保存中のトークンが変わったら、変更通知（SSE）をすぐに新しいトークンで張り直すようにした（閲覧公開からログインしても閲覧者のトークンのまま残っていた）。`createSseEventProvider` に `onCredentialChanged` を追加。あわせて、DataProvider（`createHttpDataProvider`・`createTauriDataProvider` の `onUnauthorized`）と業務 API（`pipelineAdmin.ts` の `httpRequest`・`invokeCommand`）が `401`／`unauthorized` を受けたら、SSE の `401` と同じくセッション管理に確認を頼み、無効と確かめられたらログイン画面へ戻すようにした。
 - banto-cost: 案件の責任者と月額固定原価の社員を、admin 以外でも氏名の一覧から選べるようにした。業務用の利用者一覧 `GET /api/user-names`（Tauri `user_names_list`）は ID と表示名だけを返し、顧客と同じ `ViewMasters`（または `admin` ロール）で判定する。
 - banto-cost P7c: 定期売上（T38）。月額契約の案件に取り決め（月額・開始月〜終了月）を登録すると、月額×月数が確定受注額と一致することを確かめて、未計上の売上予定を期間の月ごとに作り直す（計上済みの月は残す）。経理が月を選んで計上すると、その月の未消込の予定を月末（検収日）の売上計上として一度だけ消し込む。締め済みの月は計上を拒否し、月次締めに「未計上の定期売上」の注意を追加。目標粗利率は最初の検収日の値。REST `/api/recurring-revenue/*` と Tauri の対、操作 `ManageRecurringRevenue`（`finance.close`＋`amount.view`）、マイグレーション `0024_recurring_revenue.sql`、画面 `/recurring-revenue`。

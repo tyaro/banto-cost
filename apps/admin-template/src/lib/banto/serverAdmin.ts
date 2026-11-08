@@ -9,6 +9,7 @@
 import { getIdentifier } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { isProviderError, ProviderError, type ErrorBody } from '@banto/admin-core';
+import { signalUnauthorized } from './setup';
 
 /** One LAN access URL and its QR code (as an inline SVG string), for the settings screen (spec §11.4). */
 export interface QrSvg {
@@ -401,7 +402,9 @@ async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Pr
 	try {
 		return (await invoke(cmd, args)) as T;
 	} catch (err) {
-		throw toProviderError(err);
+		const error = toProviderError(err);
+		if (error.body.kind === 'unauthorized') signalUnauthorized();
+		throw error;
 	}
 }
 

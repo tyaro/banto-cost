@@ -18,6 +18,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { isProviderError, ProviderError, type ErrorBody } from '@banto/admin-core';
+import { signalUnauthorized } from './setup';
 
 export type AuthDisabledRole = 'admin' | 'editor' | 'viewer';
 
@@ -57,7 +58,9 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 	try {
 		return (await invoke(cmd, args)) as T;
 	} catch (err) {
-		throw toProviderError(err);
+		const error = toProviderError(err);
+		if (error.body.kind === 'unauthorized') signalUnauthorized();
+		throw error;
 	}
 }
 
