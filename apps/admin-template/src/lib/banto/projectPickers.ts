@@ -6,9 +6,10 @@
  *   an existing record still shows its value). Reading customers needs admin
  *   or `ViewMasters`; when that is refused, or nothing is registered yet, the
  *   field falls back to a numeric id input instead of an empty select.
- * - Managers: there is no non-admin user list endpoint, so only an admin
- *   session gets a select (through usersAdmin.ts); everyone else enters the
- *   user id, defaulted to their own on create.
+ * - Managers: every account's display name from the business user-name list
+ *   (userNames.ts, `ViewMasters` or the admin role - the same right as the
+ *   customers). When that is refused (no company grant) or in demo mode the
+ *   field falls back to the numeric user id, defaulted to one's own on create.
  *
  * Every failure here degrades to the numeric input - the server validates
  * both ids either way (spec §5.1).
@@ -16,8 +17,7 @@
 import { getDataProvider, type Identity } from '@banto/admin-core';
 import type { FieldOption } from '@banto/forms';
 import * as m from '#lib/paraglide/messages.js';
-import { isAdmin, type Role } from '#lib/permissions.js';
-import { isUsersAdminAvailable, listUsers } from './usersAdmin';
+import { listUserNames, userNameOptions } from './userNames';
 import type { Customer } from './resources/customers';
 
 export interface ProjectPickers {
@@ -46,27 +46,19 @@ async function customerOptions(currentId?: number): Promise<FieldOption[] | unde
 	}
 }
 
-async function managerOptions(role: Role): Promise<FieldOption[] | undefined> {
-	if (!isAdmin(role) || !isUsersAdminAvailable()) return undefined;
+async function managerOptions(): Promise<FieldOption[] | undefined> {
 	try {
-		const users = await listUsers();
-		if (users.length === 0) return undefined;
-		return users.map((user) => ({
-			value: user.id,
-			label: `${user.displayName} (${user.username})`
-		}));
+		const names = await listUserNames();
+		return names.length > 0 ? userNameOptions(names) : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
-export async function loadProjectPickers(
-	role: Role,
-	currentCustomerId?: number
-): Promise<ProjectPickers> {
+export async function loadProjectPickers(currentCustomerId?: number): Promise<ProjectPickers> {
 	const [customers, managers] = await Promise.all([
 		customerOptions(currentCustomerId),
-		managerOptions(role)
+		managerOptions()
 	]);
 	return { customers, managers };
 }

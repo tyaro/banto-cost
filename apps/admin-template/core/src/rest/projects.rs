@@ -12,6 +12,7 @@
 //! |-------|----------|
 //! | customers list/get | `admin` role, or `ViewMasters` |
 //! | customers create/update | `admin` role, or `EditMasters` |
+//! | user names (id + display name) | `admin` role, or `ViewMasters` |
 //! | projects list | `admin` role sees all; others `visible_projects` |
 //! | projects get | `admin` role, or `ViewProject` |
 //! | projects create | `CreateProject` |
@@ -66,6 +67,7 @@ use crate::orders::{
 use crate::pipeline::{PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput};
 use crate::projects::{Project, ProjectInput, ProjectsService};
 use crate::time_entries::TimeEntriesService;
+use crate::user_names::{user_names, UserName};
 use crate::work_masters::WorkMastersService;
 
 use super::authz::caller_user_id;
@@ -178,6 +180,18 @@ async fn customers_get(
         .guard_or_admin(&session, Operation::ViewMasters, "customers")
         .await?;
     Ok(Json(state.customers.get(id).await?))
+}
+
+// --- user names (the manager / employee pickers) -------------------------
+
+async fn user_names_list(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+) -> Result<Json<Vec<UserName>>, ApiError> {
+    state
+        .guard_or_admin(&session, Operation::ViewMasters, "users")
+        .await?;
+    Ok(Json(user_names(&state.users).await?))
 }
 
 async fn customers_create(
@@ -849,6 +863,7 @@ pub(super) fn business_read_router(
     Router::new()
         .route("/api/customers/list", post(customers_list))
         .route("/api/customers/{id}", get(customers_get))
+        .route("/api/user-names", get(user_names_list))
         .route("/api/projects/list", post(projects_list))
         .route("/api/projects/{id}", get(projects_get))
         .route(

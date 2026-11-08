@@ -33,6 +33,7 @@
 //! | GET    | `/api/customers/{id}` | -             | `Customer` (any role + admin or `ViewMasters`) |
 //! | POST   | `/api/customers`      | `CustomerInput` | `Customer` (editor+ + admin or `EditMasters`) |
 //! | PUT    | `/api/customers/{id}` | `CustomerInput` | `Customer` (editor+ + admin or `EditMasters`; `rowVersion`) |
+//! | GET    | `/api/user-names`     | -             | `Vec<UserName>` (any role + admin or `ViewMasters`; id + display name only) |
 //! | POST   | `/api/projects/list`  | `ListParams`  | `ListResult<Project>` (any role; admin all, others `visible_projects`) |
 //! | GET    | `/api/projects/{id}`  | -             | `Project` (any role + admin or `ViewProject`) |
 //! | POST   | `/api/projects`       | `ProjectInput` | `Project` (editor+ + `CreateProject`) |

@@ -31,11 +31,11 @@
 	} from '#lib/banto/fixedCostsAdmin.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { listMasters, type WorkMaster } from '#lib/banto/timeAdmin.js';
-	import { isUsersAdminAvailable, listUsers } from '#lib/banto/usersAdmin.js';
+	import { listUserNames, userNameOptions } from '#lib/banto/userNames.js';
 	import type { Project } from '#lib/banto/resources/projects.js';
 	import { formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
 	import { sessionStore } from '#lib/session.svelte.js';
-	import { canWriteResources, isAdmin } from '#lib/permissions.js';
+	import { canWriteResources } from '#lib/permissions.js';
 
 	const available = isPipelineAvailable();
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -90,15 +90,11 @@
 		} catch {
 			vendors = [];
 		}
-		if (isAdmin(sessionStore.role) && isUsersAdminAvailable()) {
-			try {
-				users = (await listUsers()).map((u) => ({
-					value: u.id,
-					label: `${u.displayName} (${u.username})`
-				}));
-			} catch {
-				users = null;
-			}
+		try {
+			const names = await listUserNames();
+			users = names.length > 0 ? userNameOptions(names) : null;
+		} catch {
+			users = null;
 		}
 	}
 
