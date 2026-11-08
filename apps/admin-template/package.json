@@ -26,24 +26,24 @@
     "@banto/grid-svelte": "workspace:*",
     "@banto/theme": "workspace:*",
     "@banto/ui": "workspace:*",
-    "@lucide/svelte": "^1.64.0",
+    "@lucide/svelte": "^1.67.0",
     "@tauri-apps/api": "^2.12.4"
   },
   "devDependencies": {
     "@inlang/paraglide-js": "^2.29.3",
-    "@inlang/plugin-m-function-matcher": "2.3.4",
-    "@inlang/plugin-message-format": "4.5.5",
-    "@sveltejs/adapter-static": "^4.0.0",
-    "@sveltejs/kit": "^3.1.0",
+    "@inlang/plugin-m-function-matcher": "2.4.1",
+    "@inlang/plugin-message-format": "4.5.7",
+    "@sveltejs/adapter-static": "^4.0.1",
+    "@sveltejs/kit": "^3.1.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.4",
     "@tauri-apps/cli": "^2.12.4",
     "svelte": "^5.57.3",
-    "svelte-check": "^4.7.7",
-    "tailwindcss": "^4.3.3",
+    "svelte-check": "^4.7.8",
+    "tailwindcss": "^4.3.4",
     "typescript": "^6.0.0",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "imports": {
     "#lib": "./src/lib/index.js",

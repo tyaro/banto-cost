@@ -27,7 +27,7 @@ axum = { version = "0.8", default-features = true, features = ["json"] }
 tower = "0.5"
 uuid = { version = "1", features = ["v4"] }
 rust-embed = "8"
-if-addrs = "0.13"
+if-addrs = "0.15"
 futures-util = "0.3"
 async-stream = "0.3"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
