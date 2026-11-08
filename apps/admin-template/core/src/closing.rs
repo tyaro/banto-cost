@@ -476,6 +476,8 @@ impl ClosingService {
             missing_rate_entries: count(missing),
             provisional_entries: count(provisional),
             unposted_fixed_costs: crate::fixed_costs::unposted_count(&self.db, m).await?,
+            unrecognized_recurring: crate::recurring_revenue::unrecognized_count(&self.db, m)
+                .await?,
         };
         let current = self.figures(m).await?;
         let total = |f: &BTreeMap<i64, MonthFigures>| {

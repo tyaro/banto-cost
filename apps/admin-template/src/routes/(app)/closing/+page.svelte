@@ -49,6 +49,8 @@
 	function warningLabel(code: WarningCode, count: number): string {
 		if (code === 'missing_rate') return m['closing.warning.missing_rate']({ count });
 		if (code === 'fixed_unposted') return m['closing.warning.fixed_unposted']({ count });
+		if (code === 'recurring_unrecognized')
+			return m['closing.warning.recurring_unrecognized']({ count });
 		return m['closing.warning.provisional']({ count });
 	}
 

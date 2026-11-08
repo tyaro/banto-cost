@@ -98,6 +98,11 @@
 //! | GET    | `/api/fixed-costs/months/{month}` | - | `MonthView` (any role + `ManageFixedCosts`) |
 //! | POST   | `/api/fixed-costs/months/{month}/post` | - | `PostResult` (editor+ + `ManageFixedCosts`; once per contract and month) |
 //! | POST   | `/api/fixed-costs/postings/{id}/cancel` | `CancelInput` | `MonthView` (editor+ + `ManageFixedCosts`; reason required) |
+//! | GET    | `/api/recurring-revenue/agreements` | - | `Agreement[]` (any role + `ManageRecurringRevenue`: `finance.close` + `amount.view`; 定期売上, T38) |
+//! | POST   | `/api/recurring-revenue/agreements` | `AgreementInput` | `Agreement` (editor+ + `ManageRecurringRevenue`; regenerates the monthly plan) |
+//! | PUT    | `/api/recurring-revenue/agreements/{id}` | `AgreementInput` | `Agreement` (editor+ + `ManageRecurringRevenue`; recognized months kept) |
+//! | GET    | `/api/recurring-revenue/months/{month}` | - | `MonthView` (any role + `ManageRecurringRevenue`) |
+//! | POST   | `/api/recurring-revenue/months/{month}/recognize` | - | `RecognizeResult` (editor+ + `ManageRecurringRevenue`; month end, once per month) |
 //! | GET    | `/api/projects/{id}/monthly` | - | `ProjectMonthly` (any role + `ViewProjectAmounts`; 月別・期別・累計, T15) |
 //! | GET    | `/api/projects/{id}/monthly.csv` | - | `CsvExport` (any role + `ViewProjectAmounts`; audited `export`) |
 //! | GET    | `/api/reports/portfolio.csv` | - | `CsvExport` (any role; rows `visible_projects` (admin all), amounts `amount_projects`; audited) |
@@ -291,6 +296,7 @@ mod costs;
 mod fixed_costs;
 mod forecasts;
 mod projects;
+mod recurring_revenue;
 mod reports;
 #[cfg(test)]
 mod tests;
@@ -504,6 +510,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(fixed_costs::fixed_costs_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(recurring_revenue::recurring_revenue_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(recurring_revenue::recurring_revenue_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

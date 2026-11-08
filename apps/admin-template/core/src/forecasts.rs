@@ -517,6 +517,15 @@ impl ForecastsService {
         }
     }
 
+    /// 定期売上 (P7c) over the same database and event channel.
+    pub fn recurring_revenue(&self) -> crate::recurring_revenue::RecurringRevenueService {
+        let svc = crate::recurring_revenue::RecurringRevenueService::new(self.db.clone());
+        match &self.events {
+            Some(events) => svc.with_events(events.clone()),
+            None => svc,
+        }
+    }
+
     pub fn closing(&self) -> crate::closing::ClosingService {
         let svc = crate::closing::ClosingService::new(self.db.clone());
         match &self.events {
