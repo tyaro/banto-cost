@@ -28,7 +28,7 @@ import {
 	type ListParams,
 	type SnapshotListResult
 } from '@banto/admin-core';
-import { CSRF_HEADER, getBantoMode } from './setup';
+import { CSRF_HEADER, getBantoMode, signalUnauthorized } from './setup';
 
 /** Mirrors `admin_template_core::audit::AuditLogEntry` (camelCase on the wire). */
 export interface AuditLogEntry {
@@ -99,7 +99,9 @@ async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Pr
 	try {
 		return (await invoke(cmd, args)) as T;
 	} catch (err) {
-		throw toProviderError(err);
+		const error = toProviderError(err);
+		if (error.body.kind === 'unauthorized') signalUnauthorized();
+		throw error;
 	}
 }
 
@@ -136,6 +138,8 @@ async function httpRequest<T>(path: string, init: HttpInit): Promise<T> {
 		throw new ProviderError({ kind: 'other', message: NETWORK_ERROR_MESSAGE });
 	}
 
+	// The session was confirmed invalid: let the controller end it (route guard).
+	if (response.status === 401) signalUnauthorized();
 	if (!response.ok) {
 		let body: unknown;
 		try {
