@@ -22,6 +22,20 @@ describe('createTauriDataProvider', () => {
 		expect(result).toEqual({ rows: [{ id: 1, name: 'a', price: 10 }], totalCount: 1 });
 	});
 
+	it('reports an unauthorized rejection through onUnauthorized and still rejects', async () => {
+		const onUnauthorized = vi.fn();
+		const invoke = vi
+			.fn()
+			.mockRejectedValueOnce({ kind: 'forbidden' })
+			.mockRejectedValueOnce({ kind: 'unauthorized' });
+		const provider = createTauriDataProvider({ invoke, onUnauthorized });
+
+		await expect(provider.getOne('items', 1)).rejects.toSatisfy(isProviderError);
+		expect(onUnauthorized).not.toHaveBeenCalled();
+		await expect(provider.getOne('items', 1)).rejects.toSatisfy(isProviderError);
+		expect(onUnauthorized).toHaveBeenCalledTimes(1);
+	});
+
 	it('getOne calls `${resource}_get` with { id }', async () => {
 		const invoke = vi.fn().mockResolvedValue({ id: 1, name: 'a', price: 10 });
 		const provider = createTauriDataProvider({ invoke });

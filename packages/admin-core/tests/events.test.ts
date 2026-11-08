@@ -251,6 +251,107 @@ describe('createSseEventProvider', () => {
 		}
 	});
 
+	describe('credential changes (onCredentialChanged)', () => {
+		function credentialSource() {
+			const listeners = new Set<() => void>();
+			return {
+				subscribe: vi.fn((listener: () => void) => {
+					listeners.add(listener);
+					return () => listeners.delete(listener);
+				}),
+				emit: () => {
+					for (const listener of [...listeners]) listener();
+				},
+				size: () => listeners.size
+			};
+		}
+
+		function openStreams() {
+			const signals: AbortSignal[] = [];
+			const fetchFn = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+				signals.push(init!.signal!);
+				return new Promise<Response>((_resolve, reject) => {
+					init!.signal!.addEventListener('abort', () =>
+						reject(new DOMException('aborted', 'AbortError'))
+					);
+				});
+			});
+			const authOf = (call: number) =>
+				(fetchFn.mock.calls[call][1]?.headers as Record<string, string>).Authorization;
+			return { fetchFn, signals, authOf };
+		}
+
+		it('a login replacing a viewer-public token reconnects at once with the new token', async () => {
+			let token: string | null = 'grant';
+			const source = credentialSource();
+			const { fetchFn, signals, authOf } = openStreams();
+			const onReconnected = vi.fn();
+			const provider = createSseEventProvider({
+				getToken: () => token,
+				fetchFn,
+				reconnectDelayMs: 10_000,
+				tokenWaitDelayMs: 10_000,
+				onCredentialChanged: source.subscribe
+			});
+			const unsubscribe = provider.subscribe(vi.fn(), { onReconnected });
+
+			await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+			expect(authOf(0)).toBe('Bearer grant');
+			token = 'login';
+			source.emit();
+			await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+			expect(signals[0].aborted).toBe(true);
+			expect(authOf(1)).toBe('Bearer login');
+			// The abandoned attempt schedules nothing of its own.
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			expect(fetchFn).toHaveBeenCalledTimes(2);
+			expect(onReconnected).not.toHaveBeenCalled();
+			unsubscribe();
+			expect(source.size()).toBe(0);
+		});
+
+		it('a change that leaves the same token keeps the stream', async () => {
+			const source = credentialSource();
+			const { fetchFn, signals } = openStreams();
+			const provider = createSseEventProvider({
+				getToken: () => 'same',
+				fetchFn,
+				onCredentialChanged: source.subscribe
+			});
+			const unsubscribe = provider.subscribe(vi.fn());
+
+			await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+			source.emit();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(fetchFn).toHaveBeenCalledTimes(1);
+			expect(signals[0].aborted).toBe(false);
+			unsubscribe();
+		});
+
+		it('a logout drops the stream and reports the cleared token at once', async () => {
+			let token: string | null = 'tok';
+			const source = credentialSource();
+			const { fetchFn, signals } = openStreams();
+			const onTokenCleared = vi.fn();
+			const provider = createSseEventProvider({
+				getToken: () => token,
+				fetchFn,
+				reconnectDelayMs: 10_000,
+				tokenWaitDelayMs: 10_000,
+				onCredentialChanged: source.subscribe
+			});
+			const unsubscribe = provider.subscribe(vi.fn(), { onTokenCleared });
+
+			await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+			token = null;
+			source.emit();
+			expect(signals[0].aborted).toBe(true);
+			expect(onTokenCleared).toHaveBeenCalledTimes(1);
+			expect(fetchFn).toHaveBeenCalledTimes(1);
+			unsubscribe();
+		});
+	});
+
 	it('aborts the in-flight request on unsubscribe', async () => {
 		let capturedSignal: AbortSignal | undefined;
 		const fetchFn: typeof fetch = vi.fn((_input, init) => {

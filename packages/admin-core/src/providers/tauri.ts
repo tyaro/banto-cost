@@ -82,6 +82,16 @@ function makeCaller(invoke: TauriInvokeOptions['invoke']) {
 	};
 }
 
+/** Options of `createTauriDataProvider`. */
+export interface TauriDataProviderOptions extends TauriInvokeOptions {
+	/**
+	 * Called when a command rejects with `{ kind: 'unauthorized' }` (no valid
+	 * session). The call still rejects. Same role as
+	 * `HttpDataProviderOptions.onUnauthorized`.
+	 */
+	onUnauthorized?: () => void;
+}
+
 /**
  * Standard `DataProvider` for the Tauri webview (spec §3.2): commands
  * follow the `${resource}_list` / `_get` / `_create` / `_update` / `_delete`
@@ -89,8 +99,18 @@ function makeCaller(invoke: TauriInvokeOptions['invoke']) {
  * snake_case Rust parameter names, so arg keys here are chosen to match
  * both sides without any conversion needed (`params`, `id`, `values`).
  */
-export function createTauriDataProvider(options: TauriInvokeOptions): DataProvider {
-	const call = makeCaller(options.invoke);
+export function createTauriDataProvider(options: TauriDataProviderOptions): DataProvider {
+	const invokeCall = makeCaller(options.invoke);
+	async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+		try {
+			return await invokeCall<T>(cmd, args);
+		} catch (err) {
+			if (err instanceof ProviderError && err.body.kind === 'unauthorized') {
+				options.onUnauthorized?.();
+			}
+			throw err;
+		}
+	}
 
 	return {
 		getList<T>(resource: string, params: ListParams): Promise<ListResult<T>> {

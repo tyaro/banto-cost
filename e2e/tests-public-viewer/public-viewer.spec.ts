@@ -187,7 +187,18 @@ test.describe.serial('Banto viewer-public mode', () => {
 	});
 
 	test('5. "ログイン" reaches the setup screen; a real account restores the normal UI', async () => {
+		// Wait for the viewer's change stream to open before signing in, so the
+		// check below sees it being replaced (not merely opened after login).
+		const viewerStream = page.waitForRequest(
+			(request) =>
+				new URL(request.url()).pathname === '/api/events' &&
+				request.headers().authorization !== undefined
+		);
 		await page.goto('/dashboard');
+		const viewerAuth = (await viewerStream).headers().authorization;
+		const viewerToken = await page.evaluate(() => sessionStorage.getItem('banto.auth.token'));
+		expect(viewerToken).not.toBeNull();
+		expect(viewerAuth).toBe(`Bearer ${viewerToken}`);
 		await loginButton(page).click();
 		await expect(page).toHaveURL(/\/login$/);
 
@@ -196,12 +207,22 @@ test.describe.serial('Banto viewer-public mode', () => {
 		await page.getByLabel('ユーザー名').fill(ADMIN_USERNAME);
 		await page.getByLabel('パスワード（8文字以上）').fill(ADMIN_PASSWORD);
 		await page.getByLabel('パスワード（確認）').fill(ADMIN_PASSWORD);
+		// The change stream opened with the viewer's grant token must be
+		// re-opened with the new login's token at once, not when the old
+		// stream happens to end (a viewer stream never ends on its own).
+		const loginStream = page.waitForRequest((request) => {
+			if (new URL(request.url()).pathname !== '/api/events') return false;
+			const auth = request.headers().authorization;
+			return auth !== undefined && auth !== `Bearer ${viewerToken}`;
+		});
 		await page.getByRole('button', { name: 'アカウントを作成' }).click();
 
 		await expect(page).toHaveURL(/\/dashboard$/);
 		await expect(page.getByRole('button', { name: 'ユーザーメニューを開く' })).toBeVisible();
 		await expect(loginButton(page)).toHaveCount(0);
 		await expect(page.getByRole('link', { name: 'ユーザー管理' })).toBeVisible();
+		const loginToken = await page.evaluate(() => sessionStorage.getItem('banto.auth.token'));
+		expect((await loginStream).headers().authorization).toBe(`Bearer ${loginToken}`);
 		// S-93: leaving the public viewer by signing in is not "another user
 		// signed in" - no change-of-user notice (audit of #260 実装-3 P2-1).
 		await expect(page.getByText(OWNER_CHANGED_NOTICE)).toHaveCount(0);

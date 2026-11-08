@@ -20,7 +20,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getAuthProvider, isProviderError, ProviderError, type ErrorBody } from '@banto/admin-core';
-import { CSRF_HEADER, getBantoMode } from './setup';
+import { CSRF_HEADER, getBantoMode, signalUnauthorized } from './setup';
 
 /** Stages a version can record (the ordered side is reached via order conversion). */
 export type VersionStage = 'lead' | 'quoting' | 'negotiating' | 'informal';
@@ -174,7 +174,9 @@ export async function invokeCommand<T>(cmd: string, args?: Record<string, unknow
 	try {
 		return (await invoke(cmd, args)) as T;
 	} catch (err) {
-		throw toProviderError(err);
+		const error = toProviderError(err);
+		if (error.body.kind === 'unauthorized') signalUnauthorized();
+		throw error;
 	}
 }
 
@@ -209,6 +211,8 @@ export async function httpRequest<T>(path: string, init: HttpInit): Promise<T> {
 		throw new ProviderError({ kind: 'other', message: NETWORK_ERROR_MESSAGE });
 	}
 
+	// The session was confirmed invalid: let the controller end it (route guard).
+	if (response.status === 401) signalUnauthorized();
 	if (!response.ok) {
 		let body: unknown;
 		try {

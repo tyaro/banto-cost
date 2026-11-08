@@ -97,6 +97,15 @@ export interface HttpDataProviderOptions {
 	/** Shares the bearer token with whichever `AuthProvider` logged in (typically `createHttpAuthProvider`'s `getToken`). */
 	getToken: () => string | null;
 	fetchFn?: typeof fetch;
+	/**
+	 * Called when a request is answered `401` (the server confirmed the
+	 * session invalid: revoked, expired or logged out). The request still
+	 * rejects with the `unauthorized` error. Apps wire this to
+	 * `getSessionController().signal('unauthorized')` so the session is
+	 * confirmed and the route guard sends the user to the login screen,
+	 * the same as an SSE `401` (`connectEvents`).
+	 */
+	onUnauthorized?: () => void;
 }
 
 interface RequestInit {
@@ -123,6 +132,7 @@ export function createHttpDataProvider(options: HttpDataProviderOptions): DataPr
 		} catch {
 			throw networkError();
 		}
+		if (response.status === 401) options.onUnauthorized?.();
 		if (!response.ok) throw await errorFromResponse(response);
 		if (init.expectNoContent) return undefined as T;
 		return (await response.json()) as T;

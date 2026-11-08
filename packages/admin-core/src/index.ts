@@ -131,6 +131,7 @@ export {
 	createTauriDataProvider,
 	createTauriAuthProvider,
 	type TauriInvokeOptions,
+	type TauriDataProviderOptions,
 	type TauriAuthProviderOptions
 } from './providers/tauri';
 

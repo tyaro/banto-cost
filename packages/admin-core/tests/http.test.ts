@@ -164,6 +164,22 @@ describe('createHttpDataProvider', () => {
 		}
 	});
 
+	it('reports a 401 through onUnauthorized and still rejects; other errors do not', async () => {
+		const onUnauthorized = vi.fn();
+		const fetchFn = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(403, { kind: 'forbidden' }))
+			.mockResolvedValueOnce(jsonResponse(401, { kind: 'unauthorized' }));
+		const provider = createHttpDataProvider({ getToken: () => 'tok', fetchFn, onUnauthorized });
+
+		await expect(provider.getOne('items', 1)).rejects.toSatisfy(isProviderError);
+		expect(onUnauthorized).not.toHaveBeenCalled();
+		await expect(provider.getList('items', { sort: [], filters: [] })).rejects.toSatisfy(
+			isProviderError
+		);
+		expect(onUnauthorized).toHaveBeenCalledTimes(1);
+	});
+
 	it('maps a 403 forbidden ErrorBody (spec M10 RBAC) the same way as any other error kind', async () => {
 		const fetchFn = vi.fn().mockResolvedValue(jsonResponse(403, { kind: 'forbidden' }));
 		const provider = createHttpDataProvider({ getToken: () => 'tok', fetchFn });
