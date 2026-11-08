@@ -3,8 +3,10 @@
 # - `v*` タグの push: windows-latest で NSIS インストーラを作り、そのタグの
 #   GitHub Release を作って添付する。タグ名に `-` を含む版（例 v0.1.0-beta.1）は
 #   プレリリースにする。リリースノートは CHANGELOG.md の `## [X.Y.Z…]` 節。
-# - このファイルを変える pull_request と workflow_dispatch: ビルドだけを行い、
-#   インストーラを Actions の成果物として残す（リリースは作らない）。
+# - workflow_dispatch（main から）で入力 release_tag に `vX.Y.Z` を渡す: 起動した
+#   commit にそのタグを作り、上と同じくリリースする（タグを直接 push できない環境向け）。
+# - このファイルを変える pull_request と、release_tag を空にした workflow_dispatch:
+#   ビルドだけを行い、インストーラを Actions の成果物として残す（リリースは作らない）。
 #
 # ビルドは `pnpm --filter banto-cost-app tauri:build:windows`
 # （= `tauri build --features embed-ui --config src-tauri/tauri.fw-elev.conf.json`）。
@@ -22,6 +24,11 @@ on:
     paths:
       - '.github/workflows/release.yml'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'リリースするタグ（例 v0.1.0-beta.1）。空ならビルドだけ。main から起動すること'
+        required: false
+        default: ''
 
 concurrency:
   group: release-${{ github.ref }}
@@ -37,6 +44,9 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+    env:
+      # リリースするタグ。タグの push ならそのタグ、手動起動なら入力（空ならリリースしない）。
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,12 +71,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # タグの push ではタグ名とマニフェストの版番号の一致を確かめる。
+      # リリースするときはタグ名とマニフェストの版番号の一致を確かめる。
+      # 手動起動のリリースは main からだけ許す。
       - name: Check versions
         shell: bash
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            node scripts/check-versions.mjs --tag "${GITHUB_REF_NAME}"
+          if [ -n "${RELEASE_TAG}" ]; then
+            if [ "${GITHUB_REF_TYPE}" != "tag" ] && [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+              echo "::error::release_tag を渡す手動起動は main からだけ（${GITHUB_REF}）"
+              exit 1
+            fi
+            node scripts/check-versions.mjs --tag "${RELEASE_TAG}"
           else
             node scripts/check-versions.mjs
           fi
@@ -97,12 +112,12 @@ jobs:
           retention-days: 14
 
       - name: Create GitHub Release
-        if: github.ref_type == 'tag'
+        if: env.RELEASE_TAG != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="${RELEASE_TAG}"
           version="${tag#v}"
           # CHANGELOG.md の `## [<version>]` から次の `## [` の前までをノートにする。
           awk -v v="$version" '
@@ -116,8 +131,18 @@ jobs:
           fi
           flags=()
           case "$version" in *-*) flags+=(--prerelease) ;; esac
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # push されたタグを使う。
+            flags+=(--verify-tag)
+          else
+            # 手動起動: 起動した commit にタグを作る（既にあれば失敗させる）。
+            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+              echo "::error::タグ ${tag} は既にある"
+              exit 1
+            fi
+            flags+=(--target "${GITHUB_SHA}")
+          fi
           gh release create "$tag" dist-release/*.exe \
             --title "banto-cost ${tag}" \
             --notes-file release-notes.md \
-            --verify-tag \
             "${flags[@]}"
