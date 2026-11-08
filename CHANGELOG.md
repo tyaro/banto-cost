@@ -22,6 +22,7 @@
 
 ## [Unreleased]
 
+- banto-cost: ログインやログアウトで保存中のトークンが変わったら、変更通知（SSE）をすぐに新しいトークンで張り直すようにした（閲覧公開からログインしても閲覧者のトークンのまま残っていた）。`createSseEventProvider` に `onCredentialChanged` を追加。あわせて、DataProvider（`createHttpDataProvider`・`createTauriDataProvider` の `onUnauthorized`）と業務 API（`pipelineAdmin.ts` の `httpRequest`・`invokeCommand`）が `401`／`unauthorized` を受けたら、SSE の `401` と同じくセッション管理に確認を頼み、無効と確かめられたらログイン画面へ戻すようにした。
 - banto-cost: 案件の責任者と月額固定原価の社員を、admin 以外でも氏名の一覧から選べるようにした。業務用の利用者一覧 `GET /api/user-names`（Tauri `user_names_list`）は ID と表示名だけを返し、顧客と同じ `ViewMasters`（または `admin` ロール）で判定する。
 - banto-cost P7c: 定期売上（T38）。月額契約の案件に取り決め（月額・開始月〜終了月）を登録すると、月額×月数が確定受注額と一致することを確かめて、未計上の売上予定を期間の月ごとに作り直す（計上済みの月は残す）。経理が月を選んで計上すると、その月の未消込の予定を月末（検収日）の売上計上として一度だけ消し込む。締め済みの月は計上を拒否し、月次締めに「未計上の定期売上」の注意を追加。目標粗利率は最初の検収日の値。REST `/api/recurring-revenue/*` と Tauri の対、操作 `ManageRecurringRevenue`（`finance.close`＋`amount.view`）、マイグレーション `0024_recurring_revenue.sql`、画面 `/recurring-revenue`。
 - banto-cost P7b: 月額固定原価（T37）。社員（労務費）・外注先（外注費）の月額固定の取り決め（案件・月額・開始月〜終了月）を登録し、月ごとに一度だけ、その月の月末を管理計上日にした承認済みの明細として月額契約の案件へ計上する（配分なし）。計上分は直接費の台帳に合流し、予算比較・完了見込・月別収支・月次締めに入る（社員分は労務費）。月額の変更は未計上の月からだけ効き、計上済みの月がある取り決めは案件・支払先を変えられない。締め済みの月は計上・取消を拒否し、取消は理由必須。月次締めに「未計上の月額固定」の注意を追加。REST `/api/fixed-costs/*` と Tauri の対、操作 `ManageFixedCosts`（`finance.rate`＋`amount.view`）、マイグレーション `0023_fixed_costs.sql`、画面 `/fixed-costs`。

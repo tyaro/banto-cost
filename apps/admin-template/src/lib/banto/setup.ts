@@ -47,6 +47,7 @@ import {
 	createTauriDataProvider,
 	createTauriEventProvider,
 	createTauriUiSettings,
+	getSessionController,
 	initBanto
 } from '@banto/admin-core';
 import type { Notifier, UiSettingsProvider } from '@banto/admin-core';
@@ -97,6 +98,17 @@ export function getUiSettings(): UiSettingsProvider {
 	return uiSettings;
 }
 
+/**
+ * A data/business request was answered `401` (the server confirmed the
+ * session invalid): ask the session controller to confirm it, the same
+ * signal an SSE `401` sends (`connectEvents`). A confirmed `none` moves the
+ * generation and the protected layout's route guard sends the user to the
+ * login screen. Exported for the business API clients (`pipelineAdmin.ts`).
+ */
+export function signalUnauthorized(): void {
+	getSessionController().signal('unauthorized');
+}
+
 const notifier: Notifier = { notify: (kind, message) => toastStore.push(kind, message) };
 
 /** Set once {@link bantoReady} resolves - see {@link isBantoReady}. */
@@ -132,7 +144,7 @@ export const bantoReady: Promise<void> = (async () => {
 
 	if (target === 'tauri') {
 		bantoMode = 'tauri';
-		const dataProvider = createTauriDataProvider({ invoke });
+		const dataProvider = createTauriDataProvider({ invoke, onUnauthorized: signalUnauthorized });
 		const authProvider = createTauriAuthProvider({ invoke });
 		uiSettings = createTauriUiSettings({ invoke });
 		initBanto({ dataProvider, authProvider, notifier, resources });
@@ -148,10 +160,20 @@ export const bantoReady: Promise<void> = (async () => {
 	if (target === 'server') {
 		bantoMode = 'server';
 		const authProvider = createHttpAuthProvider();
-		const dataProvider = createHttpDataProvider({ getToken: authProvider.getToken });
+		const dataProvider = createHttpDataProvider({
+			getToken: authProvider.getToken,
+			onUnauthorized: signalUnauthorized
+		});
 		uiSettings = createHttpUiSettings({ getToken: authProvider.getToken });
 		initBanto({ dataProvider, authProvider, notifier, resources });
-		connectEvents(createSseEventProvider({ getToken: authProvider.getToken }));
+		// A login (also one replacing a viewer-public grant), a logout or another
+		// tab's change reconnects the stream with the new token at once.
+		connectEvents(
+			createSseEventProvider({
+				getToken: authProvider.getToken,
+				onCredentialChanged: (listener) => authProvider.onCredentialChanged(listener)
+			})
+		);
 		return;
 	}
 

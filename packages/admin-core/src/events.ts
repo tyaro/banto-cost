@@ -130,6 +130,17 @@ export interface SseEventProviderOptions {
 	 * the next event. Default 500.
 	 */
 	tokenWaitDelayMs?: number;
+	/**
+	 * Subscribe to changes of the stored credential (typically the shared
+	 * `AuthProvider`'s `onCredentialChanged`). When given, a change that makes
+	 * `getToken()` differ from the token of the open (or opening) stream
+	 * drops that stream and connects again at once with the new token - a
+	 * login replacing a viewer-public grant token, a logout, or another tab's
+	 * login/logout. Without it the old stream keeps its token until it ends
+	 * on its own (the server's periodic revalidation). Returns the
+	 * unsubscribe function.
+	 */
+	onCredentialChanged?: (listener: () => void) => () => void;
 }
 
 const DEFAULT_RECONNECT_DELAY_MS = 3000;
@@ -187,6 +198,11 @@ export function createSseEventProvider(options: SseEventProviderOptions): EventP
 			// next successful connect is a reconnect (Issue #289). Reset whenever
 			// the session ends or changes (401, cleared token, different token).
 			let hasConnected = false;
+			// The token of the stream being opened or read, `null` while waiting.
+			let streamToken: string | null = null;
+			// Bumped by `restart()`: an attempt started before it is abandoned
+			// (no reconnect scheduling, no reads) once its abort lands.
+			let attempt = 0;
 
 			function dispatch(payload: string): void {
 				try {
@@ -203,7 +219,22 @@ export function createSseEventProvider(options: SseEventProviderOptions): EventP
 				timer = setTimeout(() => void connectOnce(), delayMs);
 			}
 
+			/** Drop the current stream/wait and connect again now (credential changed). */
+			function restart(): void {
+				if (stopped) return;
+				if (timer !== null) clearTimeout(timer);
+				timer = null;
+				attempt += 1;
+				streamToken = null;
+				controller?.abort();
+				controller = null;
+				void connectOnce();
+			}
+
 			async function connectOnce(): Promise<void> {
+				const mine = attempt;
+				const current = () => mine === attempt;
+				streamToken = null;
 				const token = options.getToken();
 				if (token === null && usedToken !== null) {
 					usedToken = null;
@@ -216,6 +247,7 @@ export function createSseEventProvider(options: SseEventProviderOptions): EventP
 				}
 				if (usedToken !== null && usedToken !== token) hasConnected = false; // a new login
 				usedToken = token;
+				streamToken = token;
 
 				controller = new AbortController();
 				try {
@@ -223,10 +255,15 @@ export function createSseEventProvider(options: SseEventProviderOptions): EventP
 						headers: { ...SSE_HEADERS, Authorization: `Bearer ${token}` },
 						signal: controller.signal
 					});
+					if (!current()) {
+						void response.body?.cancel().catch(() => {});
+						return;
+					}
 					if (response.status === 401) {
 						void response.body?.cancel().catch(() => {});
 						rejectedToken = token;
 						usedToken = null;
+						streamToken = null;
 						hasConnected = false;
 						if (!stopped) hooks?.onUnauthorized?.();
 						scheduleReconnect(tokenWaitDelayMs);
@@ -250,7 +287,7 @@ export function createSseEventProvider(options: SseEventProviderOptions): EventP
 					const parser = createSseParser();
 					const reader = response.body.getReader();
 					const decoder = new TextDecoder();
-					while (!stopped) {
+					while (!stopped && current()) {
 						const { done, value } = await reader.read();
 						if (done) break;
 						for (const payload of parser.push(decoder.decode(value, { stream: true }))) {
@@ -261,13 +298,21 @@ export function createSseEventProvider(options: SseEventProviderOptions): EventP
 					// Network failure or abort() from unsubscribe - either way, fall
 					// through to the reconnect scheduling below (a no-op if stopped).
 				}
+				// Abandoned by `restart()`: the newer attempt owns the reconnect.
+				if (!current()) return;
+				streamToken = null;
 				scheduleReconnect();
 			}
+
+			const offCredential = options.onCredentialChanged?.(() => {
+				if (options.getToken() !== streamToken) restart();
+			});
 
 			void connectOnce();
 
 			return () => {
 				stopped = true;
+				offCredential?.();
 				if (timer !== null) clearTimeout(timer);
 				controller?.abort();
 			};
