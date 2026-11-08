@@ -572,6 +572,7 @@ const isAllowedPackageImport = (spec) =>
 		// banto-cost P3a の読み取り（ロール床は viewer、判定は各ハンドラ）。
 		{ tauri: 'customers_list', rest: 'POST /api/customers/list', role: 'Viewer' },
 		{ tauri: 'customers_get', rest: 'GET /api/customers/{id}', role: 'Viewer' },
+		{ tauri: 'user_names_list', rest: 'GET /api/user-names', role: 'Viewer' },
 		{ tauri: 'projects_list', rest: 'POST /api/projects/list', role: 'Viewer' },
 		{ tauri: 'projects_get', rest: 'GET /api/projects/{id}', role: 'Viewer' },
 		{
@@ -705,6 +706,7 @@ const isAllowedPackageImport = (spec) =>
 		'authz_me',
 		'customers_get',
 		'customers_list',
+		'user_names_list',
 		'auth_config_get',
 		'auth_identity',
 		'auth_resolve',
@@ -775,6 +777,7 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/users/{id}/capabilities',
 		'GET /api/projects/{id}/members',
 		'GET /api/customers/{id}',
+		'GET /api/user-names',
 		'GET /api/projects/{id}',
 		'GET /api/projects/{id}/pipeline-versions',
 		'GET /api/pipeline/overview',

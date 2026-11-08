@@ -109,7 +109,7 @@
 		await formResource.load();
 		const initial = formResource.initialValues;
 		if (!initial) return;
-		const pickers = await loadProjectPickers(sessionStore.role, Number(initial.customerId));
+		const pickers = await loadProjectPickers(Number(initial.customerId));
 		status = String(initial.status ?? '');
 		customerName = String(initial.customerName ?? '');
 		managerName = String(initial.managerName ?? '');

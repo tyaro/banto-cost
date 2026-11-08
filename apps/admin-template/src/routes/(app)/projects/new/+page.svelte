@@ -35,7 +35,7 @@
 
 	// Once per page instance (ssr is off, so setup runs in the browser only).
 	async function buildForm() {
-		const pickers = await loadProjectPickers(sessionStore.role);
+		const pickers = await loadProjectPickers();
 		const built = projectFormSchema(pickers);
 		const manager = ownUserId(sessionStore.identity);
 		store = createFormStore(

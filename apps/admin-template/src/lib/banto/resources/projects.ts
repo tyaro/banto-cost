@@ -185,7 +185,7 @@ export interface ProjectFormOptions {
 	currentStatus?: string;
 	/** Customers to pick from (active ones, plus the current one). Omitted = numeric id input. */
 	customers?: FieldOption[];
-	/** Users to pick the manager from (admin sessions only). Omitted = numeric id input. */
+	/** Users to pick the manager from (the business user-name list). Omitted = numeric id input. */
 	managers?: FieldOption[];
 }
 

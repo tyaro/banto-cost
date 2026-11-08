@@ -83,6 +83,7 @@ use admin_template_core::time_entries::{
     CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntriesService,
     TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
 };
+use admin_template_core::user_names::{user_names, UserName};
 use admin_template_core::users::{Role, UserIdentity, UserSummary, UsersService};
 use admin_template_core::work_masters::{
     MasterKind, WorkMaster, WorkMasterInput, WorkMastersService,
@@ -3403,6 +3404,22 @@ async fn customers_list(
     let identity = require_role(&state, Role::Viewer, "customers").await?;
     business_guard_or_admin(&state, &identity, Operation::ViewMasters, "customers").await?;
     state.customers.list(params).await
+}
+
+/// Twin of `GET /api/user-names`: id + display name for the manager /
+/// employee pickers, `ViewMasters` (or the `admin` role).
+#[tauri::command]
+async fn user_names_list(state: State<'_, AppState>) -> Result<Vec<UserName>, BantoError> {
+    let identity = require_role(&state, Role::Viewer, "users").await?;
+    user_names_list_body(&state, &identity).await
+}
+
+async fn user_names_list_body(
+    state: &AppState,
+    identity: &UserIdentity,
+) -> Result<Vec<UserName>, BantoError> {
+    business_guard_or_admin(state, identity, Operation::ViewMasters, "users").await?;
+    user_names(&state.users).await
 }
 
 #[tauri::command]
@@ -6951,6 +6968,7 @@ pub fn run() {
             project_members_remove,
             customers_list,
             customers_get,
+            user_names_list,
             customers_create,
             customers_update,
             projects_list,
@@ -13069,6 +13087,11 @@ mod tests {
                 .len(),
             4
         );
+        // The manager / employee pickers: id + display name for a member.
+        let names = user_names_list_body(&state, &editor)
+            .await
+            .expect("member reads user names");
+        assert!(names.iter().any(|n| n.display_name == "編集者"));
         let input: WorkMasterInput =
             serde_json::from_value(serde_json::json!({ "name": "据付", "sortOrder": 70 }))
                 .expect("input");

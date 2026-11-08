@@ -3437,10 +3437,33 @@ async fn t12_t21_rest_business_routes_follow_capability_and_scope() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
+    // The manager picker: a company member reads every account's id and
+    // display name only - no login name, role or dates.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/user-names", &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let names = body_json(response).await;
+    let names = names.as_array().unwrap();
+    assert_eq!(names.len(), 3);
+    for name in names {
+        let mut keys: Vec<_> = name.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["displayName", "id"], "{name}");
+    }
+
     // No company grant: no masters, an empty project list (T20).
     let response = router
         .clone()
         .oneshot(post_json_auth("/api/customers/list", &viewer, json!({})))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/user-names", &viewer))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);

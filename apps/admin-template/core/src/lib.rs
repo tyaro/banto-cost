@@ -27,6 +27,7 @@ pub mod reports;
 pub mod rest;
 pub mod time_access;
 pub mod time_entries;
+pub mod user_names;
 pub mod work_masters;
 
 // Theme C (docs/template-scope.md §7): the domain-agnostic services moved to
