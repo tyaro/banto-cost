@@ -32,6 +32,15 @@ async fn reset_schema(url: &str) {
         .await
         .expect("connect for schema reset");
     for stmt in [
+        // banto-cost P4d and later (orders, direct costs, forecasts,
+        // closeouts, the monthly close, fixed costs, recurring revenue).
+        "DROP TABLE IF EXISTS recurring_revenues, fixed_cost_postings, fixed_cost_contracts \
+         CASCADE",
+        "DROP TABLE IF EXISTS closing_snapshot_rows, closing_events, closing_periods CASCADE",
+        "DROP TABLE IF EXISTS closeout_reopenings, closeout_waivers, project_closeouts CASCADE",
+        "DROP TABLE IF EXISTS forecast_lines, forecast_versions CASCADE",
+        "DROP TABLE IF EXISTS cost_allocations, direct_costs, purchase_order_changes, \
+         purchase_orders, vendors CASCADE",
         "DROP TABLE IF EXISTS budget_lines, budget_versions CASCADE",
         "DROP TABLE IF EXISTS time_entries, phases, common_activities CASCADE",
         "DROP TABLE IF EXISTS calc_values, calc_items CASCADE",
