@@ -1,6 +1,6 @@
 {
   "name": "@banto/admin-core",
-  "version": "6.10.0",
+  "version": "0.1.0-beta.1",
   "description": "Banto refine-like headless framework core: resources, providers, Runes composables (spec §3)",
   "license": "MIT",
   "repository": {
