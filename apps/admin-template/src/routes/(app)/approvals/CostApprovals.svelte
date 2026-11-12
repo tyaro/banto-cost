@@ -7,7 +7,9 @@
 	 * lands on). Approving checks the approved ledger again: an adjustment
 	 * within its original, one invoice per provisional, an order's remainder
 	 * (T05, T14); a refusal comes back as the reason. Self-approval follows
-	 * the company policy and is audited (design 2.4).
+	 * the company policy and is audited (design 2.4). 表示中をすべて承認
+	 * decides the listed costs one after another with the same operation
+	 * (review U-2); a refused one (its reason shown) does not stop the rest.
 	 */
 	import { isProviderError, notify } from '@banto/admin-core';
 	import { LoadingState } from '@banto/ui';
@@ -16,6 +18,7 @@
 	import { decideCost, listCostApprovals, type DirectCost } from '#lib/banto/costsAdmin.js';
 	import { costTypeLabel } from '#lib/banto/budgetFormat.js';
 	import { kindLabel, signedAmount } from '#lib/banto/costsFormat.js';
+	import { failureReason, runEach } from '#lib/banto/bulk.js';
 
 	interface Props {
 		canWrite: boolean;
@@ -74,6 +77,31 @@
 		}
 	}
 
+	async function approveAll() {
+		if (busy || returning !== null || !costs || costs.length === 0) return;
+		const rows = costs;
+		if (!window.confirm(m['costs.approveAllConfirm']({ count: rows.length }))) return;
+		busy = true;
+		try {
+			const result = await runEach(rows, (c) =>
+				decideCost(c.id, { rowVersion: c.rowVersion, approve: true })
+			);
+			if (result.done > 0) notify('success', m['approvals.approvedCount']({ count: result.done }));
+			if (result.failed > 0) {
+				notify(
+					'error',
+					m['approvals.approveAllFailed']({
+						count: result.failed,
+						reason: failureReason(result.firstError, m['approvals.forbidden']())
+					})
+				);
+			}
+		} finally {
+			busy = false;
+			void load();
+		}
+	}
+
 	function startReturn(c: DirectCost) {
 		if (returning !== null && reason.trim() !== '' && returning !== c.id) {
 			if (!window.confirm(m['approvals.discardConfirm']())) return;
@@ -120,6 +148,18 @@
 	{:else if costs.length === 0}
 		<p class="note">{m['costs.approvalsEmpty']()}</p>
 	{:else}
+		{#if canWrite}
+			<div class="list-head">
+				<button
+					type="button"
+					class="banto-btn banto-btn--primary"
+					disabled={busy || returning !== null}
+					onclick={() => void approveAll()}
+				>
+					{m['approvals.approveAll']({ count: costs.length })}
+				</button>
+			</div>
+		{/if}
 		<div class="table-wrap">
 			<table>
 				<caption class="sr-only">{m['costs.approvalsTitle']()}</caption>
@@ -230,6 +270,11 @@
 		margin: 0;
 		color: var(--banto-text-muted);
 		font-size: var(--banto-font-size-sm);
+	}
+
+	.list-head {
+		display: flex;
+		justify-content: flex-end;
 	}
 
 	.table-wrap {

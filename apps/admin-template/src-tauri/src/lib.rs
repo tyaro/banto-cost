@@ -78,7 +78,7 @@ use admin_template_core::system_info::SystemInfoService;
 #[cfg(feature = "system-metrics")]
 use admin_template_core::system_metrics::SystemMetricsSampler;
 use admin_template_core::time_access::{
-    approve_op, enter_op as enter_time_op, shown, shown_pair, shown_saved,
+    approve_op, enter_op as enter_time_op, shown, shown_own, shown_pair, shown_saved,
 };
 use admin_template_core::time_entries::{
     CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntriesService,
@@ -4333,7 +4333,7 @@ async fn time_entries_list_body(
     let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
     let (subject, user_id) = time_guard(state, &identity, Operation::EnterCommonTime).await?;
     let rows = state.time_entries.list_own(user_id, &from, &to).await?;
-    Ok(rows.into_iter().map(|e| shown(&subject, e)).collect())
+    Ok(rows.into_iter().map(|e| shown_own(&subject, e)).collect())
 }
 
 #[tauri::command]

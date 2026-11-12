@@ -8,7 +8,9 @@
 	 * and the labor cost; without a rate the entry is approved as 原価未確定
 	 * (T04), never as 0 yen. Entries whose rate would not resolve are marked
 	 * 単価未登録 beforehand and approving one asks first (review U-1; a
-	 * warning, not a stop).
+	 * warning, not a stop). 表示中をすべて承認 approves the listed entries
+	 * one after another with the same per-entry operation, leaving out those
+	 * 単価未登録 (review U-2); a refused entry does not stop the rest.
 	 *
 	 * The company runs single-handed, so approving one's own submission is
 	 * allowed and recorded in the audit log (design 2.4). The server decides
@@ -27,6 +29,7 @@
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
+	import { failureReason, runEach } from '#lib/banto/bulk.js';
 	import CostApprovals from './CostApprovals.svelte';
 	import CorrectionApprovals from './CorrectionApprovals.svelte';
 	import { resolve } from '$app/paths';
@@ -73,6 +76,8 @@
 
 	/** Entries that would be approved as 原価未確定 now (review U-1). */
 	const rateMissingCount = $derived((entries ?? []).filter((e) => e.rateMissing === true).length);
+	/** What 表示中をすべて承認 approves: every listed entry with a rate. */
+	const approvable = $derived((entries ?? []).filter((e) => e.rateMissing !== true));
 	const totalMinutes = $derived((entries ?? []).reduce((sum, e) => sum + e.minutes, 0));
 
 	function fail(err: unknown) {
@@ -94,6 +99,29 @@
 			);
 		} catch (err) {
 			fail(err);
+		} finally {
+			busy = false;
+			void load();
+		}
+	}
+
+	async function approveAll() {
+		if (busy || returning !== null || approvable.length === 0) return;
+		let question: string = m['approvals.approveAllConfirm']({ count: approvable.length });
+		if (rateMissingCount > 0) {
+			question += '\n' + m['approvals.approveAllExcluded']({ count: rateMissingCount });
+		}
+		if (!window.confirm(question)) return;
+		busy = true;
+		try {
+			const result = await runEach(approvable, (e) =>
+				decideEntry(e.id, { rowVersion: e.rowVersion, approve: true })
+			);
+			if (result.done > 0) notify('success', m['approvals.approvedCount']({ count: result.done }));
+			if (result.failed > 0) {
+				const reason = failureReason(result.firstError, m['approvals.forbidden']());
+				notify('error', m['approvals.approveAllFailed']({ count: result.failed, reason }));
+			}
 		} finally {
 			busy = false;
 			void load();
@@ -167,9 +195,21 @@
 		<EmptyState title={m['approvals.empty']()} description={m['approvals.emptyDesc']()} />
 	{:else}
 		<section class="panel">
-			<p class="note">
-				{m['approvals.summary']({ count: entries.length, total: formatMinutes(totalMinutes) })}
-			</p>
+			<div class="list-head">
+				<p class="note">
+					{m['approvals.summary']({ count: entries.length, total: formatMinutes(totalMinutes) })}
+				</p>
+				{#if canWrite}
+					<button
+						type="button"
+						class="banto-btn banto-btn--primary"
+						disabled={busy || returning !== null || approvable.length === 0}
+						onclick={() => void approveAll()}
+					>
+						{m['approvals.approveAll']({ count: approvable.length })}
+					</button>
+				{/if}
+			</div>
 			{#if rateMissingCount > 0}
 				<div class="warnings" role="note">
 					<p>{m['approvals.rateMissingNotice']({ count: rateMissingCount })}</p>
@@ -288,6 +328,14 @@
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
 		padding: min(var(--banto-space-5), 3%);
+	}
+
+	.list-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--banto-space-2);
 	}
 
 	.note {

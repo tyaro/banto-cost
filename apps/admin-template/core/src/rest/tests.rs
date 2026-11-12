@@ -4182,6 +4182,19 @@ async fn t02_t04_t12_rest_time_entries_follow_ownership_scope_and_approval() {
     assert_eq!(ids[0], ids[1]);
     let id = ids[0];
 
+    // The owner's list says whether the draft could be approved by the
+    // owner too (review U-2: 申請して承認): the manager may, on their project.
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/time-entries?from=2026-11-09&to=2026-11-15",
+            &editor,
+        ))
+        .await
+        .unwrap();
+    let own = body_json(response).await;
+    assert_eq!(own[0]["canApprove"], true, "{own}");
+
     // Someone else's entry reads as not found.
     let response = router
         .clone()
@@ -4291,6 +4304,27 @@ async fn t02_t04_t12_rest_time_entries_follow_ownership_scope_and_approval() {
         .await
         .unwrap();
     let common = body_json(response).await["entry"]["id"].as_i64().unwrap();
+    // Not accounting: the common activity is not the owner's to approve,
+    // and an entry already submitted carries no mark.
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/time-entries?from=2026-11-09&to=2026-11-15",
+            &editor,
+        ))
+        .await
+        .unwrap();
+    let own = body_json(response).await;
+    let mark = |id: i64| {
+        own.as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == id)
+            .map(|e| e.get("canApprove").cloned())
+            .unwrap()
+    };
+    assert_eq!(mark(common), Some(json!(false)), "{own}");
+    assert_eq!(mark(id), None, "{own}");
     router
         .clone()
         .oneshot(post_json_auth(

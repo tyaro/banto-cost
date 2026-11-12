@@ -14,7 +14,12 @@
 	 * approved entry without a rate shows 原価未確定 (T04); an entry not yet
 	 * approved whose rate would not resolve shows 単価未登録, with a notice
 	 * above the week (review U-1: a warning only, submitting is not stopped).
-	 * The rate and cost themselves are not shown here. Demo mode has no backend.
+	 * The rate and cost themselves are not shown here. When the server marks an
+	 * entry `canApprove` (the owner may approve it too - single-handed use),
+	 * 申請して承認 submits it and approves it at once (review U-2): the same
+	 * two operations in a row, each authorized and audited as usual (the
+	 * approval as selfApproval). Entries 単価未登録 are left out of the week's
+	 * 申請して承認 and asked about one by one. Demo mode has no backend.
 	 */
 	import { getDataProvider, isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState, StatusBadge } from '@banto/ui';
@@ -24,6 +29,7 @@
 	import type { Project } from '#lib/banto/resources/projects.js';
 	import {
 		countsInTotals,
+		decideEntry,
 		deleteEntry,
 		isCorrectable,
 		listMasters,
@@ -47,6 +53,7 @@
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
+	import { failureReason, runEach } from '#lib/banto/bulk.js';
 	import TimeEntryForm from './TimeEntryForm.svelte';
 
 	const available = isPipelineAvailable();
@@ -146,6 +153,15 @@
 	const editable = (e: TimeEntry) =>
 		(e.status === 'draft' || e.status === 'returned') && e.correctsId === null;
 	const pendingSubmit = $derived(loadedFor === monday ? (entries ?? []).filter(editable) : []);
+	/** The owner may approve some of the week's drafts: offer 申請して承認 (review U-2). */
+	const offersApprove = $derived(pendingSubmit.some((e) => e.canApprove === true));
+	/** The week's 申請して承認 leaves out entries without a rate (asked one by one). */
+	const pendingApprove = $derived(
+		pendingSubmit.filter((e) => e.canApprove === true && e.rateMissing !== true)
+	);
+	const approveExcluded = $derived(
+		pendingSubmit.filter((e) => e.canApprove === true && e.rateMissing === true).length
+	);
 	const statusTotals = $derived.by(() => {
 		const totals: Record<string, number> = { draft: 0, returned: 0, submitted: 0, approved: 0 };
 		for (const e of counted) totals[e.status] = (totals[e.status] ?? 0) + e.minutes;
@@ -236,6 +252,54 @@
 		}
 	}
 
+	/** 申請 then 承認, the two existing operations in a row. */
+	async function submitAndApprove(entry: TimeEntry) {
+		const submitted = await submitEntry(entry.id, entry.rowVersion);
+		await decideEntry(entry.id, { rowVersion: submitted.rowVersion, approve: true });
+	}
+
+	function reportApproved(done: number, failed: number, firstError: unknown) {
+		if (done > 0) notify('success', m['time.submitApproved']({ count: done }));
+		if (failed > 0) {
+			const reason = failureReason(firstError, m['approvals.forbidden']());
+			notify('error', m['time.submitApproveFailed']({ count: failed, reason }));
+		}
+	}
+
+	async function submitApproveOne(entry: TimeEntry) {
+		if (acting) return;
+		// A warning, not a stop (as on /approvals): a missing rate can be right.
+		const question = entry.rateMissing
+			? m['approvals.rateMissingConfirm']()
+			: m['time.submitApproveConfirm']();
+		if (!window.confirm(question)) return;
+		acting = true;
+		try {
+			const result = await runEach([entry], submitAndApprove);
+			reportApproved(result.done, result.failed, result.firstError);
+		} finally {
+			acting = false;
+			void load();
+		}
+	}
+
+	async function submitApproveWeek() {
+		if (acting || pendingApprove.length === 0) return;
+		let question: string = m['time.submitApproveWeekConfirm']({ count: pendingApprove.length });
+		if (approveExcluded > 0) {
+			question += '\n' + m['time.submitApproveExcluded']({ count: approveExcluded });
+		}
+		if (!window.confirm(question)) return;
+		acting = true;
+		try {
+			const result = await runEach(pendingApprove, submitAndApprove);
+			reportApproved(result.done, result.failed, result.firstError);
+		} finally {
+			acting = false;
+			void load();
+		}
+	}
+
 	async function remove(entry: TimeEntry) {
 		if (acting || !window.confirm(m['time.deleteConfirm']())) return;
 		acting = true;
@@ -293,6 +357,16 @@
 					>
 						{m['time.submitWeek']({ count: pendingSubmit.length })}
 					</button>
+					{#if offersApprove}
+						<button
+							type="button"
+							class="banto-btn banto-btn--secondary"
+							disabled={acting || pendingApprove.length === 0}
+							onclick={() => void submitApproveWeek()}
+						>
+							{m['time.submitApproveWeek']({ count: pendingApprove.length })}
+						</button>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -445,6 +519,15 @@
 														disabled={acting}
 														onclick={() => void submitOne(e)}>{m['time.submit']()}</button
 													>
+													{#if e.canApprove}
+														<button
+															type="button"
+															class="banto-btn banto-btn--secondary"
+															disabled={acting}
+															onclick={() => void submitApproveOne(e)}
+															>{m['time.submitApprove']()}</button
+														>
+													{/if}
 													<button
 														type="button"
 														class="banto-btn banto-btn--ghost"
