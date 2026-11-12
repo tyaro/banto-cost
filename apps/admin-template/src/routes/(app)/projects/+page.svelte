@@ -235,6 +235,11 @@
 	// server's calendar (P8d); the choices show each period's months.
 	let period = $state(String(currentPeriod() ?? ''));
 	const periodChoices = $derived(businessCalendar()?.periods ?? []);
+	// The calendar can arrive after the page opened (the layout waits only so
+	// long): fill in the current period then, unless one was already chosen.
+	$effect(() => {
+		if (businessCalendar() && period === '') period = String(currentPeriod() ?? '');
+	});
 	let exporting = $state(false);
 	async function runExport(make: () => Promise<CsvExport>) {
 		exporting = true;
