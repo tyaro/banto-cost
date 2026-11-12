@@ -26,6 +26,7 @@
 	 * navigating to a `#hash`, so the router and the unsaved-changes guard
 	 * never see a navigation.
 	 */
+	import { untrack } from 'svelte';
 	import { isProviderError } from '@banto/admin-core';
 	import { LoadingState, StatusBadge } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
@@ -82,8 +83,11 @@
 	}
 
 	$effect(() => {
+		const id = projectId;
 		void reloadKey;
-		void load(projectId);
+		// Only the id and the reload key drive a read: `load` reads `summary`
+		// before its first await, which must not become a dependency.
+		untrack(() => void load(id));
 	});
 
 	const ordered = $derived(summary !== null && isOrderedStatus(summary.status));
