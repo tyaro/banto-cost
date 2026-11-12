@@ -29,7 +29,7 @@ use cost_domain::{FiscalCalendar, YearMonth, Yen};
 use serde::{Deserialize, Serialize};
 
 use crate::customers::field_error;
-use crate::direct_costs::DirectCostsService;
+use crate::direct_costs::{DirectCostsService, Ledger};
 use crate::orders::{fetch_all, on_pool, placeholders};
 use crate::portfolio::PortfolioService;
 use crate::time_entries::COUNTS;
@@ -215,10 +215,10 @@ impl ReportsService {
         crate::business_date::now_local()
     }
 
-    /// Each project's figures by month (`project` = one project only), and
-    /// the projects left out because their direct costs wait for review
-    /// (T39; for one project, that is an error instead).
-    async fn figures(&self, project: Option<i64>) -> Result<(Figures, BTreeSet<i64>), BantoError> {
+    /// Each project's figures by month (`project` = one project only)
+    /// without the projects whose direct costs wait for review (T39; for
+    /// one project, that is an error instead), and the ledger read.
+    async fn figures(&self, project: Option<i64>) -> Result<(Figures, Ledger), BantoError> {
         let filter = if project.is_some() {
             " AND project_id = ?"
         } else {
@@ -305,9 +305,8 @@ impl ReportsService {
         }
         // A project whose direct costs cannot be settled is left out, never
         // shown short (T39).
-        let review: BTreeSet<i64> = ledger.review_projects().collect();
         out.retain(|id, _| ledger.is_clean(*id));
-        Ok((out, review))
+        Ok((out, ledger))
     }
 
     fn view(project_id: i64, report: &MonthlyReport) -> ProjectMonthly {
@@ -404,7 +403,7 @@ impl ReportsService {
                 field_errors: vec![field_error("period", "期番号は1〜999で指定してください")],
             });
         }
-        let (figures, review) = self.figures(None).await?;
+        let (figures, ledger) = self.figures(None).await?;
         let labels_sql = "SELECT p.id, p.code, p.name, c.name FROM projects p \
                           JOIN customers c ON c.id = p.customer_id ORDER BY p.code, p.id"
             .to_string();
@@ -420,7 +419,7 @@ impl ReportsService {
             if !amounts.contains(id) {
                 continue;
             }
-            if review.contains(&id) {
+            if !ledger.is_clean(id) {
                 left_out.push(code);
                 continue;
             }

@@ -404,6 +404,9 @@ pub struct Ledger {
     excluded: std::collections::BTreeSet<String>,
     /// Projects whose direct costs cannot be settled (T39).
     review: std::collections::BTreeSet<i64>,
+    /// A confirmation or adjustment whose project cannot be told was left
+    /// out: every project waits for review (T39).
+    review_all: bool,
     problems: Vec<LedgerProblem>,
     /// As-of views already resolved, by cutoff date.
     cache: std::sync::Mutex<BTreeMap<Date, Vec<Posting>>>,
@@ -424,12 +427,7 @@ impl Ledger {
     /// Whether the project's direct costs are settled: no record left out
     /// lands on it (T39).
     pub fn is_clean(&self, project_id: i64) -> bool {
-        !self.review.contains(&project_id)
-    }
-
-    /// The projects whose direct costs cannot be settled (T39).
-    pub fn review_projects(&self) -> impl Iterator<Item = i64> + '_ {
-        self.review.iter().copied()
+        !self.review_all && !self.review.contains(&project_id)
     }
 
     /// The project's direct costs, or an error naming the records to review
@@ -442,7 +440,9 @@ impl Ledger {
         let ids: Vec<String> = self
             .problems
             .iter()
-            .filter(|p| p.project_ids.contains(&project_id))
+            .filter(|p| {
+                p.project_ids.contains(&project_id) || (self.review_all && p.project_ids.is_empty())
+            })
             .map(LedgerProblem::label)
             .collect();
         Err(BantoError::Other(format!(
@@ -1888,6 +1888,7 @@ impl DirectCostsService {
             all: resolved.postings,
             excluded: resolved.excluded,
             review,
+            review_all: resolved.unattributed,
             problems,
             cache: std::sync::Mutex::new(BTreeMap::new()),
         })
@@ -2770,6 +2771,43 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert_eq!(field_errors(err), vec!["refId"]);
+    }
+
+    #[test]
+    fn t39_an_adjustment_whose_original_cannot_be_told_holds_back_every_project() {
+        let row = |id: i64, kind: &str, ref_id: Option<i64>, project: Option<i64>| -> LedgerRow {
+            (
+                id,
+                kind.to_string(),
+                ref_id,
+                (kind == "adjustment").then(|| "return".to_string()),
+                project,
+                None,
+                "material".to_string(),
+                None,
+                "2026-11-20".to_string(),
+                1_000,
+            )
+        };
+        // An adjustment with neither its original nor its project readable,
+        // and one naming an original that is not in the ledger.
+        for bad in [
+            row(3, "adjustment", None, None),
+            row(3, "adjustment", Some(99), None),
+        ] {
+            let rows = vec![
+                row(1, "normal", None, Some(10)),
+                row(2, "normal", None, Some(20)),
+                bad,
+            ];
+            let resolved = resolve_rows(&rows, &[]);
+            assert!(resolved.unattributed, "{:?}", rows[2]);
+            assert!(!resolved.is_clean("10") && !resolved.is_clean("20"));
+            let problems = problems_of(&rows, &[], &resolved);
+            assert_eq!(problems.len(), 1);
+            assert_eq!(problems[0].id, 3);
+            assert!(problems[0].project_ids.is_empty());
+        }
     }
 
     #[tokio::test]

@@ -387,12 +387,16 @@ pub struct Resolved {
     pub excluded: BTreeSet<String>,
     /// 外した記録が帰属・配分される案件。これらの案件の直接費は確定できない（要確認）。
     pub review_projects: BTreeSet<String>,
+    /// 帰属先の案件を特定できない確定・調整（または読めない行）を外した。元明細がどの案件の
+    /// ものか分からないので、すべての案件を要確認にする。
+    pub unattributed: bool,
 }
 
 impl Resolved {
-    /// 案件の直接費を確定できるか（外した記録が帰属・配分されていない）。
+    /// 案件の直接費を確定できるか（外した記録が帰属・配分されておらず、帰属先の分からない
+    /// 確定・調整もない）。
     pub fn is_clean(&self, project: &str) -> bool {
-        !self.review_projects.contains(project)
+        !self.unattributed && !self.review_projects.contains(project)
     }
 }
 
@@ -480,11 +484,44 @@ pub fn resolve(
     {
         review_projects.insert(a.project.clone());
     }
+
+    // 外した系列のうち、確定・調整（または種別の読めない行）を含むのに、どの記録にも案件・配分
+    // がないもの：参照先が読めない・存在しないため元明細の案件が分からない。どの案件の原価が
+    // 欠けたか特定できないので、すべての案件を要確認にする。
+    let has_project = |id: &str| {
+        entries.iter().any(|e| e.id == id && e.project.is_some())
+            || unreadable.iter().any(|u| u.id == id && u.project.is_some())
+            || allocations.iter().any(|a| a.source_id == id)
+    };
+    let refers = |id: &str| {
+        unreadable.iter().any(|u| u.id == id)
+            || entries.iter().any(|e| {
+                e.id == id
+                    && matches!(
+                        e.kind,
+                        EntryKind::Confirms { .. } | EntryKind::Adjustment { .. }
+                    )
+            })
+    };
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut unattributed = false;
+    for start in &excluded {
+        if seen.contains(start) {
+            continue;
+        }
+        let mut family = BTreeSet::from([start.clone()]);
+        close(&mut family);
+        if family.iter().any(|id| refers(id)) && !family.iter().any(|id| has_project(id)) {
+            unattributed = true;
+        }
+        seen.extend(family);
+    }
     Resolved {
         postings: out,
         issues,
         excluded,
         review_projects,
+        unattributed,
     }
 }
 
@@ -888,5 +925,46 @@ mod tests {
             ["P-A"].into_iter().map(String::from).collect()
         );
         assert!(r.postings.is_empty());
+    }
+
+    #[test]
+    fn t39_参照先が読めず案件もない調整はすべての案件を要確認にする() {
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            entry("M2", Some("P-B"), CostType::Material, "2026-11-05", 50_000),
+        ];
+        // 読めない行：案件も参照先も読めない（M1 の調整だったかもしれない）。
+        let unreadable = [Unreadable {
+            id: "X9".into(),
+            project: None,
+            refers_to: None,
+        }];
+        let r = resolve(&entries, &[], &unreadable);
+        assert!(r.unattributed);
+        assert!(!r.is_clean("P-A"));
+        assert!(!r.is_clean("P-B"));
+    }
+
+    #[test]
+    fn t39_存在しない元明細を参照する案件なしの調整はすべての案件を要確認にする() {
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            adjust("R1", "GONE", "2026-11-20", 10_000, AdjustmentKind::Return),
+        ];
+        let r = resolve(&entries, &[], &[]);
+        assert!(r.excluded.contains("R1"));
+        assert!(r.unattributed);
+        assert!(!r.is_clean("P-A"));
+        // 案件のある系列の不整合や、案件のない通常の明細だけなら、全体は要確認にしない。
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            entry("N1", None, CostType::Material, "2026-12-01", 1_000),
+            entry("M2", Some("P-B"), CostType::Material, "2026-11-05", 1_000),
+            adjust("R2", "M2", "2026-11-20", 5_000, AdjustmentKind::Return),
+        ];
+        let r = resolve(&entries, &[], &[]);
+        assert!(!r.unattributed);
+        assert!(r.is_clean("P-A"));
+        assert!(!r.is_clean("P-B"));
     }
 }
