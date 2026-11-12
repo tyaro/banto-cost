@@ -119,6 +119,13 @@ pub struct TimeEntry {
     pub replaced_by_id: Option<i64>,
     /// A correction of this entry waits for approval.
     pub correction_pending: bool,
+    /// Not yet approved and no hourly rate resolves for its project and
+    /// work date: approving it now would fix 原価未確定 (review U-1). Only
+    /// whether a rate exists - never the rate. Set by the lists the
+    /// approver and the owner see; absent elsewhere.
+    #[sqlx(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_missing: Option<bool>,
     pub row_version: i64,
     pub updated_at: String,
 }
@@ -499,7 +506,31 @@ impl TimeEntriesService {
              ORDER BY t.work_date, t.id"
         ));
         let (f, t) = (from_d.to_string(), to_d.to_string());
-        on_pool!(&self.db, pool => fetch_all!(pool, sql, user_id, &f, &t))
+        let mut rows: Vec<TimeEntry> =
+            on_pool!(&self.db, pool => fetch_all!(pool, sql, user_id, &f, &t))?;
+        self.mark_rate_missing(&mut rows).await?;
+        Ok(rows)
+    }
+
+    /// Marks the entries not yet approved whose rate would not resolve at
+    /// approval, with the same rule the approval applies (`approval_cost`).
+    async fn mark_rate_missing(&self, rows: &mut [TimeEntry]) -> Result<(), BantoError> {
+        if rows.iter().all(|e| e.status == "approved") {
+            return Ok(());
+        }
+        let values: Vec<CalcValue> = CalcBasisService::new(self.db.clone())
+            .value_rows(RATE_ITEM)
+            .await?
+            .iter()
+            .filter_map(domain_row)
+            .collect();
+        for e in rows.iter_mut().filter(|e| e.status != "approved") {
+            let work_date = parse_date("workDate", &e.work_date)?;
+            let pid = e.project_id.map(|p| p.to_string());
+            let cost = approval_cost(&values, pid.as_deref(), work_date, e.minutes);
+            e.rate_missing = Some(cost.rate.is_none());
+        }
+        Ok(())
     }
 
     /// Submitted entries the caller may decide: projects in `scope`, and the
@@ -514,13 +545,15 @@ impl TimeEntriesService {
              ORDER BY t.work_date, t.id"
         );
         let rows: Vec<TimeEntry> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
-        Ok(rows
+        let mut rows: Vec<TimeEntry> = rows
             .into_iter()
             .filter(|e| match e.project_id {
                 Some(pid) => scope.contains(pid),
                 None => common,
             })
-            .collect())
+            .collect();
+        self.mark_rate_missing(&mut rows).await?;
+        Ok(rows)
     }
 
     /// Corrections waiting for approval, each with the entry it replaces
@@ -530,7 +563,8 @@ impl TimeEntriesService {
             "{SELECT} WHERE t.status = 'submitted' AND t.corrects_id IS NOT NULL \
              ORDER BY t.work_date, t.id"
         );
-        let rows: Vec<TimeEntry> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
+        let mut rows: Vec<TimeEntry> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
+        self.mark_rate_missing(&mut rows).await?;
         let mut out = Vec::with_capacity(rows.len());
         for correction in rows {
             let original = self
@@ -1512,6 +1546,33 @@ mod tests {
         assert_eq!(preview.pending, 2);
         assert_eq!(preview.correction_candidates, 1);
         assert_eq!(preview.affected_projects, 1);
+    }
+
+    #[tokio::test]
+    async fn t04_lists_show_a_missing_rate_before_approval() {
+        let (db, svc, p) = setup().await;
+        let a = svc.create(2, entry(p, "2026-11-09", 60)).await.unwrap();
+        svc.submit(2, a.entry.id, a.entry.row_version)
+            .await
+            .unwrap();
+        svc.create(2, entry(p, "2026-11-10", 30)).await.unwrap();
+        let listed = svc.approvals(&ProjectScope::All, true).await.unwrap();
+        assert_eq!(listed[0].rate_missing, Some(true));
+        let own = svc.list_own(2, "2026-11-09", "2026-11-10").await.unwrap();
+        assert!(own.iter().all(|e| e.rate_missing == Some(true)));
+        // The rate takes effect from its date on: the entry before it stays
+        // without one, the same rule the approval applies.
+        set_rate(&db, "emp_rate", "2026-11-10", 5_000).await;
+        let own = svc.list_own(2, "2026-11-09", "2026-11-10").await.unwrap();
+        assert_eq!(own[0].rate_missing, Some(true));
+        assert_eq!(own[1].rate_missing, Some(false));
+        let approved = submit_and_approve(&svc, 2, own[1].id).await;
+        assert!(approved.labor_cost.is_some());
+        let own = svc.list_own(2, "2026-11-10", "2026-11-10").await.unwrap();
+        assert_eq!(
+            own[0].rate_missing, None,
+            "approved: not a question any more"
+        );
     }
 
     #[tokio::test]
