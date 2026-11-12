@@ -88,6 +88,17 @@ Bantoの3ロールは全順序で、「経理は単価を見られるが利用�
 - P6a で精算完了 `SettleProject` を足した（`amount.view` に加えて、その案件の責任者の `project.manage` か `finance.close`（全案件）。2026-11-07 ユーザー決定で案件責任者にも許可）。精算完了の取消（再開）も同じ `SettleProject` で判定する。残額の解消の承認者は実施者（操作するのは1人）。
 - P4b で工数の操作を足した。案件の工数入力は `EnterTime`（`time.entry`＋案件のメンバー）、共通活動は `EnterCommonTime`（`time.entry` だけ）。承認は案件なら `Approve`（その案件の責任者の `project.manage` か `finance.close`）、共通活動は `ApproveCommon`（`finance.close`）。承認一覧の範囲は `approval_projects`。工数1件の単価・労務原価は個人の単価が分かるので `sees_record_costs`（`finance.rate`＋`amount.view`）だけに見せ、案件責任者には案件の集計（`ViewProjectAmounts`）だけを見せる。
 
+### 2.5 1人で使う間のログイン（2026-11-12 ユーザー決定・実装）
+
+基本は1人で使う。ユーザーを追加して分けたときだけログインを求める。
+
+- デスクトップ版は、起動時にアカウントが1件だけならその本人としてログインする（パスワードを聞かない。監査に `login`・`via: "sole_user"`）。2件以上なら従来どおりログイン画面。判定は `admin_template_core::sole_user::sole_account`、起動処理は `src-tauri` の `run()`（ログイン不要モード・自動ログインが先、その後に1人の判定）。
+- 1人の間はヘッダーとコマンドパレットのログアウトを出さない（Tauri `auth_sole_user`、画面は `soleUser.svelte.ts`）。2人目を作ると出し、次の起動からログインが要ることを知らせる。
+- LAN のブラウザ（REST）は対象外で、常にログインが要る。
+- 初回の設定画面は残す（ユーザー名・表示名・パスワード）。パスワードは2人目を追加した後のログインで使う。
+- 初回の設定で作った管理者には能力をすべて付ける（`sole_user::grant_initial_capabilities`、監査に `update`・`capabilities`・`reason: "setup"`）。REST は `rest::first_setup` のミドルウェア（共通の `extra_auth_router` の外側）、Tauri は `setup_body`。既に能力がある利用者には付けない。
+- Banto のログイン不要モード（認証無効）は、所属を持たない合成セッションで業務の能力がないため（2.4、T20）、この目的には使わない。
+
 ## 3 データモデル案
 
 金額は円の `INTEGER`（税抜）、工数は分の `INTEGER`。確度は `0〜99` の整数パーセント（受注済みは状態で表す）。不明は `NULL` で持ち、0円・0%に置き換えない。
