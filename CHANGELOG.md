@@ -22,6 +22,9 @@
 
 ## [Unreleased]
 
+- banto-cost: ユーザー管理の編集パネルに「業務の能力」を追加し、利用者の能力（`time.entry`・`pipeline.edit`・`project.manage`・`finance.rate`・`finance.close`・`report.all`・`amount.view`）を画面から付けられるようにした。これまでは API（`PUT /api/users/{id}/capabilities`・Tauri `authz_capabilities_set`）しかなく、インストール版では最初の管理者が金額を見られなかった。クライアントは `capabilitiesAdmin.ts`。
+- banto-cost: トップの README を、架空データで撮った画面画像つきの取扱説明書に書き直した。開発者向けの内容は `docs/project/development.md` に移した。画面画像は `scripts/manual-screenshots.mjs` で撮り直せる。
+
 ## [0.1.0-beta.1] - 2026-11-08
 
 **v0.1.0-beta.1 — banto-cost の最初のプレリリース（試用版）。** 版番号を Banto から引き継いだ 6.10.0 から、banto-cost 独自の 0.1.0-beta.1 に改めた。Windows 用インストーラ（NSIS、コード署名なし）を GitHub Releases に添付する。署名がないので、初回の起動時に Windows SmartScreen の警告が出る。
