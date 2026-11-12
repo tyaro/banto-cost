@@ -377,6 +377,14 @@ async function shoot() {
 	await screen('/recurring-revenue', '15-recurring', 560);
 	await screen('/work-masters', '16-work-masters', 560);
 
+	// ユーザー管理：利用者を選ぶと編集パネルに「業務の能力」が出る。
+	await page.setViewportSize({ width: 1280, height: 1200 });
+	await page.goto(BASE + '/users');
+	await page.getByRole('row').filter({ hasText: USERNAME }).first().click();
+	await page.locator('.capability input').first().waitFor();
+	await page.screenshot({ path: file('17-users'), clip: { x: 0, y: 0, width: 1280, height: 900 } });
+	await page.setViewportSize({ width: 1280, height: 800 });
+
 	await screen('/projects/1', '07-project-detail', 800);
 	// 案件の詳細は縦に長いので、欄ごとに切り出す（固定ヘッダが重ならないよう全体画像から切る）。
 	for (const [heading, name] of [

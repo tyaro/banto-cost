@@ -19,6 +19,7 @@
 	import { isProviderError } from '@banto/admin-core';
 	import {
 		Eye,
+		BadgeCheck,
 		KeyRound,
 		Pencil,
 		ShieldAlert,
@@ -47,6 +48,12 @@
 		type Role as UserRole,
 		type UserSummary
 	} from '#lib/banto/usersAdmin.js';
+	import {
+		CAPABILITIES,
+		getUserCapabilities,
+		setUserCapabilities,
+		type Capability
+	} from '#lib/banto/capabilitiesAdmin.js';
 
 	const roleOptions: { value: UserRole; label: string }[] = [
 		{ value: 'admin', label: m['role.admin']() },
@@ -204,6 +211,70 @@
 		editDisplayName = user.displayName;
 		editRole = user.role;
 		resetPassword = '';
+		void loadCapabilities(user.id, selectionEpoch);
+	}
+
+	// banto-cost: business capabilities (design 第2章). Separate from the role -
+	// an admin has none by default, so the first account is given them here.
+	const capabilityText: Record<Capability, { label: () => string; desc: () => string }> = {
+		'time.entry': { label: m['users.capTimeEntry'], desc: m['users.capTimeEntryDesc'] },
+		'pipeline.edit': { label: m['users.capPipelineEdit'], desc: m['users.capPipelineEditDesc'] },
+		'project.manage': {
+			label: m['users.capProjectManage'],
+			desc: m['users.capProjectManageDesc']
+		},
+		'finance.rate': { label: m['users.capFinanceRate'], desc: m['users.capFinanceRateDesc'] },
+		'finance.close': { label: m['users.capFinanceClose'], desc: m['users.capFinanceCloseDesc'] },
+		'report.all': { label: m['users.capReportAll'], desc: m['users.capReportAllDesc'] },
+		'amount.view': { label: m['users.capAmountView'], desc: m['users.capAmountViewDesc'] }
+	};
+
+	/** null = not loaded (loading, or the load failed) - never shown as "none". */
+	let capabilities: Capability[] | null = $state(null);
+	let capabilitiesError = $state(false);
+	let savingCapabilities = $state(false);
+
+	async function loadCapabilities(id: number, epoch: number): Promise<void> {
+		capabilities = null;
+		capabilitiesError = false;
+		try {
+			const loaded = await getUserCapabilities(id);
+			if (epoch === selectionEpoch) capabilities = loaded;
+		} catch (err) {
+			if (epoch === selectionEpoch) {
+				capabilitiesError = true;
+				toastStore.push('error', errorMessage(err));
+			}
+		}
+	}
+
+	function toggleCapability(capability: Capability, on: boolean): void {
+		if (!capabilities) return;
+		capabilities = on
+			? CAPABILITIES.filter((c) => c === capability || capabilities!.includes(c))
+			: capabilities.filter((c) => c !== capability);
+	}
+
+	function selectAllCapabilities(): void {
+		if (capabilities) capabilities = [...CAPABILITIES];
+	}
+
+	async function saveCapabilities(): Promise<void> {
+		if (!selected || !capabilities || savingCapabilities) return;
+		const targetId = selected.id;
+		const epoch = selectionEpoch;
+		savingCapabilities = true;
+		try {
+			const stored = await setUserCapabilities(targetId, capabilities);
+			toastStore.push('success', m['users.capabilitiesSaved']());
+			if (epoch === selectionEpoch && selected?.id === targetId) {
+				capabilities = CAPABILITIES.filter((c) => stored.includes(c));
+			}
+		} catch (err) {
+			toastStore.push('error', errorMessage(err));
+		} finally {
+			savingCapabilities = false;
+		}
 	}
 
 	async function saveEdit(): Promise<void> {
@@ -378,6 +449,54 @@
 							{m['common.save']()}
 						</button>
 
+						<section class="capabilities" aria-labelledby="capabilities-heading">
+							<h3 id="capabilities-heading">
+								<BadgeCheck size={16} aria-hidden="true" />{m['users.capabilitiesHeading']()}
+							</h3>
+							<p class="note">{m['users.capabilitiesDesc']()}</p>
+							{#if capabilities}
+								<ul class="capability-list">
+									{#each CAPABILITIES as capability (capability)}
+										<li>
+											<label class="capability">
+												<input
+													type="checkbox"
+													checked={capabilities.includes(capability)}
+													onchange={(event) =>
+														toggleCapability(capability, event.currentTarget.checked)}
+												/>
+												<span class="capability-text">
+													<span class="capability-label"
+														>{capabilityText[capability].label()}
+														<code>{capability}</code></span
+													>
+													<span class="capability-desc">{capabilityText[capability].desc()}</span>
+												</span>
+											</label>
+										</li>
+									{/each}
+								</ul>
+								<p class="note">{m['users.capabilitiesSelfNote']()}</p>
+								<div class="capability-actions">
+									<button
+										type="button"
+										class="banto-btn banto-btn--primary"
+										onclick={saveCapabilities}
+										disabled={savingCapabilities}
+									>
+										{m['users.capabilitiesSave']()}
+									</button>
+									<button type="button" class="banto-btn" onclick={selectAllCapabilities}>
+										{m['users.capabilitiesSelectAll']()}
+									</button>
+								</div>
+							{:else if capabilitiesError}
+								<p class="note">{m['users.capabilitiesLoadFailed']()}</p>
+							{:else}
+								<LoadingState label={m['common.loading']()} />
+							{/if}
+						</section>
+
 						<!-- Danger zone (plan Phase 5): delete + password reset are
 						     visually separated from the normal save action above.
 						     Confirmation is still required before deletion. -->
@@ -495,6 +614,68 @@
 
 	.edit-field {
 		margin-bottom: 0.75rem;
+	}
+
+	.capabilities {
+		margin-top: 1.25rem;
+		padding-top: 1.25rem;
+		border-top: 1px solid var(--banto-border);
+	}
+
+	.capabilities h3 {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		margin: 0 0 0.5rem;
+		font-size: 0.875rem;
+		color: var(--banto-text);
+	}
+
+	.capability-list {
+		list-style: none;
+		margin: 0 0 0.75rem;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.capability {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.5rem;
+		cursor: pointer;
+	}
+
+	.capability input {
+		margin-top: 0.2rem;
+	}
+
+	.capability-text {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.capability-label {
+		font-size: 0.875rem;
+		color: var(--banto-text);
+	}
+
+	.capability-label code {
+		margin-left: 0.35rem;
+		font-size: 0.75rem;
+		color: var(--banto-text-muted);
+	}
+
+	.capability-desc {
+		font-size: 0.8rem;
+		color: var(--banto-text-muted);
+	}
+
+	.capability-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
 	}
 
 	.danger-zone {
