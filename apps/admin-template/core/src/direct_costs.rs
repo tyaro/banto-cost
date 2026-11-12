@@ -654,6 +654,11 @@ fn ledger_of(rows: &[LedgerRow], allocs: &[(i64, i64, i64)]) -> LedgerInput {
                     id: r.0.to_string(),
                     project: r.4.map(|p| p.to_string()),
                     refers_to: r.2.map(|t| t.to_string()),
+                    // A normal or provisional row lands on its own project:
+                    // only a confirmation, an adjustment or an unknown kind
+                    // may belong to an original's.
+                    may_refer: RecordKind::parse(&r.1)
+                        .is_none_or(|k| matches!(k, RecordKind::Confirms | RecordKind::Adjustment)),
                 },
                 column,
             )),
@@ -2824,9 +2829,19 @@ pub(crate) mod tests {
         };
         // An adjustment with neither its original nor its project readable,
         // and one naming an original that is not in the ledger.
+        // A normal row with no project and an unreadable date belongs to no
+        // original: it is reported, and no project waits for it.
+        let mut stray = row(3, "normal", None, None);
+        stray.8 = "2026-11-99".into();
+        let rows = vec![row(1, "normal", None, Some(10)), stray];
+        let resolved = resolve_rows(&rows, &[]);
+        assert!(!resolved.unattributed);
+        assert!(resolved.is_clean("10"));
+        assert_eq!(problems_of(&rows, &[], &resolved).len(), 1);
         for bad in [
             row(3, "adjustment", None, None),
             row(3, "adjustment", Some(99), None),
+            row(3, "bogus", None, None),
         ] {
             let rows = vec![
                 row(1, "normal", None, Some(10)),

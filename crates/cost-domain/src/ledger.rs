@@ -374,6 +374,9 @@ pub struct Unreadable {
     pub project: Option<String>,
     /// 行に書かれた参照先（確定・調整の元明細。読めれば）。
     pub refers_to: Option<String>,
+    /// 確定・調整の行、または種別が読めない行（元明細に帰属するかもしれない）。種別が読めて
+    /// 通常・仮計上なら `false`。
+    pub may_refer: bool,
 }
 
 /// 要確認の記録を系列ごと外して解決した台帳（T39）。
@@ -494,7 +497,7 @@ pub fn resolve(
             || allocations.iter().any(|a| a.source_id == id)
     };
     let refers = |id: &str| {
-        unreadable.iter().any(|u| u.id == id)
+        unreadable.iter().any(|u| u.id == id && u.may_refer)
             || entries.iter().any(|e| {
                 e.id == id
                     && matches!(
@@ -849,6 +852,7 @@ mod tests {
             id: "X9".into(),
             project: None,
             refers_to: Some("M1".into()),
+            may_refer: true,
         }];
         let r = resolve(&entries, &[], &unreadable);
         // M1 は X9 と同じ系列なので外し、P-A は要確認。P-B はそのまま計上する。
@@ -938,11 +942,23 @@ mod tests {
             id: "X9".into(),
             project: None,
             refers_to: None,
+            may_refer: true,
         }];
         let r = resolve(&entries, &[], &unreadable);
         assert!(r.unattributed);
         assert!(!r.is_clean("P-A"));
         assert!(!r.is_clean("P-B"));
+        // 通常の明細と読めた行は、案件がなくても元明細に帰属しないので、全体は要確認にしない。
+        let unreadable = [Unreadable {
+            id: "X9".into(),
+            project: None,
+            refers_to: None,
+            may_refer: false,
+        }];
+        let r = resolve(&entries, &[], &unreadable);
+        assert!(r.excluded.contains("X9"));
+        assert!(!r.unattributed);
+        assert!(r.is_clean("P-A") && r.is_clean("P-B"));
     }
 
     #[test]
