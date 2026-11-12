@@ -2,7 +2,7 @@
 	/**
 	 * 案件の詳細・編集 (banto-cost P3a, spec §5.1) + 案件見込 (§5.4,
 	 * PipelineSection.svelte). Same load/save shape as customers/[id], without
-	 * delete. The `rowVersion` read by `getOne` stays in the form values so
+	 * delete; saving stays on the project and reads it back. The `rowVersion` read by `getOne` stays in the form values so
 	 * the update carries it back; a stale one is a `rowVersion` field error
 	 * that no field owns, listed above the form.
 	 *
@@ -24,7 +24,6 @@
 	 * so reading `page.params.id` once at setup is enough.
 	 */
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { BantoForm, UnsavedChangesNotice, createFormStore, type FormStore } from '@banto/forms';
 	import type { FormSchema } from '@banto/forms';
@@ -61,6 +60,14 @@
 	let schema = $state.raw<FormSchema | null>(null);
 	let store = $state.raw<FormStore | null>(null);
 	let status = $state('');
+	/**
+	 * The status the keyed sections (OrderSection, CloseoutSection) are built
+	 * for. It follows `status` only while neither has unsaved input: saving
+	 * the basic information now stays on the page and reads it back, and a
+	 * re-key would silently drop a draft there (PR #41 review). The server
+	 * still checks the status on each of their actions.
+	 */
+	let sectionStatus = $state('');
 	let customerName = $state('');
 	let managerName = $state('');
 	let projectCode = $state('');
@@ -104,6 +111,10 @@
 			closeoutBusy
 	});
 
+	$effect(() => {
+		if (!ordersDirty && !ordersBusy && !closeoutDirty && !closeoutBusy) sectionStatus = status;
+	});
+
 	async function loadForm() {
 		if (!formResource) return;
 		await formResource.load();
@@ -143,7 +154,9 @@
 		const result = await formResource.submit(values);
 		if (result.ok) {
 			store.markClean();
-			if (guard.canAutoNavigate) goto(resolve(`projects`));
+			// Stay on the project and read it back: the status and rowVersion
+			// changed, and the sections follow the status (review D-2).
+			await loadForm();
 		} else {
 			store.setServerErrors(result.fieldErrors);
 			formErrors = unmatchedFieldErrors(
@@ -226,11 +239,11 @@
 	</div>
 
 	{#if schema && idValid}
-		{#key status}
+		{#key sectionStatus}
 			<OrderSection
 				projectId={parsedId}
 				code={projectCode}
-				{status}
+				status={sectionStatus}
 				rowVersion={projectRowVersion}
 				{canWrite}
 				onProjectChanged={() => void loadForm()}
@@ -276,7 +289,7 @@
 			/>
 		{/if}
 		{#if ordered}
-			{#key status}
+			{#key sectionStatus}
 				<CloseoutSection
 					projectId={parsedId}
 					{canWrite}

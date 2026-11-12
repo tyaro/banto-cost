@@ -75,6 +75,12 @@ export interface TimeEntry {
 	replacedById: number | null;
 	/** A correction of this entry waits for approval. */
 	correctionPending: boolean;
+	/**
+	 * Not yet approved and no hourly rate resolves for its project and work
+	 * date: approving now fixes 原価未確定. Only on the approval list and
+	 * the owner's list; absent elsewhere and once approved.
+	 */
+	rateMissing?: boolean;
 	rowVersion: number;
 	updatedAt: string;
 }

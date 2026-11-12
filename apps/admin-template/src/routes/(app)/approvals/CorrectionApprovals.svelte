@@ -64,6 +64,8 @@
 
 	async function approve(c: TimeEntry) {
 		if (busy) return;
+		// A warning, not a stop (review U-1), as for a first approval.
+		if (c.rateMissing && !window.confirm(m['approvals.rateMissingConfirm']())) return;
 		busy = true;
 		try {
 			const result = await decideEntry(c.id, { rowVersion: c.rowVersion, approve: true });
@@ -183,7 +185,10 @@
 							<td>{targetLabel(c)}</td>
 							<td>{phaseLabel(c)}</td>
 							<td class="num">{formatMinutes(c.minutes)}</td>
-							<td class="wrap">{c.description ?? ''}</td>
+							<td class="wrap">
+								{c.description ?? ''}
+								{#if c.rateMissing}<div class="sub">{m['time.rateMissing']()}</div>{/if}
+							</td>
 						</tr>
 						<tr class="reason">
 							<th scope="row">{m['corrections.reason']()}</th>

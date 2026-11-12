@@ -6,7 +6,9 @@
 	 * accounting (`finance.close`). Each entry is approved, or returned with
 	 * a reason. Approving fixes the hourly rate in effect on the work date
 	 * and the labor cost; without a rate the entry is approved as 原価未確定
-	 * (T04), never as 0 yen.
+	 * (T04), never as 0 yen. Entries whose rate would not resolve are marked
+	 * 単価未登録 beforehand and approving one asks first (review U-1; a
+	 * warning, not a stop).
 	 *
 	 * The company runs single-handed, so approving one's own submission is
 	 * allowed and recorded in the audit log (design 2.4). The server decides
@@ -27,6 +29,7 @@
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
 	import CostApprovals from './CostApprovals.svelte';
 	import CorrectionApprovals from './CorrectionApprovals.svelte';
+	import { resolve } from '$app/paths';
 
 	const available = isPipelineAvailable();
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -68,6 +71,8 @@
 		void load();
 	});
 
+	/** Entries that would be approved as 原価未確定 now (review U-1). */
+	const rateMissingCount = $derived((entries ?? []).filter((e) => e.rateMissing === true).length);
 	const totalMinutes = $derived((entries ?? []).reduce((sum, e) => sum + e.minutes, 0));
 
 	function fail(err: unknown) {
@@ -77,6 +82,9 @@
 
 	async function approve(entry: TimeEntry) {
 		if (busy) return;
+		// A warning, not a stop: a missing rate can be right (e.g. a person
+		// paid by a monthly fixed cost), so the approver decides.
+		if (entry.rateMissing && !window.confirm(m['approvals.rateMissingConfirm']())) return;
 		busy = true;
 		try {
 			const result = await decideEntry(entry.id, { rowVersion: entry.rowVersion, approve: true });
@@ -162,6 +170,12 @@
 			<p class="note">
 				{m['approvals.summary']({ count: entries.length, total: formatMinutes(totalMinutes) })}
 			</p>
+			{#if rateMissingCount > 0}
+				<div class="warnings" role="note">
+					<p>{m['approvals.rateMissingNotice']({ count: rateMissingCount })}</p>
+					<p><a href={resolve('calc-basis')}>{m['approvals.rateMissingLink']()}</a></p>
+				</div>
+			{/if}
 			<div class="table-wrap">
 				<table>
 					<caption class="sr-only">{m['nav.approvals']()}</caption>
@@ -186,7 +200,10 @@
 									{e.phaseName ?? ''}
 									{#if e.reworkKind}<div class="sub">{reworkLabel(e.reworkKind)}</div>{/if}
 								</td>
-								<td class="num">{formatMinutes(e.minutes)}</td>
+								<td class="num">
+									{formatMinutes(e.minutes)}
+									{#if e.rateMissing}<div class="rate-missing">{m['time.rateMissing']()}</div>{/if}
+								</td>
 								<td class="wrap">{e.description ?? ''}</td>
 								<td>
 									{#if canWrite}
@@ -315,6 +332,27 @@
 
 	.sub {
 		color: var(--banto-text-muted);
+		font-size: var(--banto-font-size-xs);
+	}
+
+	.warnings {
+		color: var(--banto-warning-tint-text);
+		background: var(--banto-warning-tint);
+		border-radius: var(--banto-radius-md);
+		padding: var(--banto-space-2) var(--banto-space-3);
+		font-size: var(--banto-font-size-sm);
+	}
+
+	.warnings p {
+		margin: 0;
+	}
+
+	.warnings a {
+		color: inherit;
+	}
+
+	.rate-missing {
+		color: var(--banto-warning-tint-text);
 		font-size: var(--banto-font-size-xs);
 	}
 

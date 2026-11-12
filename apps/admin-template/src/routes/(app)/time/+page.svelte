@@ -11,8 +11,10 @@
 	 *
 	 * Needs `time.entry` (and, for a project, being one of its members); the
 	 * server decides, and a `forbidden` read shows the no-access state. An
-	 * approved entry without a rate shows 原価未確定 (T04); the rate and cost
-	 * themselves are not shown here. Demo mode has no backend.
+	 * approved entry without a rate shows 原価未確定 (T04); an entry not yet
+	 * approved whose rate would not resolve shows 単価未登録, with a notice
+	 * above the week (review U-1: a warning only, submitting is not stopped).
+	 * The rate and cost themselves are not shown here. Demo mode has no backend.
 	 */
 	import { getDataProvider, isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState, StatusBadge } from '@banto/ui';
@@ -137,6 +139,8 @@
 	const inTotals = (e: TimeEntry) =>
 		countsInTotals(e) && (e.correctsId === null || e.status === 'approved');
 	const counted = $derived((entries ?? []).filter(inTotals));
+	/** The week's entries that would be approved as 原価未確定 today (review U-1). */
+	const rateMissingCount = $derived((entries ?? []).filter((e) => e.rateMissing === true).length);
 	const weekTotal = $derived(counted.reduce((sum, e) => sum + e.minutes, 0));
 	/** A returned correction is history: it is requested again, never edited. */
 	const editable = (e: TimeEntry) =>
@@ -293,6 +297,12 @@
 			{/if}
 		</div>
 
+		{#if rateMissingCount > 0}
+			<div class="warnings" role="note">
+				<p>{m['time.rateMissingNotice']({ count: rateMissingCount })}</p>
+			</div>
+		{/if}
+
 		{#if warnings.length > 0}
 			<div class="warnings" role="status">
 				{#each warnings as w (w)}<p>{w}</p>{/each}
@@ -408,6 +418,8 @@
 											/>
 											{#if e.costMissing && e.replacedById === null}
 												<div class="sub">{m['time.costMissing']()}</div>
+											{:else if e.rateMissing}
+												<div class="rate-missing">{m['time.rateMissing']()}</div>
 											{/if}
 											{#if e.correctsId !== null}
 												<div class="sub">{m['time.isCorrection']()}</div>
@@ -585,7 +597,8 @@
 		font-size: var(--banto-font-size-xs);
 	}
 
-	.returned {
+	.returned,
+	.rate-missing {
 		color: var(--banto-warning-tint-text);
 		font-size: var(--banto-font-size-xs);
 	}

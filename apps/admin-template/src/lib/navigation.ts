@@ -50,6 +50,14 @@ export type CostNavLabelKey =
 	| 'nav.recurringRevenue'
 	| 'nav.workMasters';
 
+/**
+ * banto-cost sidebar groups (review D-3): the business screens in the order
+ * of the work - sales, the ledgers, the daily entries, the monthly tasks, the
+ * rarely changed settings. A separate union for the same scaffold reason.
+ */
+export type CostNavGroupKey =
+	'nav.groupSales' | 'nav.groupProjects' | 'nav.groupDaily' | 'nav.groupMonthly' | 'nav.groupBasis';
+
 /** Keys of the demo-only catalog entry (`NavItem.demoOnly`). Kept out of the unions above on purpose:
  *  scaffold's removers edit those unions by exact text (scripts/scaffold.mjs). */
 export type DemoNavIconKey = 'ui-demo';
@@ -93,6 +101,13 @@ export interface NavItem {
 	 * (a catalog page like `/ui-demo`, not a feature).
 	 */
 	demoOnly?: boolean;
+
+	/**
+	 * banto-cost: the heading this entry is listed under (`navGroups`).
+	 * Undefined = no heading (the dashboard at the top, the app settings at
+	 * the end).
+	 */
+	group?: CostNavGroupKey;
 }
 
 export { isPathActive, resolveAppPath, type AppPath } from '#lib/appPath.js';
@@ -100,13 +115,14 @@ export { isPathActive, resolveAppPath, type AppPath } from '#lib/appPath.js';
 const allNavItems: NavItem[] = [
 	{ path: '/dashboard', labelKey: 'nav.dashboard', icon: 'dashboard', publicViewer: true },
 	// banto-cost P3a. Not `publicViewer`: amounts and project scope are capability-gated.
-	{ path: '/pipeline', labelKey: 'nav.pipeline', icon: 'pipeline' },
+	{ path: '/pipeline', labelKey: 'nav.pipeline', icon: 'pipeline', group: 'nav.groupSales' },
 	// banto-cost P3b: 月次売上見通し (amounts, scope `amount_projects`).
-	{ path: '/outlook', labelKey: 'nav.outlook', icon: 'outlook' },
+	{ path: '/outlook', labelKey: 'nav.outlook', icon: 'outlook', group: 'nav.groupSales' },
 	{
 		path: '/projects',
 		labelKey: 'nav.projects',
 		icon: 'projects',
+		group: 'nav.groupProjects',
 		badgeResource: 'projects',
 		pageTitleResource: 'projects',
 		pageTitles: {
@@ -118,6 +134,7 @@ const allNavItems: NavItem[] = [
 		path: '/customers',
 		labelKey: 'nav.customers',
 		icon: 'customers',
+		group: 'nav.groupProjects',
 		badgeResource: 'customers',
 		pageTitleResource: 'customers',
 		pageTitles: {
@@ -126,20 +143,35 @@ const allNavItems: NavItem[] = [
 		}
 	},
 	// banto-cost P4b: 工数入力・承認一覧 (spec §6.1 / §9). Capability-gated by the server.
-	{ path: '/time', labelKey: 'nav.time', icon: 'time' },
+	{ path: '/time', labelKey: 'nav.time', icon: 'time', group: 'nav.groupDaily' },
 	// banto-cost P4d: 直接費入力 (spec §6.3 / §9). Capability-gated by the server.
-	{ path: '/costs', labelKey: 'nav.costs', icon: 'costs' },
-	{ path: '/approvals', labelKey: 'nav.approvals', icon: 'approvals' },
-	// banto-cost P4a: 計算基準 (design 第10章). Amounts: capability-gated by the server.
-	{ path: '/calc-basis', labelKey: 'nav.calcBasis', icon: 'calc-basis' },
-	// banto-cost P6b: 月次締め (spec §7 / §9, T11). Accounting only (finance.close, server-side).
-	{ path: '/closing', labelKey: 'nav.closing', icon: 'closing' },
+	{ path: '/costs', labelKey: 'nav.costs', icon: 'costs', group: 'nav.groupDaily' },
+	{ path: '/approvals', labelKey: 'nav.approvals', icon: 'approvals', group: 'nav.groupDaily' },
 	// banto-cost P7b: 月額固定原価 (design §9.4, T37). finance.rate + amount.view (server-side).
-	{ path: '/fixed-costs', labelKey: 'nav.fixedCosts', icon: 'fixed-costs' },
+	{
+		path: '/fixed-costs',
+		labelKey: 'nav.fixedCosts',
+		icon: 'fixed-costs',
+		group: 'nav.groupMonthly'
+	},
 	// banto-cost P7c: 定期売上 (design §9.4, T38). finance.close + amount.view (server-side).
-	{ path: '/recurring-revenue', labelKey: 'nav.recurringRevenue', icon: 'recurring-revenue' },
+	{
+		path: '/recurring-revenue',
+		labelKey: 'nav.recurringRevenue',
+		icon: 'recurring-revenue',
+		group: 'nav.groupMonthly'
+	},
+	// banto-cost P6b: 月次締め (spec §7 / §9, T11). Accounting only (finance.close, server-side).
+	{ path: '/closing', labelKey: 'nav.closing', icon: 'closing', group: 'nav.groupMonthly' },
+	// banto-cost P4a: 計算基準 (design 第10章). Amounts: capability-gated by the server.
+	{ path: '/calc-basis', labelKey: 'nav.calcBasis', icon: 'calc-basis', group: 'nav.groupBasis' },
 	// banto-cost P4b: 工程・共通活動 masters (spec §5.2).
-	{ path: '/work-masters', labelKey: 'nav.workMasters', icon: 'work-masters' },
+	{
+		path: '/work-masters',
+		labelKey: 'nav.workMasters',
+		icon: 'work-masters',
+		group: 'nav.groupBasis'
+	},
 	{ path: '/ui-demo', labelKey: 'nav.uiDemo', icon: 'ui-demo', demoOnly: true },
 	{ path: '/users', labelKey: 'nav.users', icon: 'users', adminOnly: true },
 	{ path: '/audit-log', labelKey: 'nav.auditLog', icon: 'audit-log', adminOnly: true },
@@ -181,6 +213,26 @@ export function navSections(session: { publicViewer: boolean; role: Role }): {
 				? navItems.filter((item) => item.adminOnly)
 				: []
 	};
+}
+
+/** A run of entries under one heading (`group` undefined = no heading). */
+export interface NavGroup {
+	group: CostNavGroupKey | undefined;
+	items: NavItem[];
+}
+
+/**
+ * Splits a section's entries into runs of the same `group`, in order (review
+ * D-3). Pure, like `navSections`: the sidebar and the dock both render it.
+ */
+export function navGroups(items: NavItem[]): NavGroup[] {
+	const out: NavGroup[] = [];
+	for (const item of items) {
+		const last = out.at(-1);
+		if (last && last.group === item.group) last.items.push(item);
+		else out.push({ group: item.group, items: [item] });
+	}
+	return out;
 }
 
 // "Banto" is the product brand (owner-fixed): kept as a component constant,
