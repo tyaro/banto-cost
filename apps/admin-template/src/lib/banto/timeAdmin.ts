@@ -81,6 +81,12 @@ export interface TimeEntry {
 	 * the owner's list; absent elsewhere and once approved.
 	 */
 	rateMissing?: boolean;
+	/**
+	 * On the owner's list only: a draft or returned entry the owner may also
+	 * approve once submitted (the server's approval rule), so the screen can
+	 * offer 申請して承認 (review U-2). Absent elsewhere.
+	 */
+	canApprove?: boolean;
 	rowVersion: number;
 	updatedAt: string;
 }
