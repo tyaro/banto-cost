@@ -582,7 +582,10 @@ impl ClosingService {
         let un: Vec<String> = UNAPPROVED_SQL.iter().map(|s| self.sql(s)).collect();
         let (before, _) = on_pool!(&self.db, pool => month_reads!(pool, fp, un, &from, &to));
         let figures = self.figures(m).await?;
-        let ledger_review_entries = self.ledger_review_entries().await?;
+        // The ledger is read again in the close's transaction, so a record
+        // approved or written after the figures cannot slip past (T39).
+        let ledger_sql = crate::direct_costs::LEDGER_SQL.to_string();
+        let ledger_alloc_sql = crate::direct_costs::LEDGER_ALLOC_SQL.to_string();
         let gate = MonthGate::new(self.db.dialect());
         let lock = self.lock_sql();
         let set = self.sql(&format!(
@@ -610,7 +613,12 @@ impl ClosingService {
             let state = MonthState {
                 unapproved_time_entries: count(time),
                 unapproved_costs: count(costs),
-                ledger_review_entries,
+                ledger_review_entries: {
+                    let rows: Vec<crate::direct_costs::LedgerRow> =
+                        fetch_all!(&mut *tx, ledger_sql)?;
+                    let allocs: Vec<(i64, i64, i64)> = fetch_all!(&mut *tx, ledger_alloc_sql)?;
+                    crate::direct_costs::problem_count(&rows, &allocs)
+                },
                 ..Default::default()
             };
             match check_close(status, &state) {

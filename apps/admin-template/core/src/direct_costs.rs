@@ -579,7 +579,7 @@ const SELECT: &str = "SELECT c.id, c.user_id, u.display_name AS user_name, c.ent
      LEFT JOIN users d ON d.id = c.decided_by";
 
 /// The ledger columns of an approved record.
-type LedgerRow = (
+pub(crate) type LedgerRow = (
     i64,
     String,
     Option<i64>,
@@ -596,12 +596,13 @@ type LedgerRow = (
 /// (月額固定原価, P7b, T37). A posting joins as a normal record under its
 /// negated id, so the two id spaces never meet; it has no phase, order or
 /// reference, and its cost type is labor (an employee) or outsourcing.
-const LEDGER_SQL: &str = "SELECT id, entry_kind, ref_id, adjustment_kind, project_id, phase_id, \
+pub(crate) const LEDGER_SQL: &str =
+    "SELECT id, entry_kind, ref_id, adjustment_kind, project_id, phase_id, \
      cost_type, purchase_order_id, booked_on, amount FROM direct_costs \
      WHERE status = 'approved' \
      UNION ALL SELECT -id, 'normal', NULL, NULL, project_id, NULL, cost_type, NULL, \
      booked_on, amount FROM fixed_cost_postings WHERE status = 'approved' ORDER BY 1";
-const LEDGER_ALLOC_SQL: &str = "SELECT a.direct_cost_id, a.project_id, a.amount \
+pub(crate) const LEDGER_ALLOC_SQL: &str = "SELECT a.direct_cost_id, a.project_id, a.amount \
      FROM cost_allocations a JOIN direct_costs c ON c.id = a.direct_cost_id \
      WHERE c.status = 'approved' ORDER BY a.direct_cost_id, a.line_no";
 
@@ -763,6 +764,15 @@ fn problems_of(
         .collect();
     out.sort_by_key(|p| (p.source.clone(), p.id));
     out
+}
+
+/// How many approved records the ledger leaves out for review (T39), from
+/// rows read by the caller (in its transaction).
+pub(crate) fn problem_count(rows: &[LedgerRow], allocs: &[(i64, i64, i64)]) -> usize {
+    let resolved = resolve_rows(rows, allocs);
+    rows.iter()
+        .filter(|r| resolved.excluded.contains(&r.0.to_string()))
+        .count()
 }
 
 /// The orders whose approved records were left out (T39): their
@@ -2996,6 +3006,17 @@ pub(crate) mod tests {
         let month = closing.get("2026-11").await.unwrap();
         assert_eq!(month.ledger_review_entries, 1);
         assert!(!month.can_close);
+        let err = closing
+            .close(
+                "2026-11",
+                crate::closing::CloseInput {
+                    row_version: month.row_version,
+                },
+                Some(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(field_errors(err), vec!["status"]);
 
         // Fixed, the project is back.
         let sql = placeholders(
