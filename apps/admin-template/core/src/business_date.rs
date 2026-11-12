@@ -21,9 +21,8 @@ pub const TIME_ZONE: BusinessTimeZone = BusinessTimeZone::COMPANY_DEFAULT;
 /// The company's fiscal year (6月開始、第13期 = 2026年6月〜2027年5月).
 pub const FISCAL: FiscalCalendar = FiscalCalendar::COMPANY_DEFAULT;
 
-/// How many periods before the current one [`calendar`] lists.
-const PERIODS_BEFORE: i32 = 5;
-/// How many periods after the current one [`calendar`] lists.
+/// How many periods after the current one [`calendar`] lists (every period
+/// from 第1期 up to the current one is listed, so old periods stay reachable).
 const PERIODS_AFTER: i32 = 1;
 
 fn unix_now() -> i64 {
@@ -70,7 +69,7 @@ pub struct BusinessCalendar {
     pub base_start_year: i32,
     /// The period `today` falls in.
     pub current_period: i32,
-    /// A few periods around the current one, oldest first.
+    /// 第1期 to the period after the current one, oldest first.
     pub periods: Vec<FiscalPeriod>,
 }
 
@@ -95,7 +94,7 @@ pub fn calendar_on(today: Date) -> BusinessCalendar {
         base_period: FISCAL.base_period,
         base_start_year: FISCAL.base_start_year,
         current_period: current,
-        periods: ((current - PERIODS_BEFORE).max(1)..=current + PERIODS_AFTER)
+        periods: (1..=current + PERIODS_AFTER)
             .map(|p| period(&FISCAL, p))
             .collect(),
     }
@@ -122,7 +121,7 @@ mod tests {
             (6, 13, 2026)
         );
         let numbers: Vec<i32> = cal.periods.iter().map(|p| p.period).collect();
-        assert_eq!(numbers, [8, 9, 10, 11, 12, 13, 14]);
+        assert_eq!(numbers, (1..=14).collect::<Vec<_>>());
         let p13 = cal.periods.iter().find(|p| p.period == 13).unwrap();
         assert_eq!(p13.label, "第13期（2026年6月〜2027年5月）");
         assert_eq!(

@@ -49,12 +49,16 @@ export async function fetchBusinessCalendar(): Promise<BusinessCalendar> {
 let calendar = $state<BusinessCalendar | null>(null);
 let loading: Promise<void> | null = null;
 
+/** How long the app layout waits for the calendar before going on without it. */
+export const CALENDAR_WAIT_MS = 3000;
+
 /**
  * Load the calendar once (the app layout calls this after sign-in). A failure
  * is not an error for the page: the helpers fall back, and the next call
- * tries again.
+ * tries again. The wait is bounded (`waitMs`): a stalled request does not
+ * hold up navigation, and the calendar is used once it arrives.
  */
-export function loadBusinessCalendar(): Promise<void> {
+export function loadBusinessCalendar(waitMs: number = CALENDAR_WAIT_MS): Promise<void> {
 	if (calendar) return Promise.resolve();
 	loading ??= Promise.resolve()
 		.then(() => (isPipelineAvailable() ? fetchBusinessCalendar() : null))
@@ -65,7 +69,11 @@ export function loadBusinessCalendar(): Promise<void> {
 		.finally(() => {
 			loading = null;
 		});
-	return loading;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<void>((resolve) => {
+		timer = setTimeout(resolve, waitMs);
+	});
+	return Promise.race([loading, timeout]).finally(() => clearTimeout(timer));
 }
 
 /** The loaded calendar, or null (demo mode, not loaded yet, or failed). */
