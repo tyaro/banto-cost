@@ -14,6 +14,9 @@
 	 * (精算完了, P6a, spec §5.1, T17) CloseoutSection.svelte, its figures by
 	 * month, fiscal period and cumulative with the CSV (P6c, T15)
 	 * MonthlySection.svelte.
+	 * The profit summary and the contents of the sections at the top (review
+	 * D-1, P8c) are ProjectSummary.svelte; it reads the summary again after
+	 * any section (or the basic information) finishes an action.
 	 * Order conversion and ordered revenue (P3b) are OrderSection.svelte; it
 	 * asks this page to reload after a conversion (status and rowVersion change).
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
@@ -36,7 +39,9 @@
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
+	import { untrack } from 'svelte';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
+	import ProjectSummary, { type TocEntry } from './ProjectSummary.svelte';
 	import PipelineSection from './PipelineSection.svelte';
 	import OrderSection from './OrderSection.svelte';
 	import CalcBasisSection from './CalcBasisSection.svelte';
@@ -115,6 +120,27 @@
 		if (!ordersDirty && !ordersBusy && !closeoutDirty && !closeoutBusy) sectionStatus = status;
 	});
 
+	// Read the summary again when an action ends (busy true → false) in the
+	// basic information or any section: the amounts, the status and the
+	// alerts may have moved. Reading alone never bumps it.
+	const anyBusy = $derived(
+		(formResource?.saving ?? false) ||
+			pipelineBusy ||
+			ordersBusy ||
+			calcBusy ||
+			budgetBusy ||
+			costsBusy ||
+			forecastBusy ||
+			closeoutBusy
+	);
+	let summaryKey = $state(0);
+	let wasBusy = false;
+	$effect(() => {
+		const busy = anyBusy;
+		if (wasBusy && !busy) untrack(() => summaryKey++);
+		wasBusy = busy;
+	});
+
 	async function loadForm() {
 		if (!formResource) return;
 		await formResource.load();
@@ -143,6 +169,28 @@
 	});
 	const forbidden = $derived(isForbiddenError(formResource?.error));
 	const ordered = $derived(isOrderedStatus(status));
+	// The contents, in the order the sections are laid out below.
+	const toc = $derived.by<TocEntry[]>(() => {
+		const entries: TocEntry[] = [
+			{ id: 'project-basic', label: m['projectSummary.basicInfo']() },
+			{ id: 'orders-heading', label: m['orders.sectionTitle']() },
+			{ id: 'pipeline-heading', label: m['pipeline.sectionTitle']() },
+			{ id: 'calc-basis-heading', label: m['calcBasis.projectSectionTitle']() },
+			{ id: 'budget-heading', label: m['budget.sectionTitle']() }
+		];
+		if (ordered) {
+			entries.push(
+				{ id: 'forecast-heading', label: m['forecast.sectionTitle']() },
+				{ id: 'closeout-heading', label: m['closeout.sectionTitle']() }
+			);
+		}
+		entries.push(
+			{ id: 'monthly-heading', label: m['monthly.sectionTitle']() },
+			{ id: 'costs-heading', label: m['costs.sectionTitle']() },
+			{ id: 'time-heading', label: m['time.projectSectionTitle']() }
+		);
+		return entries;
+	});
 	const managerIsSelect = $derived(
 		schema?.fields.some((field) => field.name === 'managerUserId' && field.type === 'select') ??
 			false
@@ -170,7 +218,11 @@
 <div class="page">
 	<PageHeader hideTitle title={m['projects.editTitle']({ resource: resource.label })} />
 
-	<div class="form-panel">
+	{#if schema && store && idValid}
+		<ProjectSummary projectId={parsedId} reloadKey={summaryKey} {toc} />
+	{/if}
+
+	<div class="form-panel" id="project-basic">
 		{#if isNotFound}
 			<EmptyState
 				title={m['cost.notFoundTitle']({ resource: resource.label })}
