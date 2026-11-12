@@ -91,10 +91,10 @@ use admin_template_core::work_masters::{
 use banto_core::{BantoError, FieldError, ListParams, ListResult};
 use banto_server::routes::{MetricsProbe, SystemInfo};
 use banto_server::{
-    bind as bind_listener, bind_with_port_fallback, bind_without_fallback, lan_urls_for_bind,
-    reach_check_router, static_router, with_security_headers, AuthState, BoundServer, GrantKind,
-    PortFallbackError, ReachCheckState, ReachCheckStatus, ReachIssue, ReachIssueError, ReachTarget,
-    RunningServer, ServerConfig, ServerEvent,
+    bind as bind_listener, bind_with_port_fallback, bind_without_fallback, lan_addrs_for_bind,
+    lan_urls_for_bind, reach_check_router, static_router, with_security_headers, AuthState,
+    BoundServer, GrantKind, PortFallbackError, ReachCheckState, ReachCheckStatus, ReachIssue,
+    ReachIssueError, ReachTarget, RunningServer, ServerConfig, ServerEvent,
 };
 use qrcode::render::svg;
 use qrcode::QrCode;
