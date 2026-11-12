@@ -384,7 +384,8 @@ pub struct LedgerProblem {
     pub source: String,
     /// The record's id in its own table.
     pub id: i64,
-    /// The projects the row names or allocates to (empty: none readable).
+    /// The projects of the record's chain (確定・調整 and their original):
+    /// the rows' projects and allocations (empty: none readable).
     pub project_ids: Vec<i64>,
     /// `unreadable` (a column could not be read: see `column`), a
     /// `cost_domain::ledger::LedgerIssue` code, or `related` (left out with
@@ -693,15 +694,47 @@ fn problems_of(
         .iter()
         .map(|(u, c)| (u.id.clone(), *c))
         .collect();
+    // A confirmation or adjustment may carry no project of its own: it
+    // lands where its original does. Each record therefore names the
+    // projects of its whole chain (its rows and their allocations), so a
+    // caller scoped to those projects sees the record that holds them back.
+    let mut links: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for r in rows {
+        if let Some(t) = r.2 {
+            links.entry(r.0).or_default().push(t);
+            links.entry(t).or_default().push(r.0);
+        }
+    }
+    let own = |id: i64| -> Vec<i64> {
+        let mut p: Vec<i64> = rows
+            .iter()
+            .filter(|r| r.0 == id)
+            .filter_map(|r| r.4)
+            .collect();
+        p.extend(allocs.iter().filter(|a| a.0 == id).map(|a| a.1));
+        p
+    };
+    let chain_projects = |start: i64| -> Vec<i64> {
+        let mut seen = std::collections::BTreeSet::from([start]);
+        let mut stack = vec![start];
+        while let Some(id) = stack.pop() {
+            for next in links.get(&id).into_iter().flatten() {
+                if seen.insert(*next) {
+                    stack.push(*next);
+                }
+            }
+        }
+        let mut p: Vec<i64> = seen.into_iter().flat_map(&own).collect();
+        p.sort_unstable();
+        p.dedup();
+        p
+    };
     let mut out: Vec<LedgerProblem> = rows
         .iter()
         .filter(|r| resolved.excluded.contains(&r.0.to_string()))
         .map(|r| {
             let key = r.0.to_string();
-            let mut project_ids: Vec<i64> = r.4.into_iter().collect();
-            project_ids.extend(allocs.iter().filter(|a| a.0 == r.0).map(|a| a.1));
-            project_ids.sort_unstable();
-            project_ids.dedup();
+            let project_ids = chain_projects(r.0);
             let (code, column) = match columns.get(&key) {
                 Some(c) => ("unreadable".to_string(), Some((*c).to_string())),
                 None => (
@@ -2808,6 +2841,59 @@ pub(crate) mod tests {
             assert_eq!(problems[0].id, 3);
             assert!(problems[0].project_ids.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn t39_an_unreadable_adjustment_without_a_project_is_shown_to_its_originals_scope() {
+        let db = fixture().await;
+        let svc = DirectCostsService::new(db.clone());
+        let a = ordered_project(&db, "P-D93").await;
+        let b = ordered_project(&db, "P-D94").await;
+        let original = approved(&svc, cost(a, "material", 100_000)).await;
+        approved(&svc, cost(b, "material", 50_000)).await;
+        let ret = approved(
+            &svc,
+            DirectCostInput {
+                entry_kind: Some("adjustment".into()),
+                adjustment_kind: Some("return".into()),
+                ref_id: Some(original.id),
+                booked_on: "2026-11-25".into(),
+                amount: 10_000,
+                reason: Some("返品".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        // The adjustment loses its own project and its date.
+        let sql = placeholders(
+            db.dialect(),
+            "UPDATE direct_costs SET project_id = NULL, booked_on = '2026-11-99' WHERE id = ?",
+        );
+        on_pool!(&db, pool => execute!(pool, sql, ret.id)).unwrap();
+
+        let ledger = svc.ledger().await.unwrap();
+        // Both records name A through the chain, and B is unaffected.
+        let ids: Vec<(i64, Vec<i64>)> = ledger
+            .problems()
+            .iter()
+            .map(|p| (p.id, p.project_ids.clone()))
+            .collect();
+        assert_eq!(ids, vec![(original.id, vec![a]), (ret.id, vec![a])]);
+        assert!(!ledger.is_clean(a) && ledger.is_clean(b));
+        // The error names the unreadable adjustment, not only the original.
+        let err = svc.project_costs(a).await.unwrap_err();
+        assert!(
+            matches!(&err, BantoError::Other(m) if m.contains(&format!("明細ID {}", ret.id))),
+            "{err:?}"
+        );
+        // A caller who sees only A's amounts sees both records.
+        let only_a = ProjectScope::Only([a].into());
+        let p = crate::portfolio::PortfolioService::new(db.clone())
+            .overview(&only_a, &only_a)
+            .await
+            .unwrap();
+        let listed: Vec<i64> = p.ledger_problems.iter().map(|p| p.id).collect();
+        assert_eq!(listed, vec![original.id, ret.id]);
     }
 
     #[tokio::test]
