@@ -29,7 +29,7 @@
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
-	import { runEach } from '#lib/banto/bulk.js';
+	import { failureReason, runEach } from '#lib/banto/bulk.js';
 	import CostApprovals from './CostApprovals.svelte';
 	import CorrectionApprovals from './CorrectionApprovals.svelte';
 	import { resolve } from '$app/paths';
@@ -119,12 +119,7 @@
 			);
 			if (result.done > 0) notify('success', m['approvals.approvedCount']({ count: result.done }));
 			if (result.failed > 0) {
-				const err = result.firstError;
-				const reason = isForbiddenError(err)
-					? m['approvals.forbidden']()
-					: isProviderError(err)
-						? err.message
-						: String(err);
+				const reason = failureReason(result.firstError, m['approvals.forbidden']());
 				notify('error', m['approvals.approveAllFailed']({ count: result.failed, reason }));
 			}
 		} finally {

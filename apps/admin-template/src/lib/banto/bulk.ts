@@ -5,6 +5,9 @@
  * a refused row does not stop the rest. Returns how many succeeded, how many
  * failed and the first failure (its message tells the user why).
  */
+import { isProviderError } from '@banto/admin-core';
+import { isForbiddenError } from './costFormat.js';
+
 export interface BulkResult {
 	done: number;
 	failed: number;
@@ -26,4 +29,20 @@ export async function runEach<T>(
 		}
 	}
 	return result;
+}
+
+/**
+ * Why a bulk row was refused, for the message: `forbidden` as the screen's
+ * own wording, a validation refusal as its field messages (the useful part,
+ * e.g. a closed month), otherwise the error's message.
+ */
+export function failureReason(err: unknown, forbidden: string): string {
+	if (isForbiddenError(err)) return forbidden;
+	if (isProviderError(err)) {
+		if (err.body.kind === 'validation' && err.body.field_errors.length > 0) {
+			return err.body.field_errors.map((e) => e.message).join(' / ');
+		}
+		return err.message;
+	}
+	return String(err);
 }

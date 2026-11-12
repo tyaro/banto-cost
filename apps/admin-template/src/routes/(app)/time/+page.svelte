@@ -53,7 +53,7 @@
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
-	import { runEach } from '#lib/banto/bulk.js';
+	import { failureReason, runEach } from '#lib/banto/bulk.js';
 	import TimeEntryForm from './TimeEntryForm.svelte';
 
 	const available = isPipelineAvailable();
@@ -261,7 +261,7 @@
 	function reportApproved(done: number, failed: number, firstError: unknown) {
 		if (done > 0) notify('success', m['time.submitApproved']({ count: done }));
 		if (failed > 0) {
-			const reason = isProviderError(firstError) ? firstError.message : String(firstError);
+			const reason = failureReason(firstError, m['approvals.forbidden']());
 			notify('error', m['time.submitApproveFailed']({ count: failed, reason }));
 		}
 	}

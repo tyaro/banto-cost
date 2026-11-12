@@ -18,7 +18,7 @@
 	import { decideCost, listCostApprovals, type DirectCost } from '#lib/banto/costsAdmin.js';
 	import { costTypeLabel } from '#lib/banto/budgetFormat.js';
 	import { kindLabel, signedAmount } from '#lib/banto/costsFormat.js';
-	import { runEach } from '#lib/banto/bulk.js';
+	import { failureReason, runEach } from '#lib/banto/bulk.js';
 
 	interface Props {
 		canWrite: boolean;
@@ -77,14 +77,6 @@
 		}
 	}
 
-	function reasonOf(err: unknown): string {
-		if (isForbiddenError(err)) return m['approvals.forbidden']();
-		if (isProviderError(err) && err.body.kind === 'validation') {
-			return err.body.field_errors.map((e) => e.message).join(' / ');
-		}
-		return isProviderError(err) ? err.message : String(err);
-	}
-
 	async function approveAll() {
 		if (busy || returning !== null || !costs || costs.length === 0) return;
 		const rows = costs;
@@ -100,7 +92,7 @@
 					'error',
 					m['approvals.approveAllFailed']({
 						count: result.failed,
-						reason: reasonOf(result.firstError)
+						reason: failureReason(result.firstError, m['approvals.forbidden']())
 					})
 				);
 			}
