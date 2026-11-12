@@ -5,7 +5,9 @@
 //! service (`time_entries`) stays free of callers and permissions
 //! (conventions §2).
 
-use banto_admin_services::authz::{sees_record_costs, Operation, Subject};
+use banto_admin_services::authz::{authorize, sees_record_costs, Operation, Subject};
+
+use crate::approval::APPROVAL_POLICY;
 
 use crate::time_entries::{CorrectionPair, TimeEntry, TimeEntrySaved};
 
@@ -49,6 +51,20 @@ pub fn shown(subject: &Subject, entry: TimeEntry) -> TimeEntry {
     } else {
         entry.without_costs()
     }
+}
+
+/// One of the caller's own entries for their list: [`shown`], and for a
+/// draft or returned entry (not a correction) whether the caller may approve
+/// it once submitted - the same decision the approval makes (`approve_op`
+/// with `APPROVAL_POLICY`), so 申請して承認 is offered only when it would
+/// pass (review U-2). The role check stays with the approval itself.
+pub fn shown_own(subject: &Subject, mut entry: TimeEntry) -> TimeEntry {
+    let editable = matches!(entry.status.as_str(), "draft" | "returned");
+    if editable && entry.corrects_id.is_none() {
+        let op = approve_op(&entry);
+        entry.can_approve = Some(authorize(subject, op, APPROVAL_POLICY).is_ok());
+    }
+    shown(subject, entry)
 }
 
 pub fn shown_pair(subject: &Subject, pair: CorrectionPair) -> CorrectionPair {

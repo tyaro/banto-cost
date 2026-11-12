@@ -126,6 +126,14 @@ pub struct TimeEntry {
     #[sqlx(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_missing: Option<bool>,
+    /// On the owner's list only: a draft or returned entry the owner may
+    /// also approve once submitted (`Approve` / `ApproveCommon` with the
+    /// company's approval policy), so the screen can offer 申請して承認
+    /// (review U-2). Set by the wiring (`time_access::shown_own`); absent
+    /// elsewhere. The approval itself is authorized again.
+    #[sqlx(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_approve: Option<bool>,
     pub row_version: i64,
     pub updated_at: String,
 }

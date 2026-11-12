@@ -8,7 +8,7 @@
 //! |-------|----------|
 //! | phases / activities list | `admin` role, or `ViewMasters` |
 //! | phases / activities create/update | `admin` role, or `EditMasters` |
-//! | own time entries list | `EnterCommonTime` (`time.entry`) |
+//! | own time entries list | `EnterCommonTime` (`time.entry`); drafts carry `canApprove` (the decide rule, `shown_own`) |
 //! | create / update | `EnterTime` on the project, or `EnterCommonTime`; own draft/returned only |
 //! | delete / submit | as above for the entry's target; own draft/returned only |
 //! | approvals list | scope `approval_projects`; activities with `finance.close` |
@@ -31,7 +31,7 @@ use banto_core::BantoError;
 use banto_server::AuthenticatedSession;
 
 use crate::approval::APPROVAL_POLICY;
-use crate::time_access::{approve_op, enter_op, shown, shown_pair, shown_saved};
+use crate::time_access::{approve_op, enter_op, shown, shown_own, shown_pair, shown_saved};
 use crate::time_entries::{
     CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntry, TimeEntryInput,
     TimeEntrySaved, VersionInput,
@@ -208,7 +208,9 @@ async fn entries_list(
         .time_entries
         .list_own(user_id, &query.from, &query.to)
         .await?;
-    Ok(Json(rows.into_iter().map(|e| shown(&subject, e)).collect()))
+    Ok(Json(
+        rows.into_iter().map(|e| shown_own(&subject, e)).collect(),
+    ))
 }
 
 async fn entries_create(
