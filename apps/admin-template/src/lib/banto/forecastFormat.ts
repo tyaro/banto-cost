@@ -25,7 +25,8 @@ const ALERTS: Record<string, () => string> = {
 	pending_addition: () => m['alerts.pendingAddition'](),
 	forecast_update_needed: () => m['alerts.forecastUpdateNeeded'](),
 	no_forecast: () => m['alerts.noForecast'](),
-	open_commitment: () => m['alerts.openCommitment']()
+	open_commitment: () => m['alerts.openCommitment'](),
+	ledger_review: () => m['alerts.ledgerReview']()
 };
 
 /** `cost_domain::alerts::Alert` code → label; an unknown code is shown as-is. */
@@ -35,7 +36,7 @@ export function alertLabel(code: string): string {
 
 /** Alerts that call for action first (red); the rest are cautions. */
 export function isSevereAlert(code: string): boolean {
-	return code === 'forecast_loss' || code === 'forecast_over_budget';
+	return code === 'forecast_loss' || code === 'forecast_over_budget' || code === 'ledger_review';
 }
 
 const REASONS: Record<string, () => string> = {
@@ -53,4 +54,41 @@ export function updateReasonLabel(code: string): string {
 export function forecastVersionLabel(versionNo: number | null): string {
 	if (versionNo === null) return m['forecast.draft']();
 	return m['forecast.version']({ no: versionNo });
+}
+
+const LEDGER_REASONS: Record<string, () => string> = {
+	invalid_amount: () => m['ledger.reason.invalidAmount'](),
+	duplicate_id: () => m['ledger.reason.duplicateId'](),
+	unknown_reference: () => m['ledger.reason.unknownReference'](),
+	invalid_target: () => m['ledger.reason.invalidTarget'](),
+	confirmed_twice: () => m['ledger.reason.confirmedTwice'](),
+	adjustment_exceeds_original: () => m['ledger.reason.adjustmentExceedsOriginal'](),
+	allocation_mismatch: () => m['ledger.reason.allocationMismatch'](),
+	allocation_of_invalid_source: () => m['ledger.reason.allocationOfInvalidSource'](),
+	unassigned: () => m['ledger.reason.unassigned'](),
+	related: () => m['ledger.reason.related']()
+};
+
+const LEDGER_COLUMNS: Record<string, () => string> = {
+	entry_kind: () => m['ledger.column.entryKind'](),
+	ref_id: () => m['ledger.column.refId'](),
+	adjustment_kind: () => m['ledger.column.adjustmentKind'](),
+	cost_type: () => m['ledger.column.costType'](),
+	booked_on: () => m['ledger.column.bookedOn']()
+};
+
+/** A record left out of the direct-cost ledger (T39): `明細ID 12` / `月額固定の計上ID 3`. */
+export function ledgerRecordLabel(p: { source: string; id: number }): string {
+	return p.source === 'fixed_cost'
+		? m['ledger.source.fixedCost']({ id: p.id })
+		: m['ledger.source.directCost']({ id: p.id });
+}
+
+/** Why the record was left out; an unknown code is shown as-is. */
+export function ledgerReasonLabel(p: { code: string; column: string | null }): string {
+	if (p.code === 'unreadable') {
+		const column = p.column ?? '';
+		return m['ledger.reason.unreadable']({ column: LEDGER_COLUMNS[column]?.() ?? column });
+	}
+	return LEDGER_REASONS[p.code]?.() ?? p.code;
 }

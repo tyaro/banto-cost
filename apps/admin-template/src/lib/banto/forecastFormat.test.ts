@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { alertLabel, formatPermille, isSevereAlert, updateReasonLabel } from './forecastFormat';
+import {
+	alertLabel,
+	formatPermille,
+	isSevereAlert,
+	ledgerReasonLabel,
+	ledgerRecordLabel,
+	updateReasonLabel
+} from './forecastFormat';
 
 describe('forecastFormat', () => {
 	it('shows permille as a one-decimal percentage, and null as not computable', () => {
@@ -17,5 +24,19 @@ describe('forecastFormat', () => {
 		expect(updateReasonLabel('actual_after_base')).not.toBe('actual_after_base');
 		expect(isSevereAlert('forecast_over_budget')).toBe(true);
 		expect(isSevereAlert('unapproved')).toBe(false);
+	});
+
+	it('labels a record left out of the direct-cost ledger (T39)', () => {
+		expect(alertLabel('ledger_review')).not.toBe('ledger_review');
+		expect(isSevereAlert('ledger_review')).toBe(true);
+		const direct = ledgerRecordLabel({ source: 'direct_cost', id: 12 });
+		const fixed = ledgerRecordLabel({ source: 'fixed_cost', id: 12 });
+		expect(direct).toContain('12');
+		expect(fixed).toContain('12');
+		expect(direct).not.toBe(fixed);
+		const unreadable = ledgerReasonLabel({ code: 'unreadable', column: 'booked_on' });
+		expect(unreadable).not.toContain('booked_on');
+		expect(ledgerReasonLabel({ code: 'related', column: null })).not.toBe('related');
+		expect(ledgerReasonLabel({ code: 'something_new', column: null })).toBe('something_new');
 	});
 });

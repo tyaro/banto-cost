@@ -180,12 +180,19 @@
 					{#if view.canClose}
 						<p class="note">{m['closing.ready']()}</p>
 					{:else}
-						<p class="alert" role="alert">
-							{m['closing.unapproved']({
-								timeEntries: view.unapprovedTimeEntries,
-								costs: view.unapprovedCosts
-							})}
-						</p>
+						{#if view.unapprovedTimeEntries > 0 || view.unapprovedCosts > 0}
+							<p class="alert" role="alert">
+								{m['closing.unapproved']({
+									timeEntries: view.unapprovedTimeEntries,
+									costs: view.unapprovedCosts
+								})}
+							</p>
+						{/if}
+						{#if view.ledgerReviewEntries > 0}
+							<p class="alert" role="alert" data-testid="closing-ledger-review">
+								{m['closing.ledgerReview']({ count: view.ledgerReviewEntries })}
+							</p>
+						{/if}
 					{/if}
 				{/if}
 				{#if view.warnings.length > 0}

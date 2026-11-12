@@ -45,7 +45,13 @@
 		saveCsv,
 		type CsvExport
 	} from '#lib/banto/reportsAdmin.js';
-	import { alertLabel, formatPermille, isSevereAlert } from '#lib/banto/forecastFormat.js';
+	import {
+		alertLabel,
+		formatPermille,
+		isSevereAlert,
+		ledgerReasonLabel,
+		ledgerRecordLabel
+	} from '#lib/banto/forecastFormat.js';
 	import type { Project } from '#lib/banto/resources/projects.js';
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
@@ -101,6 +107,11 @@
 		row.pf?.actualComplete === false ? m['forecast.provisionalShort']() : '';
 	const forecastMark = (row: Row) =>
 		row.pf?.forecastActualComplete === false ? m['forecast.provisionalShort']() : '';
+	/** A project's code for the ledger review list (its id if not listed). */
+	function projectCode(id: number): string {
+		return list.rows.find((p) => p.id === id)?.code ?? `#${id}`;
+	}
+
 	function amountColumn(
 		id: string,
 		header: string,
@@ -349,6 +360,31 @@
 		{:else if portfolioError}
 			<p class="note">{m['portfolio.loadError']()}</p>
 		{/if}
+		{#if portfolio && portfolio.ledgerProblems.length > 0}
+			<section
+				class="ledger-review"
+				role="alert"
+				aria-labelledby="ledger-review-title"
+				data-testid="ledger-review"
+			>
+				<h2 id="ledger-review-title">{m['portfolio.ledgerReviewTitle']()}</h2>
+				<p class="note">{m['portfolio.ledgerReviewNote']()}</p>
+				<ul>
+					{#each portfolio.ledgerProblems as p (`${p.source}-${p.id}`)}
+						<li>
+							{ledgerRecordLabel(p)}: {ledgerReasonLabel(p)}
+							{#if p.projectIds.length > 0}
+								<span class="note"
+									>{m['portfolio.ledgerProblemProjects']({
+										codes: p.projectIds.map(projectCode).join(', ')
+									})}</span
+								>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			</section>
+		{/if}
 		{#if isPipelineAvailable()}
 			<section class="exports" aria-label={m['reports.title']()}>
 				<button
@@ -454,6 +490,31 @@
 
 	.alerts li.severe {
 		color: var(--banto-danger);
+	}
+
+	.ledger-review {
+		display: flex;
+		flex-direction: column;
+		gap: var(--banto-space-2);
+		border: var(--banto-border-width) solid var(--banto-danger);
+		border-radius: var(--banto-radius-lg);
+		background: var(--banto-danger-tint);
+		color: var(--banto-danger-tint-text);
+		padding: var(--banto-space-3);
+	}
+
+	.ledger-review h2 {
+		margin: 0;
+		font-size: var(--banto-font-size-base);
+	}
+
+	.ledger-review .note {
+		color: inherit;
+	}
+
+	.ledger-review ul {
+		margin: 0;
+		padding-left: var(--banto-space-4);
 	}
 
 	/* BantoGrid virtualizes, so it needs a definite height (component shape). */

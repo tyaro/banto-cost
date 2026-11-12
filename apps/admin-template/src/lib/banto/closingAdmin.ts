@@ -63,6 +63,8 @@ export interface MonthClosing {
 	rowVersion: number;
 	unapprovedTimeEntries: number;
 	unapprovedCosts: number;
+	/** Direct-cost records left out of the ledger for review (T39). */
+	ledgerReviewEntries: number;
 	canClose: boolean;
 	warnings: { code: WarningCode; count: number }[];
 	total: Figures;
