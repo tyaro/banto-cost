@@ -12,7 +12,13 @@
 	 */
 	import { page } from '$app/state';
 	import * as m from '#lib/paraglide/messages.js';
-	import { isPathActive, navSections, resolveAppPath, type AppPath } from '#lib/navigation.js';
+	import {
+		isPathActive,
+		navGroups,
+		navSections,
+		resolveAppPath,
+		type AppPath
+	} from '#lib/navigation.js';
 	import { NAV_ICONS } from './navIcons';
 	import { navBadges } from '#lib/navBadges.svelte.js';
 	import { settings } from '#lib/settings.svelte.js';
@@ -36,7 +42,8 @@
 	const sections = $derived(
 		navSections({ publicViewer: sessionStore.publicViewer, role: sessionStore.role })
 	);
-	const mainItems = $derived(sections.main);
+	// banto-cost: the main entries under their work-order headings (review D-3).
+	const mainGroups = $derived(navGroups(sections.main));
 	const adminItems = $derived(sections.admin);
 
 	const foldLabel = $derived(
@@ -84,24 +91,37 @@
 	</div>
 
 	<nav class="nav-section" aria-label={m['shell.mainNav']()}>
-		{#each mainItems as item (item.path)}
-			{@const Icon = NAV_ICONS[item.icon]}
-			{@const badgeCount = navBadges.count(item.path)}
-			<a
-				href={resolveAppPath(item.path)}
-				class="nav-item"
-				class:active={isActive(item.path)}
-				aria-current={isActive(item.path) ? 'page' : undefined}
-				title={settings.sidebarCollapsed ? m[item.labelKey]() : undefined}
+		{#each mainGroups as group, gi (gi)}
+			<div
+				class="nav-group"
+				role={group.group ? 'group' : undefined}
+				aria-label={group.group ? m[group.group]() : undefined}
 			>
-				<span class="icon"><Icon size={20} aria-hidden="true" /></span>
-				<span class="label">{m[item.labelKey]()}</span>
-				{#if badgeCount > 0}
-					<span class="nav-badge" aria-label={m['shell.navUpdates']({ count: badgeCount })}
-						>{badgeText(badgeCount)}</span
-					>
+				{#if group.group}
+					<p class="section-heading" aria-hidden="true">{m[group.group]()}</p>
+				{:else if gi > 0}
+					<div class="group-divider"></div>
 				{/if}
-			</a>
+				{#each group.items as item (item.path)}
+					{@const Icon = NAV_ICONS[item.icon]}
+					{@const badgeCount = navBadges.count(item.path)}
+					<a
+						href={resolveAppPath(item.path)}
+						class="nav-item"
+						class:active={isActive(item.path)}
+						aria-current={isActive(item.path) ? 'page' : undefined}
+						title={settings.sidebarCollapsed ? m[item.labelKey]() : undefined}
+					>
+						<span class="icon"><Icon size={20} aria-hidden="true" /></span>
+						<span class="label">{m[item.labelKey]()}</span>
+						{#if badgeCount > 0}
+							<span class="nav-badge" aria-label={m['shell.navUpdates']({ count: badgeCount })}
+								>{badgeText(badgeCount)}</span
+							>
+						{/if}
+					</a>
+				{/each}
+			</div>
 		{/each}
 	</nav>
 
@@ -235,6 +255,18 @@
 		flex-direction: column;
 		padding: var(--banto-space-2);
 		gap: 2px;
+	}
+
+	.nav-group {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.group-divider {
+		height: 1px;
+		margin: var(--banto-space-2) var(--banto-space-2);
+		background: var(--banto-border);
 	}
 
 	.section-divider {

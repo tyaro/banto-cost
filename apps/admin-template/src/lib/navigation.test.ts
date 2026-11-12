@@ -14,7 +14,14 @@ vi.mock('$app/paths', () => ({
 	resolve: (path: string) => `${state.base}/${path}`
 }));
 
-import { isPathActive, navItems, navSections, pageTitle, type AppPath } from './navigation';
+import {
+	isPathActive,
+	navGroups,
+	navItems,
+	navSections,
+	pageTitle,
+	type AppPath
+} from './navigation';
 import { navBadges } from './navBadges.svelte';
 import * as m from '#lib/paraglide/messages.js';
 
@@ -138,5 +145,31 @@ describe('navSections', () => {
 				false
 			);
 		}
+	});
+});
+
+// banto-cost review D-3: the sidebar lists the business screens under headings in work order.
+describe('navGroups', () => {
+	it('splits the main entries into runs of the same heading, in order', () => {
+		const { main } = navSections({ publicViewer: false, role: 'admin' });
+		const groups = navGroups(main);
+		expect(groups.flatMap((g) => g.items)).toEqual(main);
+		expect(groups.map((g) => g.group)).toEqual([
+			undefined,
+			'nav.groupSales',
+			'nav.groupProjects',
+			'nav.groupDaily',
+			'nav.groupMonthly',
+			'nav.groupBasis',
+			undefined
+		]);
+		expect(groups[3].items.map((i) => i.path)).toEqual(['/time', '/costs', '/approvals']);
+	});
+
+	it('gives one heading at most one run', () => {
+		const keys = navGroups(navItems)
+			.map((g) => g.group)
+			.filter((g) => g !== undefined);
+		expect(new Set(keys).size).toBe(keys.length);
 	});
 });
