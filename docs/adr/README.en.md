@@ -76,6 +76,7 @@ corresponding ADR exists, be traced from there.
 | [0026](0026-shared-boolean-controls.en.md)             | Share switch and native checkbox styling                                                                                                                                                                 | Accepted                   |
 | [0027](0027-grid-error-reader.en.md)                   | Read cell errors in a local overlay and separate reading from retrying                                                                                                                                   | Accepted                   |
 | [0028](0028-capability-project-scope-authz.en.md)      | Decide business permissions by capabilities and project scope, separately from roles, with the decision and denial audit in one function (banto-cost)                                                    | Accepted                   |
+| [0029](0029-chrono-datetime-formatting.en.md)          | Format dates and times in one place in `banto-core` with `chrono` (no features) (exception to ADR-0002)                                                                                                  | Accepted                   |
 
 ## ADR candidates (unstarted; do not backfill)
 

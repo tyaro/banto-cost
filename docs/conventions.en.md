@@ -158,7 +158,7 @@ implementation:
 
 | Dependency you might want | Instead | Where it is implemented |
 |---|---|---|
-| `chrono` / `time` | hand-written date conversion | `iso_datetime_from_system_time` / `compact_stamp` in `backup.rs`. Howard Hinnant's `civil_from_days` is ported in three places (`banto-attachments`, `backup.rs`, the app's `core/src/db.rs`; if a fourth appears, decide on consolidating into `banto-core`) |
+| `chrono` / `time` | Exception ([ADR-0029](adr/0029-chrono-datetime-formatting.en.md)) | Turning dates and times into text (`SystemTime` / days since the epoch -> `YYYY-MM-DD` etc.) is done in one place, `banto-core::datetime`, with `chrono` (`default-features = false`); `banto-attachments`, `banto-admin-services` (backup, audit) and the app's `core/src/db.rs` call it (no hand-written `civil_from_days` remains). `compact_stamp` stays plain string handling. Only reading the local date makes the app core add the `clock` feature ([ADR-0028](adr/0028-chrono-local-date.en.md)) |
 | MIME detection library | magic-byte detection | `banto-attachments` `detect_mime` (see §6 below) |
 | `multipart` | raw byte body + `?fileName=` query | uploads in `banto-server` `routes/backups.rs` · app `rest/attachments.rs` |
 | `tower-http` | hand-written `axum::middleware::from_fn` | `security_headers.rs` / `csrf.rs` |
@@ -325,6 +325,10 @@ without a runtime guard are **upheld by reviewing every call site**.
   grid's client sort keeps the order of the array it was given). One fixture,
   `crates/banto-storage/testdata/list-order-parity.json`, is read by all three
   test suites - change the fixture and all three together.
+  **The `between` filter (the half-open `[from, to)` compared as text,
+  date-time-pickers §5.9) is shared by the same three implementations**: one
+  fixture, `crates/banto-storage/testdata/filter-between-parity.json`, is read
+  by the SQL (SQLite and PostgreSQL), InMemory and grid client-filter tests.
   **Lists with a boundary (`asOfId`)** (Issue #248,
   [ADR-0015](adr/0015-snapshot-list-resource.en.md)): a list whose rows come
   and go without change events (the audit log) is read with
@@ -494,7 +498,7 @@ Traps that are easy to fall into in `@banto/*` components.
   superseded result and revoke its URL) is a hand-written instance of this
   contract and is not replaced.
 
-## 9. Theme tokens only; raw values consolidated in the theme [machine-checked: color values in packages only]
+## 9. Theme tokens only; raw values consolidated in the theme [machine-checked: color values in packages; font sizes and border widths in packages and admin-template]
 
 UI CSS uses only `var(--banto-*)` tokens and **does not write raw values of
 color or dimension into components**. Raw values are consolidated in
@@ -505,6 +509,26 @@ values in the app layer (`apps/admin-template/src`) are tolerated **only as
 deliberate exceptions with a justification comment** (existing examples: the
 login brand pane, the static theme-preview swatches; never write a raw value
 without a reason comment).
+
+**Font sizes and border widths are machine-checked** (rule `raw-dimensions`,
+theme-dimension-tokens.md §7 D8; dimension tokens are described in the Japanese
+original of this section). In `<style>` blocks of `.svelte` files and in `.css`
+files under `packages/*/src` and `apps/admin-template/src`, `font-size` / `font`
+and `border`, `border-*` (including `-width`), `outline` and `outline-width`
+must not carry raw absolute values (`px`, `rem`, `pt`, `mm`, `vw`, …, or keywords
+such as `small` / `thin`). Allowed: `0`, `none`, `inherit` and other keywords,
+relative values (`em`, `%`), `var(--banto-*)` (with its fallback), `calc()` /
+`min()` / `max()` / `clamp()` that use a `--banto-*` token, and `3px` / `4px` on
+`border` properties (accent edges are part of the component's shape; not for
+`outline`). Non-width properties (`border-radius`, `border-color`,
+`border-style`, `border-collapse`, `outline-offset`, …), spacing (not checked:
+too many false positives) and shapes (`width` / `height`) are out of scope. The
+matcher is `scripts/lib/raw-dimensions.mjs`, with examples in
+`scripts/raw-dimensions.test.mjs`. Exceptions: write a reason comment next to the
+declaration and add "file → allowed values" with the reason to
+`RAW_DIMENSION_ALLOWLIST` in `scripts/verify-architecture.mjs` (same style as
+rule 5). Keep the list small; an allowed value that no longer occurs fails the
+check, so remove the entry then.
 
 ## 10. 3-way provider branching + demo explicitly refuses
 
@@ -529,7 +553,7 @@ ordinary sessions.
 
 ## 11. The migration style
 
-- Sequentially-numbered file names (`0001_items.sql` … `0008_audit_log_pending_id.sql`)
+- Sequentially-numbered file names (`0001_items.sql` … `0024_recurring_revenue.sql`)
   are embedded and run by `sqlx::migrate!`. Since V2 "full PostgreSQL support
   for the app," they branch into two lines per dialect:
   `apps/admin-template/core/migrations-sqlite/` (the existing DDL kept

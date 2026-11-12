@@ -337,6 +337,6 @@ flowchart LR
 
 開発の状態・文書・計算規則・開発環境は [docs/project/development.md](docs/project/development.md) にまとめています。仕様は [docs/project/spec.md](docs/project/spec.md)、設計案は [docs/project/design.md](docs/project/design.md) です。
 
-本アプリは [Banto](https://github.com/tyaro/banto) v6.10.0 をコピーして作成しています（`standard` プリセット）。個人用の Banto Business とはアプリ・業務データを分けています。
+本アプリは [Banto](https://github.com/tyaro/banto) v6.10.0 をコピーして作成し（`standard` プリセット）、v7.0.0 の変更を取り込んでいます。個人用の Banto Business とはアプリ・業務データを分けています。
 
 会社の実データ（Excel の売上一覧・収支計算・外注請求・作業報告など）はリポジトリに入れません。`private/` と `*.xlsx` 等は `.gitignore` 済みです。説明書の画面画像も架空のデータで撮影しています（撮り直しの手順は [docs/assets/manual/README.md](docs/assets/manual/README.md)）。

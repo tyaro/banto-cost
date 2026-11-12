@@ -127,8 +127,9 @@ minimal|standard|full|display` (`--interactive` / `--dry-run` available; the man
 2. **The service layer knows nothing of tauri/axum/RBAC/HTTP** (Clone +
    BantoError + sqlx). Authorization and audit are attached by the wiring
    layer.
-3. **Do not add dependencies** (chrono/time/tower-http/multipart/tracing/markdown,
-   etc. are hand-implemented). If you want to pull one in, discuss it as a
+3. **Do not add dependencies** (tower-http/multipart/tracing/markdown,
+   etc. are hand-implemented; `chrono` is allowed only for date/time-to-text
+   conversion, [ADR-0029](docs/adr/0029-chrono-datetime-formatting.en.md)). If you want to pull one in, discuss it as a
    design decision.
 4. **No reverse dependency from core → options.** When an option is bundled,
    document its removal procedure.

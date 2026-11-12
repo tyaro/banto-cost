@@ -74,6 +74,7 @@ conventions.md の各不変条件の背後にある判断は、対応する ADR 
 | [0026](0026-shared-boolean-controls.md)             | スイッチとネイティブ checkbox のスタイルを共有する                                                                                                                                              | Accepted                   |
 | [0027](0027-grid-error-reader.md)                   | セルエラーを局所オーバーレイで読み、参照と再試行を分ける                                                                                                                                        | Accepted                   |
 | [0028](0028-capability-project-scope-authz.md)      | 業務の権限をロールとは別に能力と案件範囲で判定し、判定と拒否の監査を一つの関数に集める（banto-cost）                                                                                            | Accepted                   |
+| [0029](0029-chrono-datetime-formatting.md)          | 日時の文字列変換は `banto-core` の 1 か所で `chrono`（feature なし）を使う（ADR-0002 の例外）                                                                                                   | Accepted                   |
 
 ## ADR 化候補（未着手・バックフィルはしない）
 

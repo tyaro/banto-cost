@@ -110,7 +110,8 @@ Banto（番頭）は **PC1台から始めて、必要に応じて LAN 内へ共�
 1. mutating 操作は **REST と Tauri の両経路で同一の認可 + 同一の監査**を通す。
 2. **サービス層は tauri/axum/RBAC/HTTP 非依存**（Clone + BantoError + sqlx）。認可・監査は
    wiring 層が付ける。
-3. **依存を足さない**（chrono/time/tower-http/multipart/tracing/markdown 等は自前実装）。
+3. **依存を足さない**（tower-http/multipart/tracing/markdown 等は自前実装。`chrono` は日時の文字列変換のみ
+   [ADR-0029](docs/adr/0029-chrono-datetime-formatting.md) の例外）。
    引きたくなったら設計判断として議論。
 4. **コア → オプションの逆依存禁止**。オプション同梱時は削除手順を明文化。
 5. セキュリティ: MIME はマジックバイト判定・**ファイルパスにユーザー入力を使わない**・
