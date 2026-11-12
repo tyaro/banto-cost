@@ -10,6 +10,7 @@
 	import { resolve } from '$app/paths';
 	import { BantoForm, UnsavedChangesNotice, createFormStore, type FormStore } from '@banto/forms';
 	import type { FormSchema } from '@banto/forms';
+	import type { Project } from '#lib/banto/resources/projects.js';
 	import { createFormResource, getResource } from '@banto/admin-core';
 	import * as m from '#lib/paraglide/messages.js';
 	import { formValidationMessages } from '#lib/banto/i18n.js';
@@ -21,7 +22,7 @@
 	import { PageHeader, LoadingState } from '@banto/ui';
 
 	const resource = getResource('projects');
-	const formResource = createFormResource('projects');
+	const formResource = createFormResource<Project>('projects');
 
 	// `.raw`: the schema carries lazy label getters a deep proxy would not need.
 	let schema = $state.raw<FormSchema | null>(null);
@@ -53,7 +54,8 @@
 		const result = await formResource.submit(values);
 		if (result.ok) {
 			store.markClean();
-			if (guard.canAutoNavigate) goto(resolve(`projects`));
+			// On to the new project, where its pipeline is entered next (review D-2).
+			if (guard.canAutoNavigate) goto(resolve(`projects/${result.row.id}`));
 		} else {
 			store.setServerErrors(result.fieldErrors);
 			formErrors = unmatchedFieldErrors(
