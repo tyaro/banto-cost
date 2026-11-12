@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-	attentionProjectIds,
-	currentAndNextMonth,
-	monthOf,
-	outlookMonthTotal
-} from './dashboardSummary';
+import { attentionProjectIds, currentAndNextMonth, outlookMonthTotal } from './dashboardSummary';
 import type { OverviewRow, PipelineOverview } from './pipelineAdmin';
 import type { OutlookFigures, OutlookView } from './ordersAdmin';
 
@@ -69,22 +64,21 @@ function outlook(partial: Partial<OutlookView>): OutlookView {
 
 describe('currentAndNextMonth', () => {
 	it('returns this month and next month as YYYY-MM', () => {
-		expect(currentAndNextMonth(new Date(2026, 10, 6))).toEqual({
+		expect(currentAndNextMonth('2026-11-06')).toEqual({
 			current: '2026-11',
 			next: '2026-12'
 		});
 	});
 
 	it('crosses the year end', () => {
-		expect(currentAndNextMonth(new Date(2026, 11, 31))).toEqual({
+		expect(currentAndNextMonth('2026-12-31')).toEqual({
 			current: '2026-12',
 			next: '2027-01'
 		});
 	});
 
 	it('does not skip a month from the 31st', () => {
-		expect(monthOf(new Date(2027, 0, 31))).toBe('2027-01');
-		expect(currentAndNextMonth(new Date(2027, 0, 31)).next).toBe('2027-02');
+		expect(currentAndNextMonth('2027-01-31')).toEqual({ current: '2027-01', next: '2027-02' });
 	});
 });
 

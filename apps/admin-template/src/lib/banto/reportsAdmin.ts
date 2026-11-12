@@ -116,13 +116,3 @@ export function saveCsv(csv: CsvExport): void {
 		URL.revokeObjectURL(url);
 	}
 }
-
-/**
- * The fiscal period of a date (6月開始、第13期 = 2026年6月〜2027年5月, design
- * 10.1), as `cost_domain::FiscalCalendar::COMPANY_DEFAULT`.
- */
-export function periodOf(date: Date): number {
-	const y = date.getFullYear();
-	const startYear = date.getMonth() + 1 >= 6 ? y : y - 1;
-	return 13 + (startYear - 2026);
-}

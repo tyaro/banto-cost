@@ -11,6 +11,7 @@
 	 * amount.view; closed months and settled projects refuse); this page only
 	 * shows the state.
 	 */
+	import PeriodHint from '#lib/components/PeriodHint.svelte';
 	import { getDataProvider, isProviderError, notify } from '@banto/admin-core';
 	import { resolve } from '$app/paths';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
@@ -33,7 +34,7 @@
 	import { listMasters, type WorkMaster } from '#lib/banto/timeAdmin.js';
 	import { listUserNames, userNameOptions } from '#lib/banto/userNames.js';
 	import type { Project } from '#lib/banto/resources/projects.js';
-	import { formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
+	import { formatYen, isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 
@@ -52,7 +53,7 @@
 	let vendors = $state<Option[]>([]);
 	let users = $state<Option[] | null>(null);
 
-	let month = $state(currentMonth(new Date()));
+	let month = $state(currentMonth(todayIso()));
 	let view = $state<FixedCostMonth | null>(null);
 	let busy = $state(false);
 
@@ -62,7 +63,7 @@
 		userId: null,
 		vendorId: null,
 		monthlyAmount: null,
-		fromMonth: currentMonth(new Date()),
+		fromMonth: currentMonth(todayIso()),
 		toMonth: null,
 		description: null
 	});
@@ -284,7 +285,7 @@
 				}}
 			>
 				<label class="field">
-					<span>{m['closing.month']()}</span>
+					<span>{m['closing.month']()}<PeriodHint {month} /></span>
 					<input class="banto-input" type="month" placeholder="YYYY-MM" bind:value={month} />
 				</label>
 				<button type="submit" class="banto-btn banto-btn--secondary">{m['closing.show']()}</button>
@@ -466,12 +467,12 @@
 							>{/if}
 					</label>
 					<label class="field">
-						<span>{m['fixedCosts.fromMonth']()}</span>
+						<span>{m['fixedCosts.fromMonth']()}<PeriodHint month={form.fromMonth} /></span>
 						<input class="banto-input" type="month" bind:value={form.fromMonth} />
 						{#if fieldErrors.fromMonth}<small class="error">{fieldErrors.fromMonth}</small>{/if}
 					</label>
 					<label class="field">
-						<span>{m['fixedCosts.toMonth']()}</span>
+						<span>{m['fixedCosts.toMonth']()}<PeriodHint month={form.toMonth} /></span>
 						<input
 							class="banto-input"
 							type="month"

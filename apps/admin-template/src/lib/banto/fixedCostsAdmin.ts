@@ -158,7 +158,7 @@ export function termLabel(c: Pick<FixedCostContract, 'fromMonth' | 'toMonth'>): 
 	return `${c.fromMonth}〜${c.toMonth ?? ''}`;
 }
 
-/** This month (`YYYY-MM`), the usual one to post. */
-export function currentMonth(today: Date): string {
-	return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+/** This month (`YYYY-MM`) of a business date (`YYYY-MM-DD`), the usual one to post. */
+export function currentMonth(today: string): string {
+	return today.slice(0, 7);
 }

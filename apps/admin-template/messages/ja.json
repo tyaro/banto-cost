@@ -934,6 +934,7 @@
   "outlook.description": "月ごとの計上済み売上・受注済み売上予定・未受注の売上見込（確度加重）。受注予定月の集計とは足し合わせません。",
   "outlook.from": "開始月",
   "outlook.to": "終了月",
+  "outlook.thisPeriod": "今期",
   "outlook.show": "表示",
   "outlook.live": "現在の見通し",
   "outlook.compare": "比較するスナップショット",

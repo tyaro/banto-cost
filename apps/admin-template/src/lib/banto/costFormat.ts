@@ -7,6 +7,7 @@
  */
 import { isProviderError } from '@banto/admin-core';
 import * as m from '#lib/paraglide/messages.js';
+import { businessToday } from './businessCalendar.svelte';
 
 /** True when `err` is the server refusing the caller's capability / project scope (design 第2章). */
 export function isForbiddenError(err: unknown): boolean {
@@ -124,12 +125,12 @@ export function unmatchedFieldErrors(
 	return fieldErrors.filter((e) => !fieldNames.includes(e.field)).map((e) => e.message);
 }
 
-/** Today's local date as `YYYY-MM-DD` (the calc basis is read "as of" a day). */
+/**
+ * Today's business date as `YYYY-MM-DD` (Asia/Tokyo from the server's
+ * calendar, P8d; the device's local date until it is loaded or in demo mode).
+ */
 export function todayIso(now: Date = new Date()): string {
-	const y = now.getFullYear();
-	const mo = String(now.getMonth() + 1).padStart(2, '0');
-	const d = String(now.getDate()).padStart(2, '0');
-	return `${y}-${mo}-${d}`;
+	return businessToday(now.getTime());
 }
 
 const CALC_ITEM_LABELS: Record<string, () => string> = {

@@ -38,10 +38,10 @@
 	import { formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
 	import { getPortfolio, type Portfolio, type PortfolioRow } from '#lib/banto/forecastAdmin.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
+	import { businessCalendar, currentPeriod } from '#lib/banto/businessCalendar.svelte.js';
 	import {
 		exportPeriodMonthly,
 		exportPortfolio,
-		periodOf,
 		saveCsv,
 		type CsvExport
 	} from '#lib/banto/reportsAdmin.js';
@@ -231,8 +231,15 @@
 
 	const forbidden = $derived(isForbiddenError(list.error));
 
-	// CSV (P6c). The period defaults to the current one (6月開始).
-	let period = $state(String(periodOf(new Date())));
+	// CSV (P6c). The period defaults to the current one (6月開始), from the
+	// server's calendar (P8d); the choices show each period's months.
+	let period = $state(String(currentPeriod() ?? ''));
+	const periodChoices = $derived(businessCalendar()?.periods ?? []);
+	// The calendar can arrive after the page opened (the layout waits only so
+	// long): fill in the current period then, unless one was already chosen.
+	$effect(() => {
+		if (businessCalendar() && period === '') period = String(currentPeriod() ?? '');
+	});
 	let exporting = $state(false);
 	async function runExport(make: () => Promise<CsvExport>) {
 		exporting = true;
@@ -354,7 +361,15 @@
 				</button>
 				<label class="period">
 					<span>{m['reports.period']()}</span>
-					<input class="banto-input" type="number" min="1" max="999" bind:value={period} />
+					{#if periodChoices.length > 0}
+						<select class="banto-input" bind:value={period}>
+							{#each periodChoices as choice (choice.period)}
+								<option value={String(choice.period)}>{choice.label}</option>
+							{/each}
+						</select>
+					{:else}
+						<input class="banto-input" type="number" min="1" max="999" bind:value={period} />
+					{/if}
 				</label>
 				<button
 					type="button"

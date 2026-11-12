@@ -10,6 +10,7 @@ import * as m from '#lib/paraglide/messages.js';
 import { isBantoReady } from '#lib/banto/setup.js';
 import { deferUntilStarted } from '#lib/banto/startupGate.js';
 import { syncLocaleFromProvider } from '#lib/banto/locale.js';
+import { loadBusinessCalendar } from '#lib/banto/businessCalendar.svelte.js';
 import { settings } from '#lib/settings.svelte.js';
 import { isPathActive, publicNavItems, resolveAppPath } from '#lib/navigation.js';
 
@@ -86,6 +87,10 @@ export async function load({ url }) {
 	// rides the same path with its own key.
 	void settings.syncFromProvider();
 	void syncLocaleFromProvider();
+	// P8d: today's business date and the fiscal periods, once per app run
+	// (cached; a failure falls back to the device date without periods). The
+	// pages read them while they set their default months.
+	if (snapshot.kind !== 'publicViewer') await loadBusinessCalendar();
 
 	// The generation THIS load confirmed (I-16) - never a `snapshot.generation`
 	// read now: after the awaits above another session may already have been

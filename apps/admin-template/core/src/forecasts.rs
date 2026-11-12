@@ -542,17 +542,6 @@ impl ForecastsService {
         now_expr(self.db.dialect())
     }
 
-    /// The business date today (Asia/Tokyo is the server's local time).
-    pub(crate) async fn today(&self) -> Result<Date, BantoError> {
-        let sql = match self.db.dialect() {
-            Dialect::Sqlite => "SELECT date('now','localtime')",
-            Dialect::Postgres => "SELECT CURRENT_DATE::text",
-        }
-        .to_string();
-        let today: String = on_pool!(&self.db, pool => scalar!(pool, sql))?;
-        Date::parse(&today).ok_or_else(|| BantoError::Other(format!("不明な日付です: {today}")))
-    }
-
     async fn project(
         &self,
         project_id: i64,
@@ -954,7 +943,7 @@ impl ForecastsService {
                 replayed: true,
             });
         }
-        let today = self.today().await?.to_string();
+        let today = crate::business_date::today().to_string();
         let (_, project_end) = self.project(project_id).await?;
         let latest = self.latest_adopted(project_id).await?;
         let planned_end = latest.as_ref().and_then(|l| l.2.clone()).or(project_end);
@@ -1098,7 +1087,7 @@ impl ForecastsService {
         }
         validation(errors)?;
         let base = base.expect("checked above");
-        let today = self.today().await?;
+        let today = crate::business_date::today();
         let previous = self.previous_base(draft.project_id).await?;
         check_base_date(base, today, previous).map_err(|issues| BantoError::Validation {
             field_errors: issues.iter().map(adoption_error).collect(),
@@ -1170,7 +1159,7 @@ impl ForecastsService {
         let (status, _) = self.project(project_id).await?;
         let base = Date::parse(&draft.base_date)
             .ok_or_else(|| BantoError::Other(format!("不明な基準日です: {}", draft.base_date)))?;
-        let today = self.today().await?;
+        let today = crate::business_date::today();
         let previous = self.previous_base(project_id).await?;
         let inputs: Vec<RemainingInput> = draft
             .inputs
@@ -1400,7 +1389,7 @@ impl ForecastsService {
         let current_profit = latest_cost.map(|c| profit(order, c));
         let current_total = budget.current.as_ref().and_then(|b| b.total);
         let (target_margin_pct, target_margin_on) =
-            target_margin(&self.db, project_id, self.today().await?).await?;
+            target_margin(&self.db, project_id, crate::business_date::today()).await?;
         let funds = funds(order, target_margin_pct);
         Ok(ForecastOverview {
             project_id,

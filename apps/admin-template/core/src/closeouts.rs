@@ -654,7 +654,7 @@ impl CloseoutsService {
             }
         })?;
 
-        let today = ForecastsService::new(self.db.clone()).today().await?;
+        let today = crate::business_date::today();
         let settled_on = today.to_string();
         let now = now_expr(self.db.dialect());
         let guard = self.sql(&format!(
@@ -736,7 +736,7 @@ impl CloseoutsService {
                 )],
             });
         }
-        let today = ForecastsService::new(self.db.clone()).today().await?;
+        let today = crate::business_date::today();
         let reopened_on = today.to_string();
         let now = now_expr(self.db.dialect());
         let guard = self.sql(&format!(

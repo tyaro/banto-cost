@@ -10,6 +10,7 @@
 //! | project monthly figures / its CSV | `ViewProjectAmounts` |
 //! | overall list CSV | rows: `admin` all, others `visible_projects`; amounts and alerts: `amount_projects` (as `/api/portfolio`) |
 //! | period monthly CSV | `amount_projects` |
+//! | business calendar (today, periods) | any signed-in role (no amounts, no names) |
 //!
 //! Each CSV is returned as JSON (`CsvExport`: file name and content) so the
 //! browser and the Tauri webview save it the same way. An export is audited
@@ -23,7 +24,14 @@ use axum::Extension;
 use banto_admin_services::authz::{amount_projects, visible_projects, Operation, ProjectScope};
 use banto_server::AuthenticatedSession;
 
+use crate::business_date::{calendar, BusinessCalendar};
 use crate::reports::{CsvExport, PeriodQuery, ProjectMonthly, RESOURCE};
+
+/// The business date and the fiscal periods (P8d). Company-wide facts with no
+/// amounts or names, so any signed-in role reads them.
+async fn business_calendar() -> Json<BusinessCalendar> {
+    Json(calendar())
+}
 
 async fn project_monthly(
     State(state): State<BusinessState>,
@@ -134,6 +142,7 @@ pub(super) fn reports_router(
         .route("/api/projects/{id}/monthly.csv", get(project_monthly_csv))
         .route("/api/reports/portfolio.csv", get(portfolio_csv))
         .route("/api/reports/period-monthly.csv", get(period_monthly_csv))
+        .route("/api/calendar", get(business_calendar))
         .with_state(super::projects::state(services, audit, auth.clone()))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }

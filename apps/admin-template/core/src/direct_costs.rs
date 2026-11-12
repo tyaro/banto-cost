@@ -52,7 +52,7 @@ use cost_domain::ledger::{
 };
 use cost_domain::purchase::PurchaseError;
 use cost_domain::time::TimeStatus;
-use cost_domain::{Date, FiscalCalendar};
+use cost_domain::Date;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
@@ -1833,7 +1833,7 @@ impl DirectCostsService {
         let ledger = self.ledger().await?;
         let postings = ledger.all().to_vec();
         let key = project_id.to_string();
-        let cal = FiscalCalendar::COMPANY_DEFAULT;
+        let cal = crate::business_date::FISCAL;
         let summary = ledger::summarize(&postings, &key, &cal);
         let by_type = |b: &cost_domain::forecast::ByCostType| -> Vec<CostTypeAmount> {
             DIRECT_TYPES

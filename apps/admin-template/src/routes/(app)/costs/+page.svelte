@@ -13,6 +13,7 @@
 	 * 詳細 → 直接費. The server decides every entry (the project scope, the
 	 * order's remainder). Demo mode has no backend.
 	 */
+	import { monthWithPeriod } from '#lib/banto/businessCalendar.svelte.js';
 	import { getDataProvider, isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState, StatusBadge } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
@@ -205,7 +206,7 @@
 			<button type="button" class="banto-btn banto-btn--secondary" onclick={() => changeMonth(-1)}
 				>{m['costs.prevMonth']()}</button
 			>
-			<span class="month" aria-live="polite">{month}</span>
+			<span class="month" aria-live="polite">{monthWithPeriod(month)}</span>
 			<button type="button" class="banto-btn banto-btn--secondary" onclick={() => changeMonth(1)}
 				>{m['costs.nextMonth']()}</button
 			>

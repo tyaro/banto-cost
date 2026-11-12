@@ -39,6 +39,20 @@ impl Date {
         era * 146_097 + doe - 719_468
     }
 
+    /// [`Date::day_number`] の逆（Howard Hinnant の civil_from_days）。
+    pub fn from_day_number(n: i64) -> Self {
+        let z = n + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = (doy - (153 * mp + 2) / 5 + 1) as u8;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
+        let year = (yoe + era * 400 + i64::from(month <= 2)) as i32;
+        Self { year, month, day }
+    }
+
     pub fn year_month(self) -> YearMonth {
         YearMonth {
             year: self.year,
@@ -192,6 +206,43 @@ impl FiscalCalendar {
     }
 }
 
+/// 業務日付を決めるタイムゾーン（設計案 8章：Asia/Tokyo）。
+///
+/// 業務日付（今日・今月・締めの月）は実行環境の地域設定でなく、これで決める。
+/// Asia/Tokyo は夏時間がないので UTC からの固定の差（分）で表す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusinessTimeZone {
+    pub name: &'static str,
+    pub utc_offset_minutes: i32,
+}
+
+impl BusinessTimeZone {
+    /// この会社の既定値（Asia/Tokyo、UTC+9:00）。
+    pub const COMPANY_DEFAULT: Self = Self {
+        name: "Asia/Tokyo",
+        utc_offset_minutes: 9 * 60,
+    };
+
+    /// UNIX 時刻（秒）のその地の日付と、その日の0時からの秒数。
+    pub fn local_at(&self, unix_seconds: i64) -> (Date, u32) {
+        let local = unix_seconds + i64::from(self.utc_offset_minutes) * 60;
+        let day = local.div_euclid(86_400);
+        let seconds = local.rem_euclid(86_400) as u32;
+        (Date::from_day_number(day), seconds)
+    }
+
+    /// UNIX 時刻（秒）の業務日付。
+    pub fn date_at(&self, unix_seconds: i64) -> Date {
+        self.local_at(unix_seconds).0
+    }
+
+    /// UNIX 時刻（秒）のその地の日時（`YYYY-MM-DD HH:MM:SS`、帳票の出力日時）。
+    pub fn date_time_at(&self, unix_seconds: i64) -> String {
+        let (date, s) = self.local_at(unix_seconds);
+        format!("{date} {:02}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +255,37 @@ mod tests {
         assert_eq!(d("2027-03-01") - d("2027-02-28"), 1);
         assert_eq!(d("2028-03-01") - d("2028-02-28"), 2, "閏年");
         assert_eq!(d("2027-01-01") - d("2026-12-31"), 1);
+    }
+
+    #[test]
+    fn 日数の通し番号から日付に戻す() {
+        for s in [
+            "1970-01-01",
+            "2000-02-29",
+            "2026-11-12",
+            "2027-05-31",
+            "2028-02-29",
+            "1969-12-31",
+            "2100-03-01",
+        ] {
+            let date = Date::parse(s).unwrap();
+            assert_eq!(Date::from_day_number(date.day_number()), date, "{s}");
+        }
+    }
+
+    #[test]
+    fn 業務日付はasia_tokyoで決める() {
+        let tz = BusinessTimeZone::COMPANY_DEFAULT;
+        // 2026-11-30T15:00:00Z は東京で 2026-12-01 00:00:00（UTC の環境でも翌月）。
+        let utc = Date::parse("2026-11-30").unwrap().day_number() * 86_400 + 15 * 3600;
+        assert_eq!(tz.date_at(utc - 1).to_string(), "2026-11-30");
+        assert_eq!(tz.date_at(utc).to_string(), "2026-12-01");
+        assert_eq!(tz.date_time_at(utc - 1), "2026-11-30 23:59:59");
+        assert_eq!(tz.date_time_at(utc + 9 * 3600 + 61), "2026-12-01 09:01:01");
+        // 2026-05-31T15:00:00Z は東京で 2026-06-01 = 第13期の初日（UTC ではまだ第12期）。
+        let june = Date::parse("2026-05-31").unwrap().day_number() * 86_400 + 15 * 3600;
+        let ym = tz.date_at(june).year_month();
+        assert_eq!(FiscalCalendar::COMPANY_DEFAULT.period_of(ym), 13);
     }
 
     fn ym(s: &str) -> YearMonth {

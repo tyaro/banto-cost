@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use banto_admin_services::authz::ProjectScope;
 use banto_core::BantoError;
-use banto_storage::{Db, Dialect};
+use banto_storage::Db;
 use cost_domain::csv::{Cell, CsvTable};
 use cost_domain::forecast::CostType;
 use cost_domain::report::{deltas, monthly, Amounts, MonthLine, MonthlyReport};
@@ -30,13 +30,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::customers::field_error;
 use crate::direct_costs::DirectCostsService;
-use crate::orders::{fetch_all, on_pool, placeholders, scalar};
+use crate::orders::{fetch_all, on_pool, placeholders};
 use crate::portfolio::PortfolioService;
 use crate::time_entries::COUNTS;
 
 pub const RESOURCE: &str = "reports";
 
-const CAL: FiscalCalendar = FiscalCalendar::COMPANY_DEFAULT;
+const CAL: FiscalCalendar = crate::business_date::FISCAL;
 
 /// What the figures are counted on (shown on the screen and in every CSV).
 pub const BASIS_NOTE: &str = "承認済みの記録だけを管理計上日で集計（工数は作業日、直接費は計上日、\
@@ -208,14 +208,10 @@ impl ReportsService {
         placeholders(self.db.dialect(), s)
     }
 
-    /// The local date and time of the output (`YYYY-MM-DD HH:MM:SS`).
-    async fn generated_at(&self) -> Result<String, BantoError> {
-        let sql = match self.db.dialect() {
-            Dialect::Sqlite => "SELECT datetime('now','localtime')",
-            Dialect::Postgres => "SELECT to_char(LOCALTIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')",
-        }
-        .to_string();
-        on_pool!(&self.db, pool => scalar!(pool, sql))
+    /// The local date and time of the output (`YYYY-MM-DD HH:MM:SS`, in the
+    /// company's time zone).
+    fn generated_at(&self) -> String {
+        crate::business_date::now_local()
     }
 
     /// Each project's figures by month (`project` = one project only).
@@ -354,7 +350,7 @@ impl ReportsService {
     pub async fn project_monthly_csv(&self, project_id: i64) -> Result<CsvExport, BantoError> {
         let (code, name) = self.project_label(project_id).await?;
         let report = self.report(project_id).await?;
-        let generated_at = self.generated_at().await?;
+        let generated_at = self.generated_at();
         let mut t = CsvTable::new(&generated_at, &MONTHLY_HEADER);
         t.condition("帳票", "案件の月別収支")
             .condition("案件", format!("{code} {name}"))
@@ -404,7 +400,7 @@ impl ReportsService {
             .to_string();
         let labels: Vec<(i64, String, String, String)> =
             on_pool!(&self.db, pool => fetch_all!(pool, labels_sql))?;
-        let generated_at = self.generated_at().await?;
+        let generated_at = self.generated_at();
         let mut header = vec!["案件コード", "案件名", "顧客"];
         header.extend(MONTHLY_HEADER);
         let mut t = CsvTable::new(&generated_at, &header);
@@ -455,7 +451,7 @@ impl ReportsService {
         let p = PortfolioService::new(self.db.clone())
             .overview(visible, amounts)
             .await?;
-        let generated_at = self.generated_at().await?;
+        let generated_at = self.generated_at();
         let mut t = CsvTable::new(&generated_at, &PORTFOLIO_HEADER);
         t.condition("帳票", "全体一覧")
             .condition("注意表示の判定日", p.as_of.clone())

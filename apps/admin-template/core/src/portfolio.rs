@@ -205,7 +205,7 @@ impl PortfolioService {
             .await?
             .rows;
         let forecasts = ForecastsService::new(self.db.clone());
-        let today = forecasts.today().await?;
+        let today = crate::business_date::today();
         let review_delay_days = applied_value(&self.db, REVIEW_DELAY_ITEM, None, today)
             .await?
             .map(|(v, _)| v);

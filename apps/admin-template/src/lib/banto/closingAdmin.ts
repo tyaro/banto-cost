@@ -118,9 +118,9 @@ export async function reopenMonth(
 	});
 }
 
-/** The month before `month` (`YYYY-MM`), the usual one to close. */
-export function previousMonth(today: Date): string {
-	const y = today.getFullYear();
-	const m = today.getMonth(); // 0-based: the previous month's 1-based number
+/** The month before a business date's (`YYYY-MM-DD`), the usual one to close. */
+export function previousMonth(today: string): string {
+	const y = Number(today.slice(0, 4));
+	const m = Number(today.slice(5, 7)) - 1; // the previous month's 1-based number
 	return m === 0 ? `${y - 1}-12` : `${y}-${String(m).padStart(2, '0')}`;
 }
