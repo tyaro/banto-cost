@@ -12,7 +12,8 @@
 	import { heatmapGrid, heatmapCellKey } from './core/heatmap';
 	import { sequentialColor, SEQ_RAMP } from './core/color';
 	import { everyNthIndex } from './core/ticks-time';
-	import { leftMarginFor } from './core/labels';
+	import { leftMarginFor, truncateLabel } from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import type { Accessor, ChartMargin } from './types';
 	import ChartContainer from './internal/ChartContainer.svelte';
 	import Tooltip from './internal/Tooltip.svelte';
@@ -51,8 +52,20 @@
 	const grid = $derived(heatmapGrid(data, x, y, value));
 	const isEmpty = $derived(grid.xCats.length === 0 || grid.yCats.length === 0);
 
+	// The estimate uses the rendered tick font (D9-b: read from the first y
+	// category label, 11px until/unless it can be read).
+	// Measured container width (bound from ChartContainer) so the margin cap can
+	// be relative to it (40%), same as LineChart.
+	let plotWidth: number = $state(0);
+	let tickFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTickFont = trackFontSize((px) => (tickFontSize = px));
 	const MARGIN = $derived.by((): ChartMargin => {
-		return { top: 8, right: 16, bottom: 26, left: leftMarginFor(grid.yCats) };
+		return {
+			top: 8,
+			right: 16,
+			bottom: 26,
+			left: leftMarginFor(grid.yCats, { fontSize: tickFontSize, totalWidth: plotWidth })
+		};
 	});
 
 	function maxXTicksFor(innerWidth: number): number {
@@ -76,7 +89,7 @@
 </script>
 
 <div class="banto-heatmap">
-	<ChartContainer {label} {height} empty={isEmpty} {messages}>
+	<ChartContainer {label} {height} empty={isEmpty} bind:width={plotWidth} {messages}>
 		{#snippet plot({ width, height: plotHeight })}
 			{@const m = plotMetrics(width, plotHeight)}
 			{@const xScale = bandScale(grid.xCats.length, [m.innerLeft, m.innerLeft + m.innerWidth], 0)}
@@ -110,14 +123,17 @@
 
 			<!-- Y labels (left), X labels (bottom, thinned when crowded). -->
 			{#each grid.yCats as yCat, i (i)}
+				<!-- Cut with an ellipsis when the margin hit its cap (full text in <title>). -->
+				{@const shown = truncateLabel(yCat, m.innerLeft - 8, tickFontSize)}
 				<text
 					x={m.innerLeft - 8}
 					y={yScale.center(i)}
 					class="tick-label"
 					text-anchor="end"
 					dominant-baseline="middle"
+					{@attach i === 0 ? trackTickFont : null}
 				>
-					{yCat}
+					{shown}{#if shown !== yCat}<title>{yCat}</title>{/if}
 				</text>
 			{/each}
 			{@const xTickIndices = everyNthIndex(grid.xCats.length, maxXTicksFor(m.innerWidth))}
@@ -178,20 +194,20 @@
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 
 	.ramp-legend {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
-		padding: 0.5rem 0.25rem 0;
+		gap: var(--banto-space-2);
+		padding: var(--banto-space-2) var(--banto-space-1) 0;
 	}
 
 	.ramp-label {
 		color: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 		flex: 0 0 auto;
 	}

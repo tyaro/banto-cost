@@ -39,8 +39,8 @@
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 0.5rem;
-		padding: 3rem 1.5rem;
+		gap: var(--banto-space-2);
+		padding: var(--banto-space-8) var(--banto-space-6);
 		text-align: center;
 		color: var(--banto-text-muted);
 	}
@@ -48,18 +48,18 @@
 	h2 {
 		margin: 0;
 		color: var(--banto-text);
-		font-size: 1rem;
+		font-size: var(--banto-font-size-base);
 		font-weight: 600;
 	}
 
 	p {
 		margin: 0;
 		max-width: 32rem;
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 		text-wrap: pretty;
 	}
 
 	.action {
-		margin-top: 0.5rem;
+		margin-top: var(--banto-space-2);
 	}
 </style>

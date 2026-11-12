@@ -18,6 +18,8 @@
 	import { roundedTopBarPath, linePath } from './core/path';
 	import { everyNthIndex } from './core/ticks-time';
 	import { seriesColorVar } from './core/color';
+	import { leftMarginForTicks, rightMarginForTicks } from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import type { ChartMargin, TooltipRow } from './types';
 	import ChartContainer from './internal/ChartContainer.svelte';
 	import Legend from './internal/Legend.svelte';
@@ -48,7 +50,29 @@
 	const t = { ...defaultChartMessages, ...messages };
 
 	const DEFAULT_MARGIN: ChartMargin = { top: 12, right: 40, bottom: 26, left: 48 };
-	const MARGIN = $derived({ ...DEFAULT_MARGIN, ...margins });
+	// The default left/right margins grow to fit the value / cumulative-%
+	// tick labels at the rendered tick font (D9-b: read from the first left
+	// tick label - both axes share the class - 11px until/unless it can be
+	// read); never below the previous fixed defaults, and explicit `margins`
+	// still win as-is.
+	// Measured container width (bound from ChartContainer) so the margin cap can
+	// be relative to it (40%), same as LineChart.
+	let plotWidth: number = $state(0);
+	let tickFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTickFont = trackFontSize((px) => (tickFontSize = px));
+	// Lazy (`$derived.by`): the ticks/formatters are declared below.
+	const MARGIN = $derived.by((): ChartMargin => ({
+		...DEFAULT_MARGIN,
+		left: leftMarginForTicks(valueTicks.map(formatValueDisplay), DEFAULT_MARGIN.left, {
+			fontSize: tickFontSize,
+			totalWidth: plotWidth
+		}),
+		right: rightMarginForTicks(percentTicks.map(formatPercent), DEFAULT_MARGIN.right, {
+			fontSize: tickFontSize,
+			totalWidth: plotWidth
+		}),
+		...margins
+	}));
 	const RADIUS = 4;
 	const CATEGORY_PADDING = 0.3;
 	const MIN_TICK_SPACING = 60;
@@ -110,7 +134,7 @@
 
 <div class="banto-paretochart">
 	<Legend items={legendItems} />
-	<ChartContainer {label} {height} empty={isEmpty} {messages}>
+	<ChartContainer {label} {height} empty={isEmpty} bind:width={plotWidth} {messages}>
 		{#snippet plot({ width, height: plotHeight })}
 			{@const m = plotMetrics(width, plotHeight)}
 			{@const valueScale = linearScale(
@@ -127,7 +151,7 @@
 			<!-- Gridlines + left (value) ticks - the right axis mirrors LineChart's
 			     hasRight treatment (tick labels + axis line only, no gridlines of
 			     its own, to avoid a double grid). -->
-			{#each valueTicks as tick (tick)}
+			{#each valueTicks as tick, ti (tick)}
 				<line
 					x1={m.innerLeft}
 					x2={m.innerLeft + m.innerWidth}
@@ -141,6 +165,7 @@
 					class="tick-label"
 					text-anchor="end"
 					dominant-baseline="middle"
+					{@attach ti === 0 ? trackTickFont : null}
 				>
 					{formatValueDisplay(tick)}
 				</text>
@@ -306,7 +331,7 @@
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -320,7 +345,7 @@
 
 	.threshold-label {
 		fill: var(--banto-text-muted);
-		font-size: 10px;
+		font-size: var(--banto-font-size-xs);
 		opacity: 0.85;
 	}
 

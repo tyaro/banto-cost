@@ -65,6 +65,8 @@ axum = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "signal", "fs"] }
 rust-embed = { workspace = true, optional = true }
 futures-util = { workspace = true }
+# `items.updated_at` is stamped with the LOCAL date of the app process (items.rs `local_today`).
+chrono = { workspace = true, features = ["clock"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

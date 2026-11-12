@@ -34,6 +34,8 @@
 	/* Brand / state */
 	--banto-primary: #2563eb;
 	--banto-primary-hover: #1d4ed8;
+	/* 面（overlay・raised）の上に置く primary の文字色。白に 5.17:1 */
+	--banto-primary-text: var(--banto-primary);
 	--banto-danger: #dc2626;
 	--banto-warning: #d97706;
 	--banto-success: #16a34a;
@@ -158,12 +160,16 @@
 	--banto-space-7: 2rem; /* 28px */
 	--banto-space-8: 3rem; /* 42px — 空状態など */
 
-	/* Type scale (付録 A.5 の役割). Body = 1rem (root), inherited: there is no
-     body token. Note md is one step SMALLER than body (a secondary size), not
-     the body size (D4). */
+	/* Type scale (付録 A.5 の役割). Body text inherits the root 1rem and needs
+     no declaration; --banto-font-size-base (= 1rem) is for an element that
+     must state the body size explicitly (e.g. a card heading that resets a
+     smaller parent). Order: xs < sm < md < base < lg < xl — md is one step
+     SMALLER than body (a secondary size), not the body size (D4). Not to be
+     confused with --banto-font-size above (the root size in px). */
 	--banto-font-size-xs: 0.7rem; /* 9.8px  バッジ・極小ラベル */
 	--banto-font-size-sm: 0.8rem; /* 11.2px caption（最多 51） */
 	--banto-font-size-md: 0.875rem; /* 12.25px 補足・表の副情報（A.5 caption 12px） */
+	--banto-font-size-base: 1rem; /* 14px   本文（root と同じ。明示が要るときだけ使う） */
 	--banto-font-size-lg: 1.125rem; /* 15.75px heading（A.5 16px） */
 	--banto-font-size-xl: 1.75rem; /* 24.5px display（A.5 24–28px） */
 
@@ -247,6 +253,8 @@
 
 	--banto-primary: #3b82f6;
 	--banto-primary-hover: #60a5fa;
+	/* 暗い面 #262a31 の上で 4.5:1 を満たす（--banto-primary #3b82f6 は 3.91:1） */
+	--banto-primary-text: #60a5fa;
 	--banto-danger: #ef4444;
 	--banto-warning: #f59e0b;
 	--banto-success: #22c55e;

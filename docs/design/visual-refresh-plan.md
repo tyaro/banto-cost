@@ -578,7 +578,7 @@ Dark:
 | numeric（グリッド数値列） | body 同等 | 400 | `tabular-nums` 右揃え |
 
 文字サイズのトークン（[theme-dimension-tokens.md](theme-dimension-tokens.md) §5.2・D4。`rem` なので root の
-`--banto-font-size` に追従する）。本文（body）は root の `1rem` を継承し、トークンを持たない。`md` は本文より
+`--banto-font-size` に追従する）。本文（body）は root の `1rem` を継承する。本文の大きさを明示するときだけ `base` を使う（PR-6b で追加）。`md` は本文より
 一段小さい補足で、本文ではない。
 
 | トークン | 値（root 14px のとき） | 役割 |
@@ -586,6 +586,7 @@ Dark:
 | `--banto-font-size-xs` | `0.7rem`（9.8px） | バッジ・極小ラベル |
 | `--banto-font-size-sm` | `0.8rem`（11.2px） | caption |
 | `--banto-font-size-md` | `0.875rem`（12.25px） | 補足・表の副情報（上の caption 12px） |
+| `--banto-font-size-base` | `1rem`（14px） | body（上の 14px。明示が要るときだけ） |
 | `--banto-font-size-lg` | `1.125rem`（15.75px） | heading（上の 16px） |
 | `--banto-font-size-xl` | `1.75rem`（24.5px） | display（上の 24–28px） |
 

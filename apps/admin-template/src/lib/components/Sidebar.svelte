@@ -149,7 +149,7 @@
 		display: flex;
 		flex-direction: column;
 		background: var(--banto-surface);
-		border-right: 1px solid var(--banto-border);
+		border-right: var(--banto-border-width) solid var(--banto-border);
 		transition: width var(--banto-duration-base) var(--banto-ease-out);
 		/* Glass preset (spec M12): no-op under standard (--banto-backdrop: none). */
 		backdrop-filter: var(--banto-backdrop, none);
@@ -163,19 +163,19 @@
 	.brand {
 		display: flex;
 		align-items: center;
-		gap: 0.55rem;
+		gap: var(--banto-space-2);
 		height: var(--banto-shell-header-height);
-		padding: 0 0.9rem;
-		border-bottom: 1px solid var(--banto-border);
+		padding: 0 var(--banto-space-4);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		font-weight: 700;
 	}
 
-	/* Fold button at the left (>900px): 0.6rem matches the nav items' own
-	   inset (0.5rem section + 0.6rem item), so the 36px button is centred on
+	/* Fold button at the left (>900px): space-2 matches the nav items' own
+	   inset (space-2 section + space-2 item), so the 36px button is centred on
 	   the icon column and fits the folded width exactly. */
 	.brand.with-toggle {
-		gap: 0.35rem;
-		padding: 0 0.6rem;
+		gap: var(--banto-space-1);
+		padding: 0 var(--banto-space-2);
 	}
 
 	/* The button never shrinks while the aside's width transitions. */
@@ -186,7 +186,7 @@
 	.brand-logo {
 		display: flex;
 		align-items: center;
-		gap: 0.55rem;
+		gap: var(--banto-space-2);
 		min-width: 0;
 		overflow: hidden;
 		opacity: 1;
@@ -233,20 +233,20 @@
 	.nav-section {
 		display: flex;
 		flex-direction: column;
-		padding: 0.5rem;
+		padding: var(--banto-space-2);
 		gap: 2px;
 	}
 
 	.section-divider {
 		height: 1px;
-		margin: 0.25rem 0.9rem;
+		margin: var(--banto-space-1) var(--banto-space-4);
 		background: var(--banto-border);
 	}
 
 	.section-heading {
-		margin: 0.4rem 0.6rem 0.2rem;
+		margin: var(--banto-space-2) var(--banto-space-2) var(--banto-space-1);
 		color: var(--banto-text-muted);
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
@@ -269,8 +269,8 @@
 		   unseen-change badge and collapses to 0 when absent. */
 		grid-template-columns: 20px minmax(0, 1fr) auto;
 		align-items: center;
-		column-gap: 0.6rem;
-		padding: 0.5rem 0.6rem;
+		column-gap: var(--banto-space-2);
+		padding: var(--banto-space-2) var(--banto-space-2);
 		border-radius: var(--banto-radius-md);
 		color: var(--banto-text-muted);
 		text-decoration: none;
@@ -339,7 +339,7 @@
 		border-radius: 999px;
 		background: var(--banto-primary-solid);
 		color: var(--banto-on-solid);
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		font-weight: 700;
 		line-height: 1;
 	}
@@ -391,7 +391,7 @@
 			width: auto;
 			height: 18px;
 			padding: 0 5px;
-			font-size: 0.7rem;
+			font-size: var(--banto-font-size-xs);
 		}
 
 		aside.overlay-open {

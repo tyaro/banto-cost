@@ -7,6 +7,7 @@
 	 */
 	import { linearScale, niceTicks } from './core/scale';
 	import { leftMarginForTicks } from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import { seriesColorVar } from './core/color';
 	import { getValue, toNumber, type Accessor, type ChartMargin } from './types';
 	import ChartContainer from './internal/ChartContainer.svelte';
@@ -47,6 +48,10 @@
 	// Measured container width (bound from ChartContainer) so the margin cap can
 	// be relative to it, same as LineChart/StackedAreaChart.
 	let plotWidth: number = $state(0);
+	// Rendered y-tick font (D9-b: read from the first y tick label, 11px
+	// until/unless it can be read) so the estimate follows the rem tokens.
+	let tickFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTickFont = trackFontSize((px) => (tickFontSize = px));
 	const MARGIN = $derived.by(() => {
 		const m = { ...DEFAULT_MARGIN, ...margins };
 		return {
@@ -54,7 +59,7 @@
 			left: leftMarginForTicks(
 				yTicks.map((t) => formatYValue(t)),
 				m.left,
-				{ totalWidth: plotWidth }
+				{ totalWidth: plotWidth, fontSize: tickFontSize }
 			)
 		};
 	});
@@ -126,7 +131,7 @@
 				[m.innerTop + m.innerHeight, m.innerTop]
 			)}
 
-			{#each yTicks as tick (tick)}
+			{#each yTicks as tick, ti (tick)}
 				<line
 					x1={m.innerLeft}
 					x2={m.innerLeft + m.innerWidth}
@@ -140,6 +145,7 @@
 					class="tick-label"
 					text-anchor="end"
 					dominant-baseline="middle"
+					{@attach ti === 0 ? trackTickFont : null}
 				>
 					{formatYValue(tick)}
 				</text>
@@ -239,7 +245,7 @@
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 

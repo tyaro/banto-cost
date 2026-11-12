@@ -373,15 +373,12 @@ impl SettingsService {
     /// namespacing scheme.
     ///
     /// `username` is simply concatenated into the storage key
-    /// (`ui.{username}.{key}`) with no escaping - a username containing `.`
-    /// is technically possible (`UsersService::validate_username` only
-    /// enforces length, not charset) and could in principle make two distinct
-    /// `(username, key)` pairs collide on the same storage key (e.g.
-    /// username `"a.b"` key `"c"` and username `"a"` key `"b.c"` both produce
-    /// `"ui.a.b.c"`). This is accepted as-is for M12 Phase A (per-user
-    /// isolation is "best effort keyed on today's username charset", not a
-    /// hard security boundary) - see the M12 handoff report for the
-    /// investigation of whether `.` is actually reachable in practice.
+    /// (`ui.{username}.{key}`) with no escaping. New accounts cannot contain
+    /// `.` (`UsersService::validate_username` rejects it), so two distinct
+    /// `(username, key)` pairs cannot collide for them. Accounts created
+    /// before that rule may still contain `.`; for those, e.g. username
+    /// `"a.b"` key `"c"` and username `"a"` key `"b.c"` both produce
+    /// `"ui.a.b.c"`.
     pub async fn ui_set(&self, username: &str, key: &str, value: &str) -> Result<(), BantoError> {
         validate_ui_key(key)?;
         validate_ui_value(value)?;

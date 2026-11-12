@@ -72,8 +72,8 @@
 <style>
 	.toast-host {
 		position: fixed;
-		right: var(--banto-toast-right, 1rem);
-		bottom: var(--banto-toast-bottom, 1rem);
+		right: var(--banto-toast-right, var(--banto-space-4));
+		bottom: var(--banto-toast-bottom, var(--banto-space-4));
 		display: flex;
 		flex-direction: column;
 		z-index: var(--banto-z-toast);
@@ -83,26 +83,26 @@
 	.toast-group {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 	}
 
 	/* The gap between the two live regions only exists while both show toasts. */
 	.toast-group:not(.empty) ~ .toast-group:not(.empty) {
-		margin-top: 0.5rem;
+		margin-top: var(--banto-space-2);
 	}
 
 	.toast {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
-		padding: 0.65rem 0.8rem;
+		gap: var(--banto-space-3);
+		padding: var(--banto-space-3) var(--banto-space-3);
 		border-radius: var(--banto-radius-md);
 		background: var(--banto-surface-overlay);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-left-width: 4px;
 		border-left-color: var(--banto-border-strong);
 		box-shadow: var(--banto-shadow-lg);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 		color: var(--banto-text);
 		/* Glass preset (spec M12): no-op under standard (--banto-backdrop:
 		   none), same opt-in as CommandPalette's overlay. */
@@ -154,14 +154,14 @@
 	   close button. */
 	.action {
 		flex: none;
-		border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+		border: var(--banto-border-width) solid color-mix(in srgb, currentColor 45%, transparent);
 		border-radius: var(--banto-radius-sm);
 		background: none;
 		color: inherit;
 		cursor: pointer;
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		font-weight: 600;
-		padding: 0.2rem 0.5rem;
+		padding: var(--banto-space-1) var(--banto-space-2);
 		white-space: nowrap;
 		transition: background var(--banto-duration-fast) var(--banto-ease-out);
 	}
@@ -184,9 +184,9 @@
 		color: inherit;
 		opacity: 0.65;
 		cursor: pointer;
-		font-size: 1rem;
+		font-size: var(--banto-font-size-base);
 		line-height: 1;
-		padding: 0.3rem;
+		padding: var(--banto-space-1);
 		border-radius: var(--banto-radius-sm);
 		transition:
 			opacity var(--banto-duration-fast) var(--banto-ease-out),

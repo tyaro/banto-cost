@@ -17,6 +17,16 @@ export { default as ColumnsMenu } from './ColumnsMenu.svelte';
 export { GridState, DEFAULT_ROW_HEIGHT, type GridStateOptions } from './state.svelte';
 export { CellSelection, type CellPos } from './selection.svelte';
 export { defaultGridMessages, type GridMessages } from './messages';
+export {
+	provideCellEditors,
+	getCellEditors,
+	type CellEditors,
+	type CellDateEditorProps,
+	type CellTimeEditorProps,
+	type CellDateTimeEditorProps,
+	type CellTemporalEditorProps,
+	type FilterDateRangeInputProps
+} from './cellEditors';
 
 export { sortRows, getColumnValue } from './core/sort';
 export { filterRows } from './core/filter';
@@ -32,6 +42,15 @@ export {
 	type ColumnsFromSchemaOptions,
 	type ColumnValidationMessages
 } from './core/schema';
+export {
+	dateRangeToBetween,
+	betweenToDateRange,
+	isBetweenValue,
+	nextDay,
+	previousDay,
+	type BetweenValue,
+	type DateRangeValue
+} from './core/dateRange';
 export {
 	toCsv,
 	csvForExcel,

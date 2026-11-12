@@ -161,12 +161,21 @@ Esc をどの層に譲るか。#433）・`src/routes/panel/[id]/`（ポップア
    `attachmentsClient`）を削除。
 2. `apps/admin-template/src/lib/banto/attachmentsClient.ts`・
    `src/lib/banto/attachmentsAdmin.ts` を削除。
-3. `apps/admin-template/core/src/rest/attachments.rs`（`attachments_router`
+3. `apps/admin-template/core/src/rest/attachments.rs` **ファイルを削除**し、
+   `rest/mod.rs` の `mod attachments;`・`use attachments::attachments_router;`・
+   `use banto_attachments::{…}` を外す。あわせて、`attachments.rs` だけが
+   `use super::*` 経由で使っていた `mod.rs` の import（`axum::body::Bytes`・
+   `axum::extract::Query`・`axum::response::Response`・`banto_core::BantoError`・
+   `serde::Deserialize`）も外す（残すと unused import 警告で、`-D warnings` の
+   ビルドが落ちる）。`mod.rs` の `api_router` からは `attachments_router`
    一式（`attachments_list`/`attachments_upload`/`attachments_delete`等）と
-   `items_delete` からの `delete_for_record` 呼び出し・`ItemsWriteState`
-   の `attachments` フィールドを外す。`src-tauri/src/lib.rs` も同様に
+   `items_delete` からの `sweep_item_attachments` 呼び出し・`ItemsWriteState`
+   の `attachments` フィールドを外す（`detail` は `None` にする）。`src-tauri/src/lib.rs` も同様に
    `attachments_*` コマンドと `AppState` の `attachments`/`attachments_dir`
-   フィールド、`items_delete` の `delete_for_record` 呼び出しを外す。
+   フィールド、`items_delete` の `sweep_item_attachments` 呼び出し、
+   `attachment_wiring` の `use` を外す。共通部品の
+   `apps/admin-template/core/src/attachment_wiring.rs` と `core/src/lib.rs` の
+   `pub mod attachment_wiring;` も削除する。
 4. `apps/admin-template/core/src/rest/tests.rs` から attachments 参照を外す
    （`api_router` から attachments 引数が消えるのに追随。外さないと
    `cargo test` がコンパイルできない）: `unused_attachments_service` ヘルパと

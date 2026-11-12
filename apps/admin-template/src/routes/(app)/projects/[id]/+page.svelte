@@ -313,7 +313,7 @@
 	.form-panel {
 		max-width: 720px;
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
 		padding: min(var(--banto-space-5), 3%);

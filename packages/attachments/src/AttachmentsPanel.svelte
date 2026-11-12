@@ -309,12 +309,12 @@
 	.panel {
 		display: flex;
 		flex-direction: column;
-		gap: 0.75rem;
+		gap: var(--banto-space-3);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
-		padding: 1.25rem;
+		padding: var(--banto-space-5);
 		/* Standard preset: no-op (var(--banto-backdrop) is `none`); glass
 		   preset opts in by overriding it (spec §9), same as the card this
 		   panel visually matches. */
@@ -325,12 +325,12 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.75rem;
+		gap: var(--banto-space-3);
 	}
 
 	h2 {
 		margin: 0;
-		font-size: 0.95rem;
+		font-size: var(--banto-font-size-md);
 		font-weight: 600;
 		color: var(--banto-text);
 	}
@@ -355,12 +355,12 @@
 	button {
 		height: var(--banto-control-height-sm);
 		box-sizing: border-box;
-		padding: 0 0.9rem;
+		padding: 0 var(--banto-space-4);
 		border: none;
 		border-radius: var(--banto-radius-md);
 		background: var(--banto-primary-solid);
 		color: var(--banto-on-solid);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		font-weight: 600;
 		cursor: pointer;
 		transition: background var(--banto-duration-fast) var(--banto-ease-out);
@@ -394,8 +394,8 @@
 		margin: 0;
 		display: flex;
 		align-items: center;
-		gap: 0.6rem;
-		font-size: 0.85rem;
+		gap: var(--banto-space-2);
+		font-size: var(--banto-font-size-md);
 		color: var(--banto-text-muted);
 	}
 
@@ -406,7 +406,7 @@
 	.thumb-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
-		gap: 0.75rem;
+		gap: var(--banto-space-3);
 		margin: 0;
 		padding: 0;
 		list-style: none;
@@ -416,7 +416,7 @@
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 0.3rem;
+		gap: var(--banto-space-1);
 	}
 
 	.thumb-button {
@@ -438,7 +438,7 @@
 	}
 
 	.thumb-fallback {
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		font-weight: 700;
 		letter-spacing: 0.03em;
 		color: var(--banto-text-muted);
@@ -447,7 +447,7 @@
 	.file-list {
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 		margin: 0;
 		padding: 0;
 		list-style: none;
@@ -456,25 +456,25 @@
 	.file-row {
 		display: flex;
 		align-items: center;
-		gap: 0.6rem;
-		padding: 0.5rem 0.6rem;
-		border: 1px solid var(--banto-border);
+		gap: var(--banto-space-2);
+		padding: var(--banto-space-2) var(--banto-space-2);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 	}
 
 	.badge {
 		flex: none;
-		padding: 0.15rem 0.4rem;
+		padding: var(--banto-space-1) var(--banto-space-2);
 		border-radius: var(--banto-radius-sm);
 		background: var(--banto-surface-subtle);
 		color: var(--banto-text-muted);
-		font-size: 0.65rem;
+		font-size: var(--banto-font-size-xs);
 		font-weight: 700;
 		letter-spacing: 0.03em;
 	}
 
 	.file-name {
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-text);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -491,7 +491,7 @@
 
 	.file-size {
 		flex: none;
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		color: var(--banto-text-muted);
 	}
 </style>

@@ -51,6 +51,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use banto_core::datetime::iso_datetime_from_system_time;
 use banto_core::{BantoError, FieldError};
 use banto_storage::Db;
 use serde::Serialize;
@@ -214,52 +215,6 @@ fn backup_unsupported_on_postgres() -> BantoError {
         "バックアップ／リストアは SQLite バックエンドでのみ利用できます（PostgreSQL では非対応です）"
             .to_string(),
     )
-}
-
-/// Days-since-epoch (1970-01-01) -> `YYYY-MM-DD`, using Howard Hinnant's
-/// `civil_from_days` algorithm (http://howardhinnant.github.io/date_algorithms.html).
-/// No date/time crate dependency for one small conversion (ADR-0002: no new
-/// external crate anywhere in this workspace - see the root `Cargo.toml`).
-///
-/// Duplicated from `admin-template-core::db`'s seed-data generator rather than
-/// depended on across the crate boundary: this crate must not depend back on
-/// the app crate (conventions §"逆依存禁止"), the same reason its service tests
-/// re-state table DDL inline instead of calling `db::migrate_memory`.
-fn iso_date_from_days_since_epoch(days: i64) -> String {
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// `SystemTime` -> `"YYYY-MM-DD HH:MM:SS"` (UTC), using the same
-/// dependency-free date algorithm as [`iso_date_from_days_since_epoch`] above -
-/// no `chrono`/`time` crate anywhere in this workspace (see the root
-/// `Cargo.toml`), so this is the one small conversion routine rather than
-/// pulling one in just for this.
-///
-/// Also used by `audit`'s spool (ADR-0019) for the explicit `ts` of a
-/// spooled entry on SQLite: this is exactly the text `datetime('now')` (the
-/// `audit_log.ts` DEFAULT) produces.
-pub(crate) fn iso_datetime_from_system_time(time: SystemTime) -> String {
-    let secs = time
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let days = secs.div_euclid(86_400);
-    let secs_of_day = secs.rem_euclid(86_400);
-    let date = iso_date_from_days_since_epoch(days);
-    let h = secs_of_day / 3600;
-    let m = (secs_of_day % 3600) / 60;
-    let s = secs_of_day % 60;
-    format!("{date} {h:02}:{m:02}:{s:02}")
 }
 
 /// `"YYYY-MM-DD HH:MM:SS"` -> `"YYYYMMDD-HHMMSS"`, the compact stamp used in

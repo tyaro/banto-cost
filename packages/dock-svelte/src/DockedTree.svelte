@@ -467,12 +467,12 @@
 		flex: 0 0 auto;
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 		height: var(--banto-dock-titlebar-height);
-		padding: 0 0.4rem 0 0.7rem;
+		padding: 0 var(--banto-space-2) 0 var(--banto-space-3);
 		background: var(--banto-surface-raised);
-		border-bottom: 1px solid var(--banto-border);
-		font-size: 0.8rem;
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
+		font-size: var(--banto-font-size-sm);
 		font-weight: 600;
 		color: var(--banto-text);
 		user-select: none;
@@ -500,7 +500,7 @@
 		align-items: stretch;
 		height: var(--banto-dock-titlebar-height);
 		background: var(--banto-surface-raised);
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		overflow-x: auto;
 		overflow-y: hidden;
 	}
@@ -509,12 +509,12 @@
 		flex: 0 0 auto;
 		display: flex;
 		align-items: center;
-		gap: 0.35rem;
-		padding: 0 0.5rem 0 0.7rem;
-		font-size: 0.8rem;
+		gap: var(--banto-space-1);
+		padding: 0 var(--banto-space-2) 0 var(--banto-space-3);
+		font-size: var(--banto-font-size-sm);
 		font-weight: 600;
 		color: var(--banto-text-muted);
-		border-right: 1px solid var(--banto-border);
+		border-right: var(--banto-border-width) solid var(--banto-border);
 		user-select: none;
 		touch-action: none;
 		cursor: pointer;
@@ -532,12 +532,12 @@
 	.tab.active {
 		color: var(--banto-text);
 		background: var(--banto-dock-tab-active-bg);
-		box-shadow: inset 0 -2px 0 var(--banto-primary);
+		box-shadow: inset 0 calc(-1 * var(--banto-border-width-strong)) 0 var(--banto-primary);
 	}
 
 	.icon {
 		flex: 0 0 auto;
-		font-size: 0.9rem;
+		font-size: var(--banto-font-size-md);
 	}
 
 	.title {
@@ -561,7 +561,7 @@
 		background: transparent;
 		color: var(--banto-text-muted);
 		cursor: pointer;
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		touch-action: none;
 		transition:
 			background var(--banto-duration-fast) var(--banto-ease-out),

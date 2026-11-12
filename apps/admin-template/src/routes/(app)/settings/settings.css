@@ -20,18 +20,18 @@
 .settings-page {
 	display: flex;
 	flex-direction: column;
-	gap: 1rem;
+	gap: var(--banto-space-4);
 }
 
 .settings-page .settings-section {
 	display: flex;
 	flex-direction: column;
-	gap: 0.75rem;
+	gap: var(--banto-space-3);
 }
 
 .settings-page .section-heading {
-	margin: 0.5rem 0 0;
-	font-size: 0.8rem;
+	margin: var(--banto-space-2) 0 0;
+	font-size: var(--banto-font-size-sm);
 	font-weight: 700;
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
@@ -42,7 +42,7 @@
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
 	align-items: start;
-	gap: 1rem;
+	gap: var(--banto-space-4);
 }
 
 .settings-page .surface-card {
@@ -70,20 +70,20 @@
 .settings-page .card-head {
 	display: flex;
 	align-items: flex-start;
-	gap: 0.65rem;
-	margin-bottom: 0.25rem;
+	gap: var(--banto-space-3);
+	margin-bottom: var(--banto-space-1);
 	color: var(--banto-text-muted);
 }
 
 .settings-page .card-head h3 {
 	margin: 0;
-	font-size: 1rem;
+	font-size: var(--banto-font-size-base);
 	color: var(--banto-text);
 }
 
 .settings-page .card-head p {
-	margin: 0.2rem 0 0;
-	font-size: 0.8rem;
+	margin: var(--banto-space-1) 0 0;
+	font-size: var(--banto-font-size-sm);
 	color: var(--banto-text-muted);
 }
 
@@ -94,28 +94,28 @@
 .settings-page h4 {
 	display: flex;
 	align-items: center;
-	gap: 0.4rem;
-	margin: 1rem 0 0.5rem;
-	font-size: 0.875rem;
+	gap: var(--banto-space-2);
+	margin: var(--banto-space-4) 0 var(--banto-space-2);
+	font-size: var(--banto-font-size-md);
 	color: var(--banto-text-muted);
 }
 
 .settings-page .options {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 0.5rem;
+	gap: var(--banto-space-2);
 }
 
 .settings-page .theme-option {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 0.3rem 0.4rem;
-	padding: 0.5rem 0.7rem;
-	border: 1px solid var(--banto-border);
+	gap: var(--banto-space-1) var(--banto-space-2);
+	padding: var(--banto-space-2) var(--banto-space-3);
+	border: var(--banto-border-width) solid var(--banto-border);
 	border-radius: var(--banto-radius-md);
 	cursor: pointer;
-	font-size: 0.8rem;
+	font-size: var(--banto-font-size-sm);
 }
 
 .settings-page .theme-option.selected {
@@ -143,7 +143,7 @@
 	width: 80px;
 	height: 48px;
 	overflow: hidden;
-	border: 1px solid var(--banto-border);
+	border: var(--banto-border-width) solid var(--banto-border);
 	border-radius: var(--banto-radius-sm);
 	background: var(--banto-accent-gradient);
 }
@@ -172,7 +172,7 @@
 	width: 80px;
 	height: 48px;
 	overflow: hidden;
-	border: 1px solid var(--banto-border);
+	border: var(--banto-border-width) solid var(--banto-border);
 	border-radius: var(--banto-radius-sm);
 	background: var(--banto-surface-subtle);
 }
@@ -184,7 +184,7 @@
 
 .settings-page .nav-layout-preview[data-nav-layout='sidebar'] .preview-nav {
 	width: 30%;
-	border-right-width: 1px;
+	border-right-width: var(--banto-border-width);
 }
 
 .settings-page .nav-layout-preview[data-nav-layout='launcher'] .preview-nav {
@@ -194,7 +194,7 @@
 	right: 25%;
 	bottom: 4px;
 	height: 8px;
-	border-width: 1px;
+	border-width: var(--banto-border-width);
 	border-radius: var(--banto-radius-sm);
 }
 
@@ -206,8 +206,8 @@
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 1rem;
-	margin-top: 0.75rem;
+	gap: var(--banto-space-4);
+	margin-top: var(--banto-space-3);
 }
 
 .settings-page .launcher-opacity .field {
@@ -218,7 +218,7 @@
 .settings-page .launcher-opacity-label {
 	display: flex;
 	justify-content: space-between;
-	gap: 0.5rem;
+	gap: var(--banto-space-2);
 }
 
 .settings-page .launcher-opacity-value {
@@ -235,7 +235,7 @@
 	height: 64px;
 	padding-bottom: 6px;
 	overflow: hidden;
-	border: 1px solid var(--banto-border);
+	border: var(--banto-border-width) solid var(--banto-border);
 	border-radius: var(--banto-radius-sm);
 	background: repeating-linear-gradient(
 		135deg,
@@ -248,7 +248,7 @@
 	display: flex;
 	gap: 4px;
 	padding: 4px;
-	border: 1px solid var(--banto-border);
+	border: var(--banto-border-width) solid var(--banto-border);
 	border-radius: var(--banto-radius-md);
 	background: color-mix(
 		in srgb,
@@ -285,8 +285,8 @@
 .settings-page .server-fields {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 0.75rem;
-	margin: 0.75rem 0;
+	gap: var(--banto-space-3);
+	margin: var(--banto-space-3) 0;
 }
 
 .settings-page .server-fields > .banto-field {
@@ -298,25 +298,25 @@
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 0.5rem;
+	gap: var(--banto-space-2);
 }
 
 .settings-page .note + .save-row {
-	margin-top: 0.5rem;
+	margin-top: var(--banto-space-2);
 }
 
 .settings-page form {
 	display: flex;
 	flex-direction: column;
-	gap: 0.75rem;
+	gap: var(--banto-space-3);
 	max-width: 320px;
 }
 
 .settings-page .field {
 	display: flex;
 	flex-direction: column;
-	gap: 0.3rem;
-	font-size: 0.8rem;
+	gap: var(--banto-space-1);
+	font-size: var(--banto-font-size-sm);
 	color: var(--banto-text-muted);
 }
 
@@ -325,69 +325,69 @@
 
 .settings-page .backup-toolbar {
 	display: flex;
-	gap: 0.5rem;
+	gap: var(--banto-space-2);
 	flex-wrap: wrap;
 }
 
 .settings-page .pending-restore {
 	display: flex;
 	align-items: center;
-	gap: 0.5rem;
+	gap: var(--banto-space-2);
 	flex-wrap: wrap;
-	margin: 0.75rem 0 0;
-	padding: 0.6rem 0.8rem;
-	border: 1px solid var(--banto-primary);
+	margin: var(--banto-space-3) 0 0;
+	padding: var(--banto-space-2) var(--banto-space-3);
+	border: var(--banto-border-width) solid var(--banto-primary);
 	border-radius: var(--banto-radius-md);
 	background: color-mix(in srgb, var(--banto-primary) 10%, transparent);
-	font-size: 0.85rem;
+	font-size: var(--banto-font-size-md);
 }
 
 .settings-page .backup-list {
 	list-style: none;
-	margin: 0.75rem 0 0;
+	margin: var(--banto-space-3) 0 0;
 	padding: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 0.4rem;
+	gap: var(--banto-space-2);
 }
 
 .settings-page .backup-list li {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	gap: 0.75rem;
+	gap: var(--banto-space-3);
 	flex-wrap: wrap;
-	padding: 0.5rem 0.7rem;
-	border: 1px solid var(--banto-border);
+	padding: var(--banto-space-2) var(--banto-space-3);
+	border: var(--banto-border-width) solid var(--banto-border);
 	border-radius: var(--banto-radius-md);
 }
 
 .settings-page .backup-info {
 	display: flex;
 	flex-direction: column;
-	gap: 0.15rem;
+	gap: var(--banto-space-1);
 	min-width: 0;
 }
 
 .settings-page .backup-info .file-name {
-	font-size: 0.85rem;
+	font-size: var(--banto-font-size-md);
 	font-weight: 600;
 	word-break: break-all;
 }
 
 .settings-page .backup-info .meta {
-	font-size: 0.75rem;
+	font-size: var(--banto-font-size-sm);
 	color: var(--banto-text-muted);
 }
 
 .settings-page .backup-actions {
 	display: flex;
-	gap: 0.5rem;
+	gap: var(--banto-space-2);
 	flex-wrap: wrap;
 }
 
 .settings-page .restore-upload {
-	margin-top: 0.75rem;
+	margin-top: var(--banto-space-3);
 }
 
 /* Visually hidden but still focusable/clickable via
@@ -406,14 +406,14 @@
 }
 
 .settings-page .status {
-	margin: 0.75rem 0 0;
-	font-size: 0.875rem;
+	margin: var(--banto-space-3) 0 0;
+	font-size: var(--banto-font-size-md);
 }
 
 .settings-page .urls {
-	margin: 0.4rem 0 0;
-	padding-left: 1.2rem;
-	font-size: 0.8rem;
+	margin: var(--banto-space-2) 0 0;
+	padding-left: var(--banto-space-5);
+	font-size: var(--banto-font-size-sm);
 }
 
 .settings-page .urls a {
@@ -421,14 +421,14 @@
 }
 
 .settings-page .qr {
-	margin-top: 0.75rem;
+	margin-top: var(--banto-space-3);
 	width: fit-content;
 	box-sizing: border-box;
 	max-width: 100%;
 	/* Fixed white, not a --banto-* surface var: a QR code must stay
 	   black-on-white to stay scannable in dark mode too. */
 	background: #fff;
-	padding: 0.5rem;
+	padding: var(--banto-space-2);
 	border-radius: var(--banto-radius-md);
 }
 
@@ -440,9 +440,9 @@
 
 .settings-page .error,
 .settings-page .caution {
-	margin: 0.5rem 0 0;
+	margin: var(--banto-space-2) 0 0;
 	color: var(--banto-danger);
-	font-size: 0.8rem;
+	font-size: var(--banto-font-size-sm);
 }
 
 /* Issue #479: a state that is not wrong but needs a look (the rule is as
@@ -453,9 +453,9 @@
 }
 
 .settings-page .note {
-	margin: 0.75rem 0 0;
+	margin: var(--banto-space-3) 0 0;
 	color: var(--banto-text-muted);
-	font-size: 0.8rem;
+	font-size: var(--banto-font-size-sm);
 }
 
 .settings-page .note.warning {
@@ -465,14 +465,14 @@
 /* Issue #219: the firewall information under the LAN status
    (FirewallInfoPanel.svelte). */
 .settings-page .firewall-info {
-	margin-top: 1rem;
-	padding-top: 0.75rem;
-	border-top: 1px solid var(--banto-border);
+	margin-top: var(--banto-space-4);
+	padding-top: var(--banto-space-3);
+	border-top: var(--banto-border-width) solid var(--banto-border);
 }
 
 .settings-page .firewall-info h4 {
-	margin: 0.75rem 0 0;
-	font-size: 0.875rem;
+	margin: var(--banto-space-3) 0 0;
+	font-size: var(--banto-font-size-md);
 }
 
 .settings-page .firewall-info h4:first-child {
@@ -480,17 +480,17 @@
 }
 
 .settings-page .firewall-values {
-	margin: 0.5rem 0 0;
+	margin: var(--banto-space-2) 0 0;
 	display: flex;
 	flex-direction: column;
-	gap: 0.4rem;
-	font-size: 0.8rem;
+	gap: var(--banto-space-2);
+	font-size: var(--banto-font-size-sm);
 }
 
 .settings-page .firewall-row {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
-	gap: 0.75rem;
+	gap: var(--banto-space-3);
 	align-items: center;
 }
 
@@ -503,7 +503,7 @@
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 0.5rem;
+	gap: var(--banto-space-2);
 	min-width: 0;
 }
 
@@ -512,46 +512,46 @@
 }
 
 .settings-page .firewall-command {
-	margin-top: 0.5rem;
+	margin-top: var(--banto-space-2);
 }
 
 .settings-page .firewall-command-title {
 	margin: 0;
-	font-size: 0.8rem;
+	font-size: var(--banto-font-size-sm);
 }
 
 .settings-page .firewall-command pre {
-	margin: 0.4rem 0;
-	padding: 0.5rem 0.75rem;
+	margin: var(--banto-space-2) 0;
+	padding: var(--banto-space-2) var(--banto-space-3);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-	font-size: 0.75rem;
+	font-size: var(--banto-font-size-sm);
 	background: var(--banto-bg);
-	border: 1px solid var(--banto-border);
+	border: var(--banto-border-width) solid var(--banto-border);
 	border-radius: var(--banto-radius-md);
 }
 
 .settings-page .firewall-copy {
-	font-size: 0.75rem;
+	font-size: var(--banto-font-size-sm);
 }
 
 /* Issue #219 PR-B: the Windows Firewall status (FirewallRuleStatusPanel.svelte). */
 .settings-page .firewall-rule-status {
-	margin-top: 0.5rem;
-	font-size: 0.8rem;
+	margin-top: var(--banto-space-2);
+	font-size: var(--banto-font-size-sm);
 }
 
 .settings-page .firewall-rule-status p {
-	margin: 0.25rem 0 0;
+	margin: var(--banto-space-1) 0 0;
 }
 
 .settings-page .firewall-rule-status ul {
-	margin: 0.25rem 0 0;
-	padding-left: 1.25rem;
+	margin: var(--banto-space-1) 0 0;
+	padding-left: var(--banto-space-5);
 }
 
 .settings-page .firewall-status > .firewall-copy {
-	margin-top: 0.5rem;
+	margin-top: var(--banto-space-2);
 }
 
 /* Issue #219 stage 2 (ADR-0021 E3): allow / remove through the elevated

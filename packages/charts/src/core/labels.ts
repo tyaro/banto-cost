@@ -7,6 +7,11 @@
  * (~1.18em, i.e. ~13px at the 11px tick font), everything else (~digits,
  * ASCII, halfwidth kana) averages ~0.62em. Deliberately slightly generous -
  * a few px of unused margin is invisible; a clipped label is not.
+ *
+ * The charts pass `fontSize` = the computed font size of a rendered label
+ * (`internal/label-font.ts`, theme-dimension-tokens.md D9-b), since the label
+ * CSS uses the rem type tokens; the 11px default is what they use until it
+ * can be read (SSR, tests) and what direct callers get when they omit it.
  */
 
 const CJK_CHAR_WIDTH_EM = 1.18;
@@ -35,29 +40,54 @@ export function estimateLabelWidth(text: string, fontSize = 11): number {
 	return em * fontSize;
 }
 
+const ELLIPSIS = '…';
+
+/**
+ * `text` shortened with a trailing ellipsis so its estimated width at
+ * `fontSize` fits `maxWidth` (px); unchanged when it already fits. Used for
+ * category labels whose margin hit its cap (absolute `max` or 40% of the
+ * chart width): the cap wins so the plot never collapses, and the label is
+ * cut visibly instead of overflowing the chart edge (the components keep the
+ * full text in a `<title>`). Returns '' when not even the ellipsis fits.
+ */
+export function truncateLabel(text: string, maxWidth: number, fontSize = 11): string {
+	if (estimateLabelWidth(text, fontSize) <= maxWidth) return text;
+	// CJK fonts draw '…' fullwidth: budget it like a fullwidth glyph.
+	const ellipsis = CJK_CHAR_WIDTH_EM * fontSize;
+	const chars = [...text];
+	while (chars.length > 0) {
+		chars.pop();
+		const prefix = chars.join('');
+		if (estimateLabelWidth(prefix, fontSize) + ellipsis <= maxWidth) return prefix + ELLIPSIS;
+	}
+	return ellipsis <= maxWidth ? ELLIPSIS : '';
+}
+
 export interface AxisMarginOptions {
 	fontSize?: number;
 	/** Gap between the label's end and the plot edge (the `x = innerLeft - gap` offset used by the components). */
 	gap?: number;
 	min?: number;
+	/**
+	 * Absolute cap (px). Default: 140px at the 11px label font, scaled with
+	 * `fontSize` so a larger rendered font (root font size / token override,
+	 * D9-b) doesn't clip labels that fit at the standard size.
+	 */
 	max?: number;
 }
 
-/**
- * Left margin needed to fit end-anchored axis labels (horizontal bar chart
- * category names): the longest estimated label + gap, clamped to [min, max]
- * so one pathological label can't crush the plot area.
- */
-export function leftMarginFor(labels: string[], options: AxisMarginOptions = {}): number {
-	const { fontSize = 11, gap = 8, min = 48, max = 140 } = options;
-	const widest = labels.reduce(
-		(acc, label) => Math.max(acc, estimateLabelWidth(label, fontSize)),
-		0
-	);
-	return Math.round(Math.min(max, Math.max(min, widest + gap)));
+const DEFAULT_MAX_MARGIN = 140;
+
+/** The default absolute cap for `fontSize` (140px at 11px). */
+function defaultMax(fontSize: number): number {
+	return (DEFAULT_MAX_MARGIN * fontSize) / 11;
 }
 
-/** Max share of the chart width each auto-grown y-axis margin may take. */
+/**
+ * Max share of the chart width each auto-grown margin may take. Left and
+ * right are capped separately, so together they never exceed 80% and the
+ * plot keeps at least 20% of the width.
+ */
 const MAX_TICK_MARGIN_RATIO = 0.4;
 
 export interface TickMarginOptions extends AxisMarginOptions {
@@ -65,15 +95,35 @@ export interface TickMarginOptions extends AxisMarginOptions {
 	totalWidth?: number;
 }
 
+/** `max`, further capped at 40% of `totalWidth` when the width is known. */
+function widthCap(max: number, totalWidth: number): number {
+	return totalWidth > 0 ? Math.min(max, Math.floor(totalWidth * MAX_TICK_MARGIN_RATIO)) : max;
+}
+
+/**
+ * Left margin needed to fit end-anchored axis labels (horizontal bar chart
+ * category names): the longest estimated label + gap, clamped to [min, max]
+ * so one pathological label can't crush the plot area. With `totalWidth`,
+ * also capped at 40% of it (that cap wins over `min` in a very narrow chart).
+ */
+export function leftMarginFor(labels: string[], options: TickMarginOptions = {}): number {
+	const { fontSize = 11, gap = 8, min = 48, totalWidth = 0 } = options;
+	const max = widthCap(options.max ?? defaultMax(fontSize), totalWidth);
+	const widest = labels.reduce(
+		(acc, label) => Math.max(acc, estimateLabelWidth(label, fontSize)),
+		0
+	);
+	// ceil (not round): a label that sets the margin must never be cut by `truncateLabel`.
+	return Math.floor(Math.min(max, Math.ceil(Math.max(min, widest + gap))));
+}
+
 /** Grow `base` to fit the widest label (+ `gap`), capped by `max` and 40% of `totalWidth`; never below `base`. */
 function growMargin(labels: string[], base: number, gap: number, o: TickMarginOptions): number {
-	const { fontSize = 11, max = 140, totalWidth = 0 } = o;
+	const { fontSize = 11, totalWidth = 0 } = o;
+	const max = Math.floor(o.max ?? defaultMax(fontSize));
 	let widest = 0;
 	for (const label of labels) widest = Math.max(widest, estimateLabelWidth(label, fontSize));
-	const cap = Math.max(
-		base,
-		totalWidth > 0 ? Math.min(max, Math.floor(totalWidth * MAX_TICK_MARGIN_RATIO)) : max
-	);
+	const cap = Math.max(base, widthCap(max, totalWidth));
 	return Math.min(cap, Math.max(base, Math.ceil(widest + gap)));
 }
 
@@ -111,9 +161,12 @@ export function rightMarginForTicks(
 /**
  * Right margin needed so the LAST middle-anchored tick label of a bottom
  * value axis doesn't clip at the container edge: half the label overhangs
- * the plot's right edge, so reserve that half (plus a small pad).
+ * the plot's right edge, so reserve that half (plus a small pad). With
+ * `totalWidth`, capped at 40% of it like the other margins.
  */
-export function rightMarginForLastTick(lastLabel: string, options: AxisMarginOptions = {}): number {
-	const { fontSize = 11, gap = 4, min = 16 } = options;
-	return Math.round(Math.max(min, estimateLabelWidth(lastLabel, fontSize) / 2 + gap));
+export function rightMarginForLastTick(lastLabel: string, options: TickMarginOptions = {}): number {
+	const { fontSize = 11, gap = 4, min = 16, totalWidth = 0 } = options;
+	const margin = Math.round(Math.max(min, estimateLabelWidth(lastLabel, fontSize) / 2 + gap));
+	// No absolute cap (as before); with `totalWidth`, at most 40% of it.
+	return Math.min(margin, widthCap(Infinity, totalWidth));
 }

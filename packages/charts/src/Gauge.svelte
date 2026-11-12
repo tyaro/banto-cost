@@ -130,13 +130,13 @@
 
 	.range-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 
 	.hero-value {
 		fill: var(--banto-text);
-		font-size: 1.6rem;
+		font-size: var(--banto-font-size-xl);
 		font-weight: 600;
 		font-variant-numeric: tabular-nums;
 	}

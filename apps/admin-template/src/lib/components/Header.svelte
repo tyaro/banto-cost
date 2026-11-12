@@ -277,11 +277,11 @@
 		z-index: var(--banto-z-header);
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
+		gap: var(--banto-space-3);
 		height: var(--banto-shell-header-height);
-		padding: 0 1rem;
+		padding: 0 var(--banto-space-4);
 		background: var(--banto-surface);
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		/* Glass preset (spec M12): no-op under standard (--banto-backdrop: none). */
 		backdrop-filter: var(--banto-backdrop, none);
 		-webkit-backdrop-filter: var(--banto-backdrop, none);
@@ -296,7 +296,7 @@
 	.status-area {
 		display: none;
 		align-items: center;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 	}
 
 	@media (min-width: 768px) {
@@ -309,10 +309,10 @@
 	.brand {
 		display: flex;
 		align-items: center;
-		gap: 0.55rem;
+		gap: var(--banto-space-2);
 		flex-shrink: 0;
-		padding-right: 0.75rem;
-		border-right: 1px solid var(--banto-border);
+		padding-right: var(--banto-space-3);
+		border-right: var(--banto-border-width) solid var(--banto-border);
 		font-weight: 700;
 	}
 
@@ -337,7 +337,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 1rem;
+		font-size: var(--banto-font-size-base);
 		font-weight: 600;
 		font-feature-settings: 'palt';
 	}
@@ -349,15 +349,15 @@
 	.search-pill {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 		height: var(--banto-control-height-sm);
-		padding: 0 0.7rem;
-		border: 1px solid var(--banto-border-strong);
+		padding: 0 var(--banto-space-3);
+		border: var(--banto-border-width) solid var(--banto-border-strong);
 		border-radius: var(--banto-radius-md);
 		background: var(--banto-surface);
 		color: var(--banto-text-muted);
 		font: inherit;
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		cursor: pointer;
 		transition:
 			background var(--banto-duration-fast) var(--banto-ease-out),
@@ -375,13 +375,13 @@
 	}
 
 	.search-pill kbd {
-		padding: 0.1rem 0.35rem;
-		border: 1px solid var(--banto-border-strong);
+		padding: var(--banto-space-1) var(--banto-space-1);
+		border: var(--banto-border-width) solid var(--banto-border-strong);
 		border-radius: var(--banto-radius-sm);
 		background: var(--banto-surface-subtle);
 		color: var(--banto-text-muted);
 		font: inherit;
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 	}
 
 	.search-icon-only {
@@ -401,9 +401,9 @@
 	.user-trigger {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 		height: var(--banto-control-height);
-		padding: 0 0.5rem 0 0.3rem;
+		padding: 0 var(--banto-space-2) 0 var(--banto-space-1);
 		border: none;
 		border-radius: var(--banto-radius-md);
 		background: transparent;
@@ -437,13 +437,13 @@
 		border-radius: 50%;
 		background: var(--banto-primary-solid);
 		color: var(--banto-on-solid);
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 		font-weight: 700;
 	}
 
 	.user-name {
 		display: none;
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 		font-weight: 600;
 		white-space: nowrap;
 	}

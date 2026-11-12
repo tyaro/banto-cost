@@ -1,0 +1,194 @@
+{
+  "$comment": "date-time-pickers §5.3 / §5.6 (PR-5): one table of edge cases for the canonical forms and the validation rules, read by Rust (crates/banto-core/tests/datetime_contract.rs) and TypeScript (packages/forms/tests/temporalField.test.ts, packages/grid-svelte/tests/temporal.test.ts), so the two sides keep the same rules and the same default messages. `error` is the default (Japanese) message, or null when valid. A missing min / max / step is not given; step 0 is an invalid step (ignored).",
+  "canonical": [
+    { "type": "date", "value": "2026-11-07", "valid": true },
+    { "type": "date", "value": "0001-01-01", "valid": true },
+    { "type": "date", "value": "9999-12-31", "valid": true },
+    { "type": "date", "value": "2024-02-29", "valid": true },
+    { "type": "date", "value": "2000-02-29", "valid": true },
+    { "type": "date", "value": "1900-02-29", "valid": false },
+    { "type": "date", "value": "2025-02-29", "valid": false },
+    { "type": "date", "value": "0000-01-01", "valid": false },
+    { "type": "date", "value": "2026-13-01", "valid": false },
+    { "type": "date", "value": "2026-04-31", "valid": false },
+    { "type": "date", "value": "2026-11-7", "valid": false },
+    { "type": "date", "value": "2026/11/07", "valid": false },
+    { "type": "date", "value": "20261107", "valid": false },
+    { "type": "date", "value": " 2026-11-07", "valid": false },
+    { "type": "date", "value": "２０２６-１１-０７", "valid": false },
+    { "type": "date", "value": "", "valid": false },
+    { "type": "time", "value": "00:00", "valid": true },
+    { "type": "time", "value": "23:59", "valid": true },
+    { "type": "time", "value": "09:30", "valid": true },
+    { "type": "time", "value": "24:00", "valid": false },
+    { "type": "time", "value": "23:60", "valid": false },
+    { "type": "time", "value": "9:30", "valid": false },
+    { "type": "time", "value": "0930", "valid": false },
+    { "type": "time", "value": "09:30:00", "valid": false },
+    { "type": "time", "value": "09:30 ", "valid": false },
+    { "type": "time", "value": "０９:３０", "valid": false },
+    { "type": "time", "value": "", "valid": false },
+    { "type": "datetime", "value": "2026-11-07T09:30", "valid": true },
+    { "type": "datetime", "value": "2024-02-29T00:00", "valid": true },
+    { "type": "datetime", "value": "9999-12-31T23:59", "valid": true },
+    { "type": "datetime", "value": "0001-01-01T00:00", "valid": true },
+    { "type": "datetime", "value": "2025-02-29T00:00", "valid": false },
+    { "type": "datetime", "value": "2026-11-07 09:30", "valid": false },
+    { "type": "datetime", "value": "2026-11-07t09:30", "valid": false },
+    { "type": "datetime", "value": "2026-11-07T09:30:00", "valid": false },
+    { "type": "datetime", "value": "2026-11-07T24:00", "valid": false },
+    { "type": "datetime", "value": "2026-11-07T9:30", "valid": false },
+    { "type": "datetime", "value": "2026-11-07T09:30Z", "valid": false },
+    { "type": "datetime", "value": "2026-11-07T09:30+09:00", "valid": false },
+    { "type": "datetime", "value": "2026-11-07", "valid": false },
+    { "type": "datetime", "value": "", "valid": false }
+  ],
+  "rules": [
+    {
+      "type": "date",
+      "value": "2026-11-07",
+      "min": "2026-11-07",
+      "max": "2026-11-07",
+      "error": null
+    },
+    {
+      "type": "date",
+      "value": "2026-11-06",
+      "min": "2026-11-07",
+      "error": "2026-11-07以降の日付を入力してください"
+    },
+    {
+      "type": "date",
+      "value": "2026-11-08",
+      "max": "2026-11-07",
+      "error": "2026-11-07以前の日付を入力してください"
+    },
+    {
+      "type": "date",
+      "value": "2025-02-29",
+      "min": "2026-11-07",
+      "error": "日付を YYYY-MM-DD の形で入力してください"
+    },
+    { "type": "date", "value": "2026/11/07", "error": "日付を YYYY-MM-DD の形で入力してください" },
+
+    { "type": "time", "value": "09:00", "min": "09:00", "max": "18:00", "step": 15, "error": null },
+    { "type": "time", "value": "18:00", "min": "09:00", "max": "18:00", "step": 15, "error": null },
+    {
+      "type": "time",
+      "value": "08:59",
+      "min": "09:00",
+      "max": "18:00",
+      "error": "09:00以降の時刻を入力してください"
+    },
+    {
+      "type": "time",
+      "value": "18:01",
+      "min": "09:00",
+      "max": "18:00",
+      "error": "18:00以前の時刻を入力してください"
+    },
+    { "type": "time", "value": "09:10", "step": 15, "error": "15分刻みの時刻を入力してください" },
+    {
+      "type": "time",
+      "value": "08:50",
+      "min": "09:00",
+      "step": 15,
+      "error": "09:00以降の時刻を入力してください"
+    },
+    { "type": "time", "value": "00:00", "step": 25, "error": null },
+    { "type": "time", "value": "23:45", "step": 25, "error": null },
+    { "type": "time", "value": "23:59", "step": 25, "error": "25分刻みの時刻を入力してください" },
+    { "type": "time", "value": "23:59", "step": 1, "error": null },
+    { "type": "time", "value": "10:15", "error": null },
+    { "type": "time", "value": "10:15", "step": 0, "error": null },
+    { "type": "time", "value": "00:00", "step": 1440, "error": null },
+    {
+      "type": "time",
+      "value": "12:00",
+      "step": 1440,
+      "error": "1440分刻みの時刻を入力してください"
+    },
+    { "type": "time", "value": "24:00", "error": "時刻を HH:mm の形で入力してください" },
+    { "type": "time", "value": "09:30:00", "error": "時刻を HH:mm の形で入力してください" },
+    {
+      "type": "time",
+      "value": "9:30",
+      "min": "09:00",
+      "error": "時刻を HH:mm の形で入力してください"
+    },
+
+    {
+      "type": "datetime",
+      "value": "2026-11-02T09:00",
+      "min": "2026-11-02T09:00",
+      "max": "2026-11-27T18:00",
+      "step": 30,
+      "error": null
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-27T18:00",
+      "min": "2026-11-02T09:00",
+      "max": "2026-11-27T18:00",
+      "error": null
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-02T08:59",
+      "min": "2026-11-02T09:00",
+      "error": "2026-11-02 09:00以降の日時を入力してください"
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-01T23:59",
+      "min": "2026-11-02T00:00",
+      "error": "2026-11-02 00:00以降の日時を入力してください"
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-27T18:01",
+      "max": "2026-11-27T18:00",
+      "error": "2026-11-27 18:00以前の日時を入力してください"
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-28T00:00",
+      "max": "2026-11-27T23:59",
+      "error": "2026-11-27 23:59以前の日時を入力してください"
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-10T12:10",
+      "step": 30,
+      "error": "30分刻みの時刻を入力してください"
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-10T12:10",
+      "min": "2026-11-11T00:00",
+      "step": 30,
+      "error": "2026-11-11 00:00以降の日時を入力してください"
+    },
+    { "type": "datetime", "value": "2024-02-29T23:30", "step": 30, "error": null },
+    {
+      "type": "datetime",
+      "value": "2025-02-29T09:00",
+      "error": "日時を YYYY-MM-DD HH:mm の形で入力してください"
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-07 09:30",
+      "error": "日時を YYYY-MM-DD HH:mm の形で入力してください"
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-07T09:30:00",
+      "error": "日時を YYYY-MM-DD HH:mm の形で入力してください"
+    },
+    {
+      "type": "datetime",
+      "value": "2026-11-07",
+      "error": "日時を YYYY-MM-DD HH:mm の形で入力してください"
+    }
+  ]
+}

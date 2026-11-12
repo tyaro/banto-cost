@@ -79,7 +79,7 @@ cargo check --workspace
   ADR-0007）。ストアを使わなくても、`@banto/ui` を足すなら exclude に入れておく。使わなければ何も要らない
   （既存の `@banto/*` の API は変わらない）。
 - 次の版から `@banto/theme` に余白・文字サイズ・枠線幅の段階のトークン（`--banto-space-1`〜`-8`・
-  `--banto-font-size-xs`/`sm`/`md`/`lg`/`xl`・`--banto-border-width`/`-strong`）がある。**追加のみ・後方互換**で、
+  `--banto-font-size-xs`/`sm`/`md`/`lg`/`xl`・`--banto-border-width`/`-strong`。後の版で本文の大きさの `--banto-font-size-base` を追加）がある。**追加のみ・後方互換**で、
   タグを上げても画面は変わらない。派生側の CSS の生の `rem` / `px` は、**任意で**これらに置き換えられる
   （値と丸めの目安は [design/theme-dimension-tokens.md](design/theme-dimension-tokens.md) §5.2、一覧は
   `packages/theme/README.md`）。置き換えると 1〜2px 動くことがあるので、画面を開いて確かめる。
@@ -121,6 +121,99 @@ readonly / disabled 時の入力・blur・数値ドラフトの確定は抑止�
 適用済みフィルタの説明にも、任意の `GridMessages.filterAppliedDescription(header)` を追加した。
 既定は日本語なので、多言語利用は対応する辞書と bridge も取り込む。
 適用状態は二重下線・説明で示し、ボタン名や `aria-expanded` の開閉契約は維持する。
+
+#### 日付のフィールド（v7.0.0、date-time-pickers PR-3）
+
+**空の日付は `''` ではなく `null` になる**（[design/date-time-pickers.md](design/date-time-pickers.md) D6）。
+`@banto/forms` の `type: 'date'` について、次の 3 か所が変わる。
+
+- `DateField`（`BantoForm` の中も直接利用も）が、入力を消したときに `onInput(null)` を呼ぶ（今までは `''`）。
+- `createFormStore` / `createFormDraft` の初期値で、`default` の無い date の項目が `null` になる（今までは `''`）。
+- `FormDraft.commit` が、空の date を `null` として確定する。
+
+送信する値・`values` の date を `=== ''` や `.length` で見ている箇所は、`null` も空として扱うように直す
+（`value == null || value === ''` など）。Rust 側の入力の型が `String` で date を受け取っている場合は `Option<String>` にする
+（`null` は `String` に deserialize できない）。DB の TEXT の列に `''` が入らなくなるので、並べ替え・絞り込みで空が先頭に
+混ざることも無くなる。既存の行の `''` はそのまま残るので、必要なら `NULL` に揃える。
+
+あわせて次が増える（後方互換。指定しなければ今までどおり）。
+
+- date の**形式の検証**: `validateField` が、値が `YYYY-MM-DD` の実在の日でなければエラーにする。ネイティブの
+  `<input type="date">` は常にこの形を返すので、ネイティブのままのアプリでは結果は変わらない。値を自分で入れている場合
+  （`store.setValue`・`initial`）は正規の形にする。
+- `FieldDef` の `min` / `max` が `number | string` になる。date では `'2026-11-02'` のような正規の文字列で範囲を指定する
+  （両端を含む）。型に合わない側の値は無視する（number の項目の文字列、date の項目の数値）。`isDateDisabled(date)` で
+  選べない日を指定できる。新しい文言は `ValidationMessages` の任意の `dateInvalid` / `dateMin` / `dateMax` /
+  `dateDisabled`（既定は日本語）で、多言語アプリは辞書と bridge にも足す（admin-template の `validation.date*` と
+  `formValidationMessages()`）。
+- **日付ピッカーの注入**: `provideFieldInputs({ date })`（context。レイアウトで 1 回）か `BantoForm` の `fieldInputs`
+  prop（フォームごとの上書き）で、`@banto/ui` の `DateInput` などを date の項目に使える。注入しなければネイティブの
+  入力のまま。admin-template はルートの `+layout.svelte` で `FormDateInput.svelte`（`DateInput` に文言と locale を足す
+  薄い包み）を注入している。取り込むと date の項目の見た目が変わる（入力欄 ＋ カレンダーのボタン。`appearance="underline"`
+  のフォームでも枠のある入力欄のまま）。FormDraft には `DraftDateField` を使う。詳細は
+  [forms README](../packages/forms/README.md#日付の入力と注入date-time-pickers-pr-3)。
+
+`@banto/grid-svelte` の `SchemaField` の `min` / `max` も `number | string` に広げた（構造の鏡像）。
+
+#### グリッドの日付のセル（v7.0.0、date-time-pickers PR-4）
+
+`@banto/grid-svelte` の `editor: 'date'` も forms に揃える。
+
+- **空の日付は `null`**: セルを空にして確定・空のセルを貼り付け・CSV の空の欄で、`onCellEdit` / `onRangePaste` /
+  `convertCsvRow` の値が `''` から `null` になる。受け取る側（保存・Rust の入力の型）は上の「日付のフィールド」と同じに直す。
+- **正規化**: `parseCellInput(raw, 'date')` が素通しをやめ、`2026/11/7`（Excel で保存した CSV の形）・全角などを
+  `YYYY-MM-DD` に直す。実在しない日・別の順（`11/07/2026`）・時刻付き・年を省いた `11/7`（貼り付けと CSV のみ）は
+  失敗（`inlineEditInvalid`・貼り付けはスキップ・CSV は `convertError`）になる。今まで素通しで入っていた不正な文字列が
+  入らなくなる。
+- **検証**: `columnsFromSchema` の date の列に、forms と同じ形式・`min` / `max`・`isDateDisabled` の検証が付く
+  （`SchemaField` に `isDateDisabled` を追加。文言は `ColumnValidationMessages` の任意の `dateInvalid` / `dateMin` /
+  `dateMax` / `dateDisabled`。多言語アプリは admin-template の `columnValidationMessages()` のように bridge へ足す）。
+- **日付ピッカーの注入**: `provideCellEditors({ date })`（context）か `BantoGrid` の `cellEditors` prop で、`@banto/ui` の
+  `DateInput` などをセルの編集に使える。注入しなければネイティブの入力のまま。admin-template はルートの
+  `+layout.svelte` で `CellDateInput.svelte` を注入している。`GridColumn` に任意の `editorMin` / `editorMax` /
+  `isDateDisabled`（カレンダーの範囲と無効日）を追加。詳細は
+  [grid README](../packages/grid-svelte/README.md#日付のセルと注入date-time-pickers-pr-4)。
+
+#### 時刻・日時の型（v7.0.0、date-time-pickers PR-5）
+
+追加のみで、既存の型の挙動は変わらない。使うときは次を揃える。
+
+- **型**: `FieldType`（forms）・`SchemaFieldType`／`CellEditorType`（grid）に `'time'`（`HH:mm`）と `'datetime'`
+  （`YYYY-MM-DDTHH:mm`、タイムゾーンを持たない壁時計の時刻）。空は `null`。`min`／`max` は正規の文字列、`step` は分
+  （省略時は一覧 30 分刻み・任意の分を受け付ける）。datetime の入力欄・グリッドの表示は空白区切り、値は `T`。
+- **ピッカーの注入**: `provideFieldInputs({ date, time, datetime })`・`provideCellEditors({ date, time, datetime })`。
+  admin-template はルートの `+layout.svelte` で `FormTimeInput`・`FormDateTimeInput`・`CellTimeInput`・
+  `CellDateTimeInput`（`src/lib/components/`）を注入している。注入しなければネイティブの `time`／`datetime-local`。
+- **文言**: 多言語アプリは `ValidationMessages`／`ColumnValidationMessages` の `timeInvalid`・`timeMin`・`timeMax`・
+  `timeStep`・`dateTimeInvalid`・`dateTimeMin`・`dateTimeMax` と、`UiMessages` の `dateTimePicker*`・`dateTimeFormatHint` を
+  bridge へ足す（admin-template の `i18n.ts` の `timeInputMessages()`・`dateTimeInputMessages()`）。
+- **DB と Rust**: 列は SQLite・PostgreSQL とも TEXT。リソースの入力の検証から `banto_core::datetime::validate_time` /
+  `validate_datetime`（date は `validate_date`）を呼ぶと、フロントと同じ規則・同じ既定の文言でエラーを返す（正規の形だけを
+  受け付ける。空の扱いと `isDateDisabled` に当たる規則はリソース側で書く）。
+
+#### 期間の絞り込み（v7.0.0、date-time-pickers PR-6）
+
+- **PostgreSQL で期間の絞り込みを速くするには索引を張る**: `between` は `CAST(列 AS TEXT) COLLATE "C"` で比べるので、列の通常の
+  索引は効かない。自前の date・datetime 列で絞り込むなら、同じ式の索引を migration で足す
+  （`CREATE INDEX ... ON テーブル ((CAST(列 AS TEXT) COLLATE "C"));`。例は admin-template の
+  `migrations-postgres/0009_items_updated_at_index.sql`）。SQLite は通常の列の索引でよい。
+  **この索引は TEXT の列に限る**（banto の既定どおり日付を TEXT で持つ列）。PostgreSQL の `DATE`・`TIMESTAMP` の列では、
+  text への変換が IMMUTABLE でないため式の索引を作れず、migration が `functions in index expression must be marked
+  IMMUTABLE` で失敗する。そうした列は、TEXT（`YYYY-MM-DD`・`YYYY-MM-DDTHH:mm`）で持つように移すか、期間の絞り込みは
+  索引なし（全件走査）で受け入れるか、自前の DataProvider で列の型のまま比べる。
+
+- **見た目が変わる**: `columnsFromSchema` が date・datetime の列を絞り込みできるようにする（見出しに ▾ が出る。読み取り
+  専用の列も）。出したくない列は `overrides` で `{ filterable: false }`。date・time・datetime の列の並べ替えは
+  `localeCompare` から文字列の大小に変わる（正規の形なら順は同じ）。
+- **`FilterOp` に `'between'`**（`@banto/grid-svelte`・`@banto/admin-core`・`banto_core` の鏡像）。値は
+  `[from | null, to | null]` の半開区間。`banto-storage` の `ColumnMap` 経由の一覧は何もしなくても受け付ける。
+  **自前の `DataProvider` や、`FilterOp` を `match`／`switch` で網羅している派生アプリのコードは `between` を足す**
+  （Rust は `match` が網羅でなくなりコンパイルが止まる。規則は grid README の「期間の絞り込み」）。
+- **期間の部品の注入**: admin-template はルートの `+layout.svelte` で `provideCellEditors({ ..., dateRange:
+  FilterDateRangeInput })` を渡している（`src/lib/components/FilterDateRangeInput.svelte`）。注入しなければ
+  ネイティブの日付入力 2 つ。
+- **文言**: 多言語アプリは `GridMessages` の `filterRange*` と `UiMessages` の `dateRangeStart`・`dateRangeEnd` を
+  bridge へ足す（admin-template の `i18n.ts` の `gridMessages()`・`dateRangeInputMessages()`）。
 
 ### 3.2 B: コピーしたテンプレート部分の取り込み
 

@@ -219,7 +219,15 @@ describe('saveListViewState / loadListViewState', () => {
 				'a filter entry with no value key at all',
 				{ sort: [], filters: [{ field: 'price', op: 'eq' }] }
 			],
-			['groupBy that is neither a string nor null', { sort: [], filters: [], groupBy: 42 }]
+			['groupBy that is neither a string nor null', { sort: [], filters: [], groupBy: 42 }],
+			[
+				'a between whose value is not [from, to] (date-time-pickers §5.9)',
+				{ sort: [], filters: [{ field: 'updatedAt', op: 'between', value: '2026-11-01' }] }
+			],
+			[
+				'a between with a number end',
+				{ sort: [], filters: [{ field: 'updatedAt', op: 'between', value: [20261101, null] }] }
+			]
 		])(
 			'rejects the WHOLE snapshot for %s (falls back to null -> caller default)',
 			(_label, bad) => {
@@ -228,6 +236,15 @@ describe('saveListViewState / loadListViewState', () => {
 				expect(loadListViewState(scope, 'items:server', undefined, storage)).toBeNull();
 			}
 		);
+
+		it('accepts a between with an open end', () => {
+			const storage = makeMemoryStorage();
+			const between = { field: 'updatedAt', op: 'between', value: ['2026-11-01', null] };
+			storage.setItem('banto.listView.items:server', owned({ sort: [], filters: [between] }));
+			expect(loadListViewState(scope, 'items:server', undefined, storage)?.filters).toEqual([
+				between
+			]);
+		});
 
 		it('a filter value of null/0/false is still valid (falsy but present)', () => {
 			const storage = makeMemoryStorage();

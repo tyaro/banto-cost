@@ -169,25 +169,28 @@ forms と列表示メニューのネイティブ checkbox は `--banto-checkbox-
 （枠線幅は `px`）なので、root の `--banto-font-size`（既定 14px）に追従する。密度（compact）では切り替えない。
 部品の形（幅・高さ・列幅・アイコンの大きさ）は段階に入れない。
 
-| トークン                      | 値         | 用途                                   |
-| ----------------------------- | ---------- | -------------------------------------- |
-| `--banto-space-1`             | `0.25rem`  | 余白（序数。値は名前に含めない）       |
-| `--banto-space-2`             | `0.5rem`   | 余白                                   |
-| `--banto-space-3`             | `0.75rem`  | 余白                                   |
-| `--banto-space-4`             | `1rem`     | 余白                                   |
-| `--banto-space-5`             | `1.25rem`  | 余白                                   |
-| `--banto-space-6`             | `1.5rem`   | 余白                                   |
-| `--banto-space-7`             | `2rem`     | 余白                                   |
-| `--banto-space-8`             | `3rem`     | 余白（空状態など）                     |
-| `--banto-font-size-xs`        | `0.7rem`   | バッジ・極小ラベル                     |
-| `--banto-font-size-sm`        | `0.8rem`   | caption                                |
-| `--banto-font-size-md`        | `0.875rem` | 補足・表の副情報（本文より一段小さい） |
-| `--banto-font-size-lg`        | `1.125rem` | 見出し                                 |
-| `--banto-font-size-xl`        | `1.75rem`  | display（KPI の数値など）              |
-| `--banto-border-width`        | `1px`      | 枠線の幅                               |
-| `--banto-border-width-strong` | `2px`      | 選択・強調の縁                         |
+| トークン                      | 値         | 用途                                    |
+| ----------------------------- | ---------- | --------------------------------------- |
+| `--banto-space-1`             | `0.25rem`  | 余白（序数。値は名前に含めない）        |
+| `--banto-space-2`             | `0.5rem`   | 余白                                    |
+| `--banto-space-3`             | `0.75rem`  | 余白                                    |
+| `--banto-space-4`             | `1rem`     | 余白                                    |
+| `--banto-space-5`             | `1.25rem`  | 余白                                    |
+| `--banto-space-6`             | `1.5rem`   | 余白                                    |
+| `--banto-space-7`             | `2rem`     | 余白                                    |
+| `--banto-space-8`             | `3rem`     | 余白（空状態など）                      |
+| `--banto-font-size-xs`        | `0.7rem`   | バッジ・極小ラベル                      |
+| `--banto-font-size-sm`        | `0.8rem`   | caption                                 |
+| `--banto-font-size-md`        | `0.875rem` | 補足・表の副情報（本文より一段小さい）  |
+| `--banto-font-size-base`      | `1rem`     | 本文（root と同じ。明示が要るときだけ） |
+| `--banto-font-size-lg`        | `1.125rem` | 見出し                                  |
+| `--banto-font-size-xl`        | `1.75rem`  | display（KPI の数値など）               |
+| `--banto-border-width`        | `1px`      | 枠線の幅                                |
+| `--banto-border-width-strong` | `2px`      | 選択・強調の縁                          |
 
-本文（body）は root の `1rem` を継承するので、本文用のトークンは無い。
+本文（body）は root の `1rem` を継承するので、ふつうは何も書かない。小さい親の中で本文の大きさに戻すとき
+（カードの見出しなど）だけ `--banto-font-size-base`（`1rem`）を使う。段の並びは `xs` < `sm` < `md` < `base` < `lg` < `xl`
+（`md` は本文より一段小さい）。root の大きさの `--banto-font-size`（px）とは別物。
 
 ```css
 .my-card {

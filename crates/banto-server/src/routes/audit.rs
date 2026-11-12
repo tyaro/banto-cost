@@ -216,28 +216,18 @@ struct AuditLogState {
 /// infrequently-visited page, and each prune is a couple of indexed
 /// `DELETE`s, not an expensive scan.
 ///
-/// **A bounded read (`asOfId` given = block 2+ of a viewer generation) does
-/// not prune** (Issue #248, same as banto-industrial #448/#464): a prune
-/// deletes rows inside the boundary, which the viewer must treat as an
-/// expired snapshot. With the row cap reached and entries still being
-/// written, every list call deletes the oldest rows, so pruning here would
-/// expire every generation at its second block. The unbounded read (the
-/// first block of a generation, i.e. the viewer's "reload") and startup
-/// still prune.
+/// **A bounded read (`asOfId` given) does not prune**, see
+/// [`AuditLogService::prune_before_list`] (shared with the Tauri command).
 async fn audit_log_list(
     State(state): State<AuditLogState>,
     query: Result<Query<AuditLogListQuery>, QueryRejection>,
     Json(params): Json<ListParams>,
 ) -> Result<Json<AuditLogList>, ApiError> {
     let Query(query) = query.map_err(|err| BantoError::BadRequest(err.body_text()))?;
-    if query.as_of_id.is_none() {
-        if let Ok(config) = state.settings.audit_config().await {
-            let _ = state
-                .audit
-                .prune(config.retention_days, config.retention_rows)
-                .await;
-        }
-    }
+    state
+        .audit
+        .prune_before_list(&state.settings, query.as_of_id)
+        .await;
     Ok(Json(state.audit.list_as_of(params, query.as_of_id).await?))
 }
 

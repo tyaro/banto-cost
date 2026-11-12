@@ -116,6 +116,8 @@
 
 	.time {
 		margin: 0;
+		/* 壁掛け表示の大きな時刻は画面の幅に追従させる部品の形で、文字サイズの段（--banto-font-size-*）
+		   に入れない（verify-architecture の RAW_DIMENSION_ALLOWLIST に理由つきで登録済み）。 */
 		font-size: clamp(3rem, 12vw, 7rem);
 		font-weight: 600;
 		line-height: 1.05;
@@ -125,13 +127,13 @@
 
 	.date {
 		margin: 0;
-		font-size: 1rem;
+		font-size: var(--banto-font-size-base);
 		color: var(--banto-text-muted);
 	}
 
 	.updated {
 		margin: 0;
-		font-size: 0.9rem;
+		font-size: var(--banto-font-size-md);
 		color: var(--banto-text-muted);
 		font-variant-numeric: tabular-nums;
 	}

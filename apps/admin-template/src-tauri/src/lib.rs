@@ -84,17 +84,17 @@ use admin_template_core::time_entries::{
     TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
 };
 use admin_template_core::user_names::{user_names, UserName};
-use admin_template_core::users::{Role, UserIdentity, UserSummary, UsersService};
+use admin_template_core::users::{Role, UserIdentity, UserIdentityView, UserSummary, UsersService};
 use admin_template_core::work_masters::{
     MasterKind, WorkMaster, WorkMasterInput, WorkMastersService,
 };
 use banto_core::{BantoError, FieldError, ListParams, ListResult};
 use banto_server::routes::{MetricsProbe, SystemInfo};
 use banto_server::{
-    bind as bind_listener, bind_with_port_fallback, bind_without_fallback, lan_urls_for_bind,
-    reach_check_router, static_router, with_security_headers, AuthState, BoundServer, GrantKind,
-    PortFallbackError, ReachCheckState, ReachCheckStatus, ReachIssue, ReachIssueError, ReachTarget,
-    RunningServer, ServerConfig, ServerEvent,
+    bind as bind_listener, bind_with_port_fallback, bind_without_fallback, lan_addrs_for_bind,
+    lan_urls_for_bind, reach_check_router, static_router, with_security_headers, AuthState,
+    BoundServer, GrantKind, PortFallbackError, ReachCheckState, ReachCheckStatus, ReachIssue,
+    ReachIssueError, ReachTarget, RunningServer, ServerConfig, ServerEvent,
 };
 use qrcode::render::svg;
 use qrcode::QrCode;
@@ -2303,25 +2303,9 @@ impl std::fmt::Debug for ReachCheckIssueResult {
     }
 }
 
-/// The shape of [`lan_urls_for_bind`] (the live listener's URL candidates),
-/// injectable in [`reach_check_issue_body`].
-type LanUrlsFor = fn(&str, u16) -> Vec<String>;
-
-/// The host part of one of [`lan_urls_for_bind`]'s `http://<host>:<port>`
-/// URLs (`None` for any other shape).
-fn lan_url_host(url: &str, port: u16) -> Option<&str> {
-    url.strip_prefix("http://")?
-        .strip_suffix(&format!(":{port}"))
-        .filter(|host| !host.is_empty())
-}
-
-/// Whether a URL host is a loopback address (IPv6 literals in brackets).
-fn is_loopback_host(host: &str) -> bool {
-    host.trim_start_matches('[')
-        .trim_end_matches(']')
-        .parse::<std::net::IpAddr>()
-        .is_ok_and(|ip| ip.is_loopback())
-}
+/// The shape of [`lan_addrs_for_bind`] (the live listener's reachable
+/// addresses), injectable in [`reach_check_issue_body`].
+type LanAddrsFor = fn(&str) -> Vec<std::net::Ipv4Addr>;
 
 /// Desktop-only command (Issue #219 stage 1 / PR-C2, lan-reach-check-design
 /// §5.1): issue a one-time reach-check token for `host` - one of the live
@@ -2336,10 +2320,10 @@ async fn reach_check_issue(
     state: State<'_, AppState>,
     host: String,
 ) -> Result<ReachCheckIssueResult, BantoError> {
-    reach_check_issue_body(&state, &host, lan_urls_for_bind, ReachCheckState::issue).await
+    reach_check_issue_body(&state, &host, lan_addrs_for_bind, ReachCheckState::issue).await
 }
 
-/// Body of [`reach_check_issue`] with the URL candidates (`lan_urls`) and the
+/// Body of [`reach_check_issue`] with the address candidates (`lan_addrs`) and the
 /// issuance (`issue`, which enumerates this PC's addresses) injected, so the
 /// tests can use a LAN address and a peer that are not this machine's.
 ///
@@ -2351,7 +2335,7 @@ async fn reach_check_issue(
 async fn reach_check_issue_body(
     state: &AppState,
     host: &str,
-    lan_urls: LanUrlsFor,
+    lan_addrs: LanAddrsFor,
     issue: fn(&ReachCheckState, u64, ReachTarget) -> Result<ReachIssue, ReachIssueError>,
 ) -> Result<ReachCheckIssueResult, BantoError> {
     require_role(state, Role::Admin, "settings").await?;
@@ -2362,19 +2346,19 @@ async fn reach_check_issue_body(
         let Some(live) = slot.live.as_ref().map(LiveServer::listener) else {
             return refused(ReachCheckRefusal::NotListening);
         };
-        let urls = lan_urls(&live.bind, live.port);
-        if urls.is_empty() {
+        let addrs = lan_addrs(&live.bind);
+        if addrs.is_empty() {
             return refused(ReachCheckRefusal::UnsupportedBind);
         }
-        let candidates: Vec<&str> = urls
+        let candidates: Vec<String> = addrs
             .iter()
-            .filter_map(|url| lan_url_host(url, live.port))
-            .filter(|candidate| !is_loopback_host(candidate))
+            .filter(|ip| !ip.is_loopback())
+            .map(ToString::to_string)
             .collect();
         if candidates.is_empty() {
             return refused(ReachCheckRefusal::LoopbackOnly);
         }
-        if !candidates.contains(&host) {
+        if !candidates.iter().any(|candidate| candidate == host) {
             return refused(ReachCheckRefusal::UnknownHost);
         }
         let target = ReachTarget {
@@ -3094,32 +3078,6 @@ async fn vibrancy_status(state: State<'_, AppState>) -> Result<VibrancyStatus, B
             .map(|value| value == "true")
             .unwrap_or(false);
     Ok(VibrancyStatus { enabled, supported })
-}
-
-/// Wire shape returned by `users_create` (spec M10): everything
-/// `UserIdentity` carries, `Serialize`d for the Tauri command boundary
-/// (`UserIdentity` itself is not `Serialize` - see its doc comment in
-/// `admin_template_core::users`). No `createdAt` (unlike [`UserSummary`],
-/// which `users_list`/`users_update` return): `UsersService::create_user`
-/// does not read it back from the DB, only the row it just inserted.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UserIdentityResult {
-    id: i64,
-    username: String,
-    display_name: String,
-    role: Role,
-}
-
-impl From<UserIdentity> for UserIdentityResult {
-    fn from(identity: UserIdentity) -> Self {
-        Self {
-            id: identity.id,
-            username: identity.username,
-            display_name: identity.display_name,
-            role: identity.role,
-        }
-    }
 }
 
 // --- banto-cost P2: capability × project scope (ADR-0028) ---------------
@@ -6153,7 +6111,7 @@ async fn users_create(
     password: String,
     display_name: String,
     role: Role,
-) -> Result<UserIdentityResult, BantoError> {
+) -> Result<UserIdentityView, BantoError> {
     users_create_body(&state, &username, &password, &display_name, role).await
 }
 
@@ -6165,7 +6123,7 @@ async fn users_create_body(
     password: &str,
     display_name: &str,
     role: Role,
-) -> Result<UserIdentityResult, BantoError> {
+) -> Result<UserIdentityView, BantoError> {
     let actor = require_role(state, Role::Admin, "users").await?;
     let identity = state
         .users
@@ -6281,9 +6239,7 @@ async fn users_delete_body(state: &AppState, id: i64) -> Result<(), BantoError> 
 /// argument, optional, Issue #248) is the snapshot boundary
 /// (`AuditLogService::list_as_of`); the answer carries the boundary it used.
 /// An unbounded read opportunistically prunes first; **a bounded read does
-/// not** - same reasoning as the REST route (see its doc comment: pruning
-/// inside a pinned boundary would expire every viewer generation at its
-/// second block once the row cap is reached).
+/// not** (see [`AuditLogService::prune_before_list`], shared with the REST route).
 #[tauri::command]
 async fn audit_log_list(
     state: State<'_, AppState>,
@@ -6291,14 +6247,10 @@ async fn audit_log_list(
     as_of_id: Option<i64>,
 ) -> Result<AuditLogList, BantoError> {
     require_role(&state, Role::Admin, "audit_log").await?;
-    if as_of_id.is_none() {
-        if let Ok(config) = state.settings.audit_config().await {
-            let _ = state
-                .audit
-                .prune(config.retention_days, config.retention_rows)
-                .await;
-        }
-    }
+    state
+        .audit
+        .prune_before_list(&state.settings, as_of_id)
+        .await;
     state.audit.list_as_of(params, as_of_id).await
 }
 
@@ -10259,11 +10211,11 @@ mod tests {
     const REACH_LAN_HOST: &str = "192.0.2.10";
     const REACH_PEER: &str = "203.0.113.7";
 
-    /// The live listener's real URLs plus the pretended NIC's.
-    fn reach_lan_urls(bind: &str, port: u16) -> Vec<String> {
-        let mut urls = lan_urls_for_bind(bind, port);
-        urls.push(format!("http://{REACH_LAN_HOST}:{port}"));
-        urls
+    /// The live listener's real addresses plus the pretended NIC's.
+    fn reach_lan_addrs(bind: &str) -> Vec<std::net::Ipv4Addr> {
+        let mut addrs = lan_addrs_for_bind(bind);
+        addrs.push(REACH_LAN_HOST.parse().expect("ip"));
+        addrs
     }
 
     /// An issuance whose "own addresses" are the pretended NIC's.
@@ -10289,7 +10241,7 @@ mod tests {
     }
 
     async fn issue_reach(state: &AppState) -> ReachCheckIssueResult {
-        reach_check_issue_body(state, REACH_LAN_HOST, reach_lan_urls, reach_issue)
+        reach_check_issue_body(state, REACH_LAN_HOST, reach_lan_addrs, reach_issue)
             .await
             .expect("reach_check_issue")
     }
@@ -10353,7 +10305,7 @@ mod tests {
             reach_check_issue_body(
                 &state,
                 REACH_LAN_HOST,
-                reach_lan_urls,
+                reach_lan_addrs,
                 unreachable_reach_issue
             )
             .await,
@@ -10373,7 +10325,7 @@ mod tests {
             let issued = reach_check_issue_body(
                 &state,
                 REACH_LAN_HOST,
-                reach_lan_urls,
+                reach_lan_addrs,
                 unreachable_reach_issue,
             )
             .await;
@@ -10395,7 +10347,7 @@ mod tests {
     /// (loopback included) - each answers its code, the store is untouched.
     #[tokio::test]
     async fn reach_check_issue_refuses_without_a_lan_url_for_the_host() {
-        fn no_urls(_: &str, _: u16) -> Vec<String> {
+        fn no_urls(_: &str) -> Vec<std::net::Ipv4Addr> {
             Vec::new()
         }
         let state = admin_app_state().await;
@@ -10407,7 +10359,7 @@ mod tests {
             reach_check_issue_body(
                 &state,
                 REACH_LAN_HOST,
-                reach_lan_urls,
+                reach_lan_addrs,
                 unreachable_reach_issue
             )
             .await
@@ -10421,16 +10373,20 @@ mod tests {
             generation: applied.generation,
             reason,
         };
-        let cases: [(&str, LanUrlsFor, ReachCheckRefusal); 4] = [
+        let cases: [(&str, LanAddrsFor, ReachCheckRefusal); 4] = [
             // The real candidates of a 127.0.0.1 listener: loopback only.
             (
                 REACH_LAN_HOST,
-                lan_urls_for_bind,
+                lan_addrs_for_bind,
                 ReachCheckRefusal::LoopbackOnly,
             ),
             (REACH_LAN_HOST, no_urls, ReachCheckRefusal::UnsupportedBind),
-            ("192.0.2.99", reach_lan_urls, ReachCheckRefusal::UnknownHost),
-            ("127.0.0.1", reach_lan_urls, ReachCheckRefusal::UnknownHost),
+            (
+                "192.0.2.99",
+                reach_lan_addrs,
+                ReachCheckRefusal::UnknownHost,
+            ),
+            ("127.0.0.1", reach_lan_addrs, ReachCheckRefusal::UnknownHost),
         ];
         for (host, urls, reason) in cases {
             assert_eq!(

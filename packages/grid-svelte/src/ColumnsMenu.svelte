@@ -114,15 +114,15 @@
 	.trigger {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
+		gap: var(--banto-space-1);
 		box-sizing: border-box;
 		height: var(--banto-control-height-sm);
-		padding: 0 0.6rem;
-		border: 1px solid var(--banto-border-strong);
+		padding: 0 var(--banto-space-2);
+		border: var(--banto-border-width) solid var(--banto-border-strong);
 		border-radius: var(--banto-radius-md);
 		background: var(--banto-surface);
 		color: var(--banto-text);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		cursor: pointer;
 		transition: background var(--banto-duration-fast) var(--banto-ease-out);
 	}
@@ -137,24 +137,24 @@
 	}
 
 	.count {
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		color: var(--banto-text-muted);
 	}
 
 	.popover {
 		position: absolute;
-		top: calc(100% + 0.25rem);
+		top: calc(100% + var(--banto-space-1));
 		right: 0;
 		z-index: 20;
 		display: flex;
 		flex-direction: column;
-		gap: 0.15rem;
+		gap: var(--banto-space-1);
 		min-width: 180px;
 		max-height: 60vh;
 		overflow-y: auto;
-		padding: 0.5rem;
+		padding: var(--banto-space-2);
 		background: var(--banto-surface-overlay);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 		box-shadow: var(--banto-shadow-lg);
 		/* Standard preset: no-op (var(--banto-backdrop) is `none`). Glass
@@ -167,10 +167,10 @@
 		display: flex;
 		min-height: var(--banto-control-height-sm, 28px);
 		align-items: center;
-		gap: 0.45rem;
-		padding: 0.25rem 0.3rem;
+		gap: var(--banto-space-2);
+		padding: var(--banto-space-1) var(--banto-space-1);
 		border-radius: var(--banto-radius-md);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-text);
 		cursor: pointer;
 	}

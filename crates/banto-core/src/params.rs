@@ -32,6 +32,16 @@ pub enum FilterOp {
     In,
     IsNull,
     NotNull,
+    /// A half-open range `[from, to)` (date-time-pickers §5.9, D12): the
+    /// value is `[from | null, to | null]` and means `from <= v AND v < to`,
+    /// compared as text (canonical `YYYY-MM-DD` / `YYYY-MM-DDTHH:mm` sort as
+    /// strings). A `null` end drops that side's condition; both `null` is
+    /// no condition at all. The grid shows an inclusive end day and sends
+    /// the day after it as `to`, so a date and a date-and-time column (even
+    /// with seconds) mean the same days. Mirrors
+    /// `packages/grid-svelte/src/core/filter.ts` and the InMemory provider;
+    /// the shared cases are `crates/banto-storage/testdata/filter-between-parity.json`.
+    Between,
 }
 
 /// A single column filter condition. Conditions in a list are combined
@@ -136,6 +146,17 @@ mod tests {
             json!({ "field": "name", "op": "starts_with", "value": "green" })
         );
 
+        // `between` carries a two-element array, `null` for an open end.
+        let value = FilterState {
+            field: "updatedAt".to_string(),
+            op: FilterOp::Between,
+            value: json!(["2026-11-01", null]),
+        };
+        assert_eq!(
+            serde_json::to_value(&value).unwrap(),
+            json!({ "field": "updatedAt", "op": "between", "value": ["2026-11-01", null] })
+        );
+
         // Every FilterOp variant must round-trip through its snake_case wire name.
         let ops = [
             (FilterOp::Eq, "eq"),
@@ -149,6 +170,7 @@ mod tests {
             (FilterOp::In, "in"),
             (FilterOp::IsNull, "is_null"),
             (FilterOp::NotNull, "not_null"),
+            (FilterOp::Between, "between"),
         ];
         for (op, wire) in ops {
             assert_eq!(serde_json::to_value(op).unwrap(), json!(wire));

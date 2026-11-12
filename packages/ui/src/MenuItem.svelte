@@ -59,15 +59,15 @@
 	.menu-item {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 		width: 100%;
 		box-sizing: border-box;
-		padding: 0.45rem 0.6rem;
+		padding: var(--banto-space-2) var(--banto-space-2);
 		border: none;
 		border-radius: var(--banto-radius-sm);
 		background: transparent;
 		color: var(--banto-text);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 		text-align: left;
 		cursor: pointer;
 		transition: background var(--banto-duration-fast) var(--banto-ease-out);

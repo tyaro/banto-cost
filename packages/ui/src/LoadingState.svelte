@@ -36,8 +36,8 @@
 	.state {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
-		padding: 1.5rem;
+		gap: var(--banto-space-2);
+		padding: var(--banto-space-6);
 	}
 
 	.visually-hidden {
@@ -55,7 +55,7 @@
 	.skeleton-lines {
 		display: flex;
 		flex-direction: column;
-		gap: 0.6rem;
+		gap: var(--banto-space-2);
 	}
 
 	.skeleton-line {

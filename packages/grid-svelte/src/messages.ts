@@ -29,6 +29,16 @@ export interface GridMessages {
 	filterApply?: () => string;
 	/** FilterPopover's clear button label. */
 	filterClear?: () => string;
+	/** FilterPopover: accessible name of the day range of a date / date-and-time column. */
+	filterRangeLabel?: () => string;
+	/** FilterPopover: the native start-day input's name (the injected `DateRangeInput` names its own). */
+	filterRangeStart?: () => string;
+	/** FilterPopover: the native end-day input's name. */
+	filterRangeEnd?: () => string;
+	/** FilterPopover: a range end is not a date. */
+	filterRangeInvalid?: () => string;
+	/** FilterPopover: the end day is before the start day. */
+	filterRangeOrder?: () => string;
 	/** BantoGrid inline-edit error shown when parseCellInput rejects the draft value. */
 	inlineEditInvalid?: () => string;
 	/** Name of the keyboard-readable error region for a column. */
@@ -60,6 +70,11 @@ export const defaultGridMessages: Required<GridMessages> = {
 	filterValueLabel: () => '絞り込み値',
 	filterApply: () => '適用',
 	filterClear: () => 'クリア',
+	filterRangeLabel: () => '期間',
+	filterRangeStart: () => '開始日',
+	filterRangeEnd: () => '終了日',
+	filterRangeInvalid: () => '日付は YYYY-MM-DD の形で入力してください',
+	filterRangeOrder: () => '終了日は開始日と同じ日かそれより後にしてください',
 	inlineEditInvalid: () => '入力値が不正です',
 	inlineEditErrorLabel: (header) => `${header}のエラー`,
 	inlineEditErrorHint: () =>

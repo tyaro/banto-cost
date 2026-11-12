@@ -5,6 +5,7 @@
  * §10) so the same class can drive server mode from M5 onward.
  */
 import { SvelteSet } from 'svelte/reactivity';
+import { isBetweenValue } from './core/dateRange';
 import {
 	DEFAULT_COLUMN_WIDTH,
 	DEFAULT_MIN_WIDTH,
@@ -279,7 +280,12 @@ export class GridState<TRow = unknown> {
 		}
 		if (!isSerializedGridState(parsed)) return;
 		this.sort = parsed.sort;
-		this.filters = parsed.filters;
+		// A `between` filter whose value is not `[from | null, to | null]`
+		// (hand-edited or from another version) is dropped: the client filter
+		// would match nothing and the server would answer 400 (§5.9).
+		this.filters = parsed.filters.filter(
+			(filter) => filter?.op !== 'between' || isBetweenValue(filter.value)
+		);
 		this.groupBy = parsed.groupBy ?? null;
 		this.collapsedGroups.clear();
 		// Keep only ids that still exist in the current column set, but

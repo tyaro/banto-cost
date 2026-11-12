@@ -67,12 +67,12 @@
 		flex-wrap: wrap;
 		align-items: flex-start;
 		justify-content: space-between;
-		gap: 0.75rem 1rem;
+		gap: var(--banto-space-3) var(--banto-space-4);
 	}
 
 	h1 {
 		margin: 0;
-		font-size: 1.15rem;
+		font-size: var(--banto-font-size-lg);
 		line-height: 1.5;
 		font-weight: 600;
 		font-feature-settings: 'palt';
@@ -80,9 +80,9 @@
 	}
 
 	p {
-		margin: 0.25rem 0 0;
+		margin: var(--banto-space-1) 0 0;
 		color: var(--banto-text-muted);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 		text-wrap: pretty;
 	}
 
@@ -94,6 +94,6 @@
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 	}
 </style>

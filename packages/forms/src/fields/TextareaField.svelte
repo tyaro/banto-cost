@@ -50,8 +50,8 @@
 		/* min-height (not height): a 4-row textarea must stay taller than the
 		   single-line control height token, which only sets a floor here. */
 		min-height: var(--banto-control-height);
-		padding: 0.5rem 0.6rem;
-		border: 1px solid var(--banto-border-strong);
+		padding: var(--banto-space-2) var(--banto-space-2);
+		border: var(--banto-border-width) solid var(--banto-border-strong);
 		border-radius: var(--banto-radius-md);
 		background: transparent;
 		color: var(--banto-text);

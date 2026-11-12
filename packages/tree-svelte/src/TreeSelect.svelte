@@ -167,7 +167,7 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 		width: 100%;
 		text-align: start;
 		cursor: pointer;
@@ -187,7 +187,7 @@
 	.trigger-caret {
 		flex: 0 0 auto;
 		color: var(--banto-text-muted);
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.popover {
@@ -196,9 +196,9 @@
 		margin: 0;
 		max-height: min(60vh, 360px);
 		overflow: auto;
-		padding: 0.25rem;
+		padding: var(--banto-space-1);
 		background: var(--banto-surface-overlay);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 		box-shadow: var(--banto-shadow-lg);
 		backdrop-filter: var(--banto-backdrop, none);

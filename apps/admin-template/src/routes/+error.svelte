@@ -44,16 +44,16 @@
 		min-height: 100vh;
 		display: grid;
 		place-items: center;
-		padding: 1.5rem;
+		padding: var(--banto-space-6);
 	}
 
 	.message {
-		margin: 0 0 1rem;
+		margin: 0 0 var(--banto-space-4);
 		color: var(--banto-text-muted);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 	}
 </style>

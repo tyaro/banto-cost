@@ -7,9 +7,10 @@
  * and the grid's client-sort tests, so the implementations cannot drift.
  */
 import { describe, expect, it } from 'vitest';
+import betweenFixture from '../../../crates/banto-storage/testdata/filter-between-parity.json';
 import parityFixture from '../../../crates/banto-storage/testdata/list-order-parity.json';
 import { createInMemoryDataProvider } from '../src/providers/inMemory';
-import type { SortState } from '../src/types';
+import type { FilterState, SortState } from '../src/types';
 
 interface ParityRow {
 	id: number;
@@ -47,6 +48,58 @@ describe('InMemory list order matches the shared SQL contract', () => {
 				ids.push(...page.rows.map((row) => row.id));
 			}
 			expect(ids).toEqual(expectedIds);
+		});
+	}
+});
+
+/**
+ * The `between` filter contract (date-time-pickers §5.9): the half-open
+ * `[from, to)` compared as text, shared with banto-storage's SQL and the
+ * grid's client filter (`crates/banto-storage/testdata/filter-between-parity.json`).
+ * A malformed value matches nothing here (the server answers 400).
+ */
+describe('InMemory between and lt/lte/gt/gte match the shared SQL contract', () => {
+	interface RangeRow {
+		id: number;
+		day: string | null;
+		at: string | null;
+	}
+	const between = betweenFixture as {
+		rows: RangeRow[];
+		cases: { name: string; field: string; value: unknown; expectedIds: number[] }[];
+		compare: {
+			name: string;
+			field: string;
+			op: FilterState['op'];
+			value: unknown;
+			expectedIds: number[];
+		}[];
+		invalid: { name: string; value: unknown }[];
+	};
+	const provider = createInMemoryDataProvider(
+		{ ranges: { rows: between.rows as unknown as Record<string, unknown>[] } },
+		{ latencyMs: 0 }
+	);
+	const list = async (filter: FilterState) =>
+		(await provider.getList<RangeRow>('ranges', { sort: [], filters: [filter] })).rows.map(
+			(row) => row.id
+		);
+
+	for (const { name, field, value, expectedIds } of between.cases) {
+		it(name, async () => {
+			expect(await list({ field, op: 'between', value })).toEqual(expectedIds);
+		});
+	}
+
+	for (const { name, field, op, value, expectedIds } of between.compare) {
+		it(`${op}: ${name}`, async () => {
+			expect(await list({ field, op, value })).toEqual(expectedIds);
+		});
+	}
+
+	for (const { name, value } of between.invalid) {
+		it(`a malformed value matches nothing: ${name}`, async () => {
+			expect(await list({ field: 'day', op: 'between', value })).toEqual([]);
 		});
 	}
 });

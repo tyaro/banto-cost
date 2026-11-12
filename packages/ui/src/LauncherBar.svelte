@@ -287,6 +287,9 @@
 		/* The wrapper and the track only make room (tooltips, shadow); clicks
 		   pass through to the page except on the bar itself. */
 		pointer-events: none;
+		/* The tooltip's line height (shared by the tooltip and the track's
+		   tooltip room). 1.5 = what the template's page already gave it. */
+		--launcher-tooltip-line-height: 1.5;
 	}
 
 	.launcher--bottom {
@@ -299,11 +302,21 @@
 		/* Many items scroll sideways inside the track. The track's top padding
 		   is the tooltips' room (an overflow box clips its children); the
 		   offset padding keeps the bar off the screen edge with room for its
-		   shadow. */
+		   shadow.
+		   The tooltips' room is the shape of the tooltip, not a step of the
+		   spacing scale (theme-dimension-tokens.md §5.2): one line of the
+		   tooltip text + its padding and border + the gap above the bar + a
+		   space-1 margin for its shadow (about 35px by default). Rounding it to
+		   space-7 (28px) clipped the tooltip (#516 review). */
+		--launcher-tooltip-room: calc(
+			var(--banto-font-size-sm) * var(--launcher-tooltip-line-height) + 2 * var(--banto-space-1) +
+				2 * var(--banto-border-width) + var(--banto-shell-launcher-gap) + var(--banto-space-1)
+		);
 		overflow-x: auto;
 		overflow-y: hidden;
 		scrollbar-width: thin;
-		padding: 2.5rem var(--banto-shell-launcher-offset) var(--banto-shell-launcher-offset);
+		padding: var(--launcher-tooltip-room) var(--banto-shell-launcher-offset)
+			var(--banto-shell-launcher-offset);
 		pointer-events: none;
 	}
 
@@ -317,7 +330,7 @@
 		/* Own stacking context for the ::before backdrop below (z-index: -1)
 		   without making the bar a backdrop root. */
 		isolation: isolate;
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-lg);
 		pointer-events: auto;
@@ -460,7 +473,7 @@
 		border-radius: 999px;
 		background: var(--banto-primary-solid);
 		color: var(--banto-on-solid);
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		font-weight: 700;
 		line-height: 1;
 	}
@@ -485,15 +498,18 @@
 		bottom: calc(100% + var(--banto-shell-launcher-padding) + var(--banto-shell-launcher-gap));
 		left: 50%;
 		translate: -50% 0;
-		padding: 0.25rem 0.5rem;
+		padding: var(--banto-space-1) var(--banto-space-2);
 		background: var(--banto-shell-launcher-tooltip-bg);
 		backdrop-filter: var(--banto-shell-launcher-tooltip-backdrop);
 		-webkit-backdrop-filter: var(--banto-shell-launcher-tooltip-backdrop);
 		color: var(--banto-text);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 		box-shadow: var(--banto-shadow-md);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
+		/* Fixed so the track's tooltip room (`--launcher-tooltip-room`) can be
+		   derived from it. */
+		line-height: var(--launcher-tooltip-line-height);
 		white-space: nowrap;
 		pointer-events: auto;
 		opacity: 0;
@@ -560,7 +576,8 @@
 		}
 
 		.launcher--top .launcher__track {
-			padding: var(--banto-shell-launcher-offset) var(--banto-shell-launcher-offset) 2.5rem;
+			padding: var(--banto-shell-launcher-offset) var(--banto-shell-launcher-offset)
+				var(--launcher-tooltip-room);
 		}
 
 		.launcher--top .launcher__bar,
@@ -606,8 +623,8 @@
 
 		/* Many items scroll vertically. The scroll box clips on both axes,
 		   so the page side keeps the room of the sideways tooltip (its max
-		   width + the gap; the bottom bar's 2.5rem top padding is the same
-		   idea), the ends along the edge keep 2.5rem for the bar's shadow
+		   width + the gap; the bottom bar's space-7 top padding is the same
+		   idea), the ends along the edge keep space-7 for the bar's shadow
 		   (a sharp cut line otherwise), and the screen side the offset. */
 		.launcher--vertical .launcher__track {
 			max-width: none;
@@ -617,12 +634,12 @@
 		}
 
 		.launcher--left .launcher__track {
-			padding: 2.5rem calc(var(--banto-shell-launcher-tooltip-max-width) + 1rem) 2.5rem
-				var(--banto-shell-launcher-offset);
+			padding: var(--banto-space-7) calc(var(--banto-shell-launcher-tooltip-max-width) + 1rem)
+				var(--banto-space-7) var(--banto-shell-launcher-offset);
 		}
 
 		.launcher--right .launcher__track {
-			padding: 2.5rem var(--banto-shell-launcher-offset) 2.5rem
+			padding: var(--banto-space-7) var(--banto-shell-launcher-offset) var(--banto-space-7)
 				calc(var(--banto-shell-launcher-tooltip-max-width) + 1rem);
 		}
 
@@ -730,7 +747,7 @@
 			align-items: stretch;
 			padding: 0 0 env(safe-area-inset-bottom);
 			border: none;
-			border-top: 1px solid var(--banto-border);
+			border-top: var(--banto-border-width) solid var(--banto-border);
 			border-radius: 0;
 			box-shadow: none;
 		}
@@ -755,8 +772,8 @@
 
 		.launcher__link {
 			flex-direction: column;
-			gap: 0.15rem;
-			padding: 0.25rem 0.5rem;
+			gap: var(--banto-space-1);
+			padding: var(--banto-space-1) var(--banto-space-2);
 			border-radius: 0;
 		}
 
@@ -776,11 +793,11 @@
 			overflow: hidden;
 			text-overflow: ellipsis;
 			white-space: nowrap;
-			font-size: 0.7rem;
+			font-size: var(--banto-font-size-xs);
 		}
 
 		.launcher__badge {
-			top: 0.15rem;
+			top: var(--banto-space-1);
 			right: auto;
 			left: calc(50% + 0.4rem);
 		}

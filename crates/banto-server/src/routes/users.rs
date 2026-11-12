@@ -1,25 +1,5 @@
 use super::*;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UserIdentityResponse {
-    id: i64,
-    username: String,
-    display_name: String,
-    role: Role,
-}
-
-impl From<UserIdentity> for UserIdentityResponse {
-    fn from(identity: UserIdentity) -> Self {
-        Self {
-            id: identity.id,
-            username: identity.username,
-            display_name: identity.display_name,
-            role: identity.role,
-        }
-    }
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateUserRequest {
@@ -93,7 +73,7 @@ async fn users_create(
     State(state): State<UsersAdminState>,
     headers: HeaderMap,
     Json(body): Json<CreateUserRequest>,
-) -> Result<Json<UserIdentityResponse>, ApiError> {
+) -> Result<Json<UserIdentityView>, ApiError> {
     let identity = state
         .users
         .create_user(

@@ -254,7 +254,7 @@
 	.overlay--modal {
 		align-items: center;
 		justify-content: center;
-		padding: 1.5rem;
+		padding: var(--banto-space-6);
 	}
 
 	.panel {
@@ -278,7 +278,7 @@
 	   (@starting-style) and the exit (.leaving) move the panel. */
 	.panel--drawer {
 		height: 100%;
-		border-left: 1px solid var(--banto-border);
+		border-left: var(--banto-border-width) solid var(--banto-border);
 		transform: none;
 	}
 
@@ -288,7 +288,7 @@
 
 	.panel--modal {
 		max-height: calc(100vh - 3rem);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		transform: none;
 	}
@@ -312,14 +312,14 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.75rem;
-		padding: 1rem 1.25rem;
-		border-bottom: 1px solid var(--banto-border);
+		gap: var(--banto-space-3);
+		padding: var(--banto-space-4) var(--banto-space-5);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 	}
 
 	.header h3 {
 		margin: 0;
-		font-size: 1rem;
+		font-size: var(--banto-font-size-base);
 	}
 
 	/* Keeps the × at the right edge when there is no title. */
@@ -332,6 +332,6 @@
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
-		padding: 1rem 1.25rem 1.5rem;
+		padding: var(--banto-space-4) var(--banto-space-5) var(--banto-space-6);
 	}
 </style>

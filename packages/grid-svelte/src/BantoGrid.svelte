@@ -33,6 +33,7 @@
 	import HeaderCell from './HeaderCell.svelte';
 	import CellEditError from './CellEditError.svelte';
 	import { defaultGridMessages, type GridMessages } from './messages';
+	import { getCellEditors, type CellEditors } from './cellEditors';
 
 	interface Props {
 		/**
@@ -82,6 +83,13 @@
 		 * FilterPopover. Defaults reproduce today's Japanese output.
 		 */
 		messages?: Partial<GridMessages>;
+		/**
+		 * Injected cell editors (date-time-pickers §5.8, D1-a), per editor type,
+		 * and the filter's day-range input (`dateRange`, §5.9); wins over
+		 * `provideCellEditors` (context). A type with neither keeps the native
+		 * input (D3-a).
+		 */
+		cellEditors?: CellEditors;
 	}
 
 	// Aliased to avoid clashing with the `$state` rune (a local binding named
@@ -101,8 +109,12 @@
 		onParamsChange,
 		onVisibleRangeChange,
 		rowClass,
-		messages = {}
+		messages = {},
+		cellEditors
 	}: Props = $props();
+
+	const providedCellEditors = getCellEditors();
+	const editors = $derived<CellEditors>({ ...providedCellEditors, ...cellEditors });
 
 	// `messages` is merged once (i18n layer 1: an override bundle, not
 	// reactive state) rather than re-read per usage below.
@@ -127,6 +139,9 @@
 	let errorRegionEl: HTMLDivElement | undefined = $state();
 	let headerRowEl: HTMLDivElement | undefined = $state();
 	let editorEl: HTMLInputElement | HTMLSelectElement | undefined = $state();
+	// An injected editor's wrapper (button and calendar included); the native
+	// editors have none and are their own root.
+	let editorRootEl: HTMLElement | null | undefined = $state();
 
 	let scrollTop = $state(0);
 	let viewportHeight = $state(0);
@@ -160,10 +175,31 @@
 		const container = containerEl;
 		if (!container) return;
 		const document = container.ownerDocument;
+		// The whole editor counts (date-time-pickers §5.8 promise 4): pressing
+		// an injected editor's button or a calendar day, or focus moving into
+		// its calendar, keeps the session's claim on focus.
+		function insideEditor(target: EventTarget | null): boolean {
+			const root = editorRootEl ?? editorEl;
+			return !!root && target instanceof Node && root.contains(target);
+		}
+		// A press outside can make an injected editor park focus on its own text
+		// box while it dismisses its popover (DateInput's light dismiss), in the
+		// same pointerdown dispatch: that focusin is not the user coming back.
+		let pressedOutside = false;
+		let pressTimer: ReturnType<typeof setTimeout> | undefined;
 		function relinquishFocus(event: Event) {
-			if (editFocus && (event.type === 'focusin' || event.target !== editorEl)) {
-				editFocus.owned = event.target === editorEl;
+			if (!editFocus) return;
+			const inside = insideEditor(event.target);
+			if (event.type === 'pointerdown') {
+				if (inside) return;
+				editFocus.owned = false;
+				pressedOutside = true;
+				clearTimeout(pressTimer);
+				pressTimer = setTimeout(() => (pressedOutside = false));
+				return;
 			}
+			if (inside && pressedOutside) return;
+			editFocus.owned = inside;
 		}
 		function leaveWindow() {
 			if (editFocus) editFocus.owned = false;
@@ -175,6 +211,7 @@
 			document.removeEventListener('pointerdown', relinquishFocus, true);
 			document.removeEventListener('focusin', relinquishFocus, true);
 			document.defaultView?.removeEventListener('blur', leaveWindow);
+			clearTimeout(pressTimer);
 			if (editFocus) editFocus.owned = false;
 		};
 	});
@@ -909,7 +946,9 @@
 			// (e.g. numeric) option values.
 			value = resolveSelectValue(String(editing.draft ?? ''), column.editorOptions);
 		} else {
-			const parsed = parseCellInput(String(editing.draft ?? ''), editorType);
+			// Typed: a year-less date is this year's (the injected date input's
+			// rule); a paste or CSV cell never guesses it (date-time-pickers §5.10).
+			const parsed = parseCellInput(String(editing.draft ?? ''), editorType, { typed: true });
 			if (!parsed.ok) {
 				editing = { ...editing, error: t.inlineEditInvalid() };
 				if (moveAfter === 'left' || moveAfter === 'right') await focusEditError(sessionId);
@@ -1098,6 +1137,9 @@
 	// plain Ctrl/Cmd+V with no extra permission.
 	function handlePaste(event: ClipboardEvent) {
 		if (editing) return; // let the focused editor input's native paste behavior run instead
+		// A paste into a header control - the filter popover's value or date
+		// boxes - is that control's own, like a bubbled key (handleContainerKeydown).
+		if (event.target !== event.currentTarget) return;
 		if (!onRangePaste) return;
 		if (!selection.active) return;
 		const text = event.clipboardData?.getData('text/plain') ?? '';
@@ -1190,6 +1232,7 @@
 						onDragEnd={handleDragEnd}
 						onSortOrFilterChange={notifyParamsChange}
 						{messages}
+						dateRangeInput={editors.dateRange}
 					/>
 				{/each}
 			</div>
@@ -1209,6 +1252,7 @@
 					aria-rowindex={rowIndex + 2}
 					style:grid-template-columns={templateColumns}
 					style:height={`${gridState.rowHeight}px`}
+					style:--banto-grid-editor-height={`min(var(--banto-control-height), calc(${gridState.rowHeight}px - var(--banto-border-width)))`}
 				>
 					{#each gridState.orderedColumns as column, fieldIndex (column.id)}
 						{@const isActiveCell =
@@ -1255,15 +1299,26 @@
 									{linkInfo.text}
 								{/if}
 							{:else if isEditingCell && editing}
+								<!-- `editing?.`: Esc / a commit can end the session and move focus
+								     synchronously, before this block is removed - an injected editor
+								     reads its props in its own blur (date-time-pickers §5.8). -->
 								<CellEditor
 									editor={column.editor}
 									label={column.header.trim() || column.id}
-									invalid={!!editing.error}
-									describedBy={editing.error ? editErrorId : undefined}
-									pending={editing.pending}
-									draft={editing.draft}
+									invalid={!!editing?.error}
+									describedBy={editing?.error ? editErrorId : undefined}
+									pending={!!editing?.pending}
+									draft={editing?.draft}
 									options={column.editorOptions}
+									dateEditor={editors.date}
+									timeEditor={editors.time}
+									dateTimeEditor={editors.datetime}
+									min={column.editorMin}
+									max={column.editorMax}
+									isDateDisabled={column.isDateDisabled}
+									step={column.editorStep}
 									bind:editorEl
+									bind:editorRootEl
 									onDraftChange={(value) => {
 										if (editing) editing.draft = value;
 									}}
@@ -1405,9 +1460,9 @@
 		width: 100%;
 		overflow: auto;
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: calc(var(--banto-radius) * 2);
-		font-size: 0.875rem;
+		font-size: var(--banto-font-size-md);
 	}
 
 	.banto-grid:focus {
@@ -1442,7 +1497,7 @@
 		display: grid;
 		height: var(--banto-grid-header-height);
 		background: var(--banto-surface-subtle);
-		border-bottom: 1px solid var(--banto-border-strong);
+		border-bottom: var(--banto-border-width) solid var(--banto-border-strong);
 	}
 
 	.drop-indicator {
@@ -1466,7 +1521,7 @@
 
 	.row {
 		display: grid;
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		box-sizing: border-box;
 		transition: background var(--banto-duration-fast) var(--banto-ease-out);
 	}
@@ -1483,7 +1538,7 @@
 	.placeholder-cell {
 		display: flex;
 		align-items: center;
-		padding: 0 0.6rem;
+		padding: 0 var(--banto-space-2);
 		color: var(--banto-text-muted);
 		user-select: none;
 	}
@@ -1492,8 +1547,8 @@
 	.group-header-row {
 		display: flex;
 		align-items: center;
-		gap: 0.6rem;
-		padding: 0 0.6rem;
+		gap: var(--banto-space-2);
+		padding: 0 var(--banto-space-2);
 		background: color-mix(in srgb, var(--banto-primary) 6%, transparent);
 		font-weight: 600;
 		cursor: pointer;
@@ -1517,18 +1572,18 @@
 
 	.agg-chip {
 		font-weight: 400;
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-text-muted);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: 999px;
-		padding: 0.1rem 0.6rem;
+		padding: var(--banto-space-1) var(--banto-space-2);
 		white-space: nowrap;
 	}
 
 	.cell {
 		position: relative;
-		padding: 0 0.6rem;
+		padding: 0 var(--banto-space-2);
 		display: flex;
 		align-items: center;
 		overflow: hidden;
@@ -1539,8 +1594,8 @@
 	}
 
 	.cell.active {
-		outline: 2px solid var(--banto-primary);
-		outline-offset: -2px;
+		outline: var(--banto-border-width-strong) solid var(--banto-primary);
+		outline-offset: calc(-1 * var(--banto-border-width-strong));
 		z-index: 1;
 	}
 
@@ -1554,14 +1609,14 @@
 		padding: 0;
 		overflow: visible;
 		z-index: 2;
-		outline: 2px solid var(--banto-primary-solid);
-		outline-offset: -2px;
+		outline: var(--banto-border-width-strong) solid var(--banto-primary-solid);
+		outline-offset: calc(-1 * var(--banto-border-width-strong));
 		background: var(--banto-surface);
 	}
 
 	.cell.editing.error {
-		outline: 2px solid var(--banto-danger-solid);
-		outline-offset: -2px;
+		outline: var(--banto-border-width-strong) solid var(--banto-danger-solid);
+		outline-offset: calc(-1 * var(--banto-border-width-strong));
 	}
 
 	.cell-link {
@@ -1583,7 +1638,7 @@
 		align-items: center;
 		justify-content: center;
 		min-height: 8rem;
-		padding: 1.5rem;
+		padding: var(--banto-space-6);
 		text-align: center;
 		color: var(--banto-text-muted);
 	}

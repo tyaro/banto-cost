@@ -83,8 +83,12 @@ jobs:
       # docs/conventions.md のうち機械検査可能な不変条件（サービス層の
       # transport 非依存・パッケージ間 import ゼロ・{@html}/生色値の
       # 許可リスト等）を強制する（improvement-plan P3-5）。
+      # 文字サイズ・枠線幅の生値の判定（rule raw-dimensions）は正規表現の見逃し・
+      # 誤検知が起きやすいので、判定の関数のテストも同じ場所で回す。
       - name: Verify architecture invariants
-        run: pnpm verify:architecture
+        run: |
+          node --test scripts/raw-dimensions.test.mjs
+          pnpm verify:architecture
 
       # リリース済み migration は追記のみ（#312 の P1 の再発防止）。SQLx は本文を
       # コメント込みで checksum して DB に記録するため、最新の v* タグに含まれる

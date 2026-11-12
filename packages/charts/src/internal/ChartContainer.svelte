@@ -89,6 +89,6 @@
 		display: grid;
 		place-items: center;
 		color: var(--banto-text-muted);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 	}
 </style>

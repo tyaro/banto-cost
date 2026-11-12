@@ -19,7 +19,7 @@
 //! | POST   | `/api/auth/change-password` | `{currentPassword,newPassword}` | `{success}` (auth required) |
 //! | GET    | `/api/events`        | -              | SSE stream of `ServerEvent` |
 //! | GET    | `/api/users`         | -              | `UserSummary[]` (admin) |
-//! | POST   | `/api/users`         | `{username,password,displayName,role}` | `UserIdentityResponse` (admin) |
+//! | POST   | `/api/users`         | `{username,password,displayName,role}` | `UserIdentityView` (admin) |
 //! | PUT    | `/api/users/{id}`    | `{displayName,role}` | `UserSummary` (admin) |
 //! | POST   | `/api/users/{id}/reset-password` | `{newPassword}` | `{success}` (admin) |
 //! | DELETE | `/api/users/{id}`    | -              | 204 (admin)             |

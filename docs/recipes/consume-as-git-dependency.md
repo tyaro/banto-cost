@@ -15,11 +15,11 @@
 
 - **npm: `workspace:*` → git 依存への書き換え**: モノレポ内で
   `"@banto/admin-core": "workspace:*"` と参照している箇所を、
-  `"@banto/admin-core": "github:tyaro/banto#v6.10.0&path:packages/admin-core"`
+  `"@banto/admin-core": "github:tyaro/banto#v7.0.0&path:packages/admin-core"`
   のような git 依存にパッケージ単位で書き換える。
 - **Rust: path 依存 → git タグ依存への書き換え**: 消費側 root `Cargo.toml`
   の `[workspace.dependencies]` に
-  `banto-core = { git = "https://github.com/tyaro/banto.git", tag = "v6.10.0" }`
+  `banto-core = { git = "https://github.com/tyaro/banto.git", tag = "v7.0.0" }`
   等を追加し、各クレートの依存を `{ workspace = true }` に揃える。特に
   `apps/admin-template/src-tauri/Cargo.toml` の
   `banto-core = { path = "../../../crates/banto-core" }` は**同一リポジトリ内

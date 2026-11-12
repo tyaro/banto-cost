@@ -136,7 +136,7 @@ SQL の違いが読めることを優先する。match の片方の腕だけを�
 
 | 引きたくなる依存 | 代わりに | 実装箇所 |
 |---|---|---|
-| `chrono` / `time` | 手書きの日付変換 | `backup.rs` の `iso_datetime_from_system_time` / `compact_stamp`。Howard Hinnant の `civil_from_days` は3箇所に移植（`banto-attachments`・`backup.rs`・app `core/src/db.rs`。4箇所目が生えたら `banto-core` への一本化を判断する） |
+| `chrono` / `time` | 例外あり（[ADR-0029](adr/0029-chrono-datetime-formatting.md)） | 日時の文字列変換（`SystemTime`・エポックからの日数 → `YYYY-MM-DD` など）は `banto-core::datetime` の 1 か所が `chrono`（`default-features = false`）で行い、`banto-attachments`・`banto-admin-services`（backup・audit）・app の `core/src/db.rs` はそれを呼ぶ（手書きの `civil_from_days` は無い）。`compact_stamp` は文字列処理のまま。ローカル日付の取得だけは app の core が `clock` feature を足す（[ADR-0028](adr/0028-chrono-local-date.md)） |
 | MIME 検出ライブラリ | マジックバイト判定 | `banto-attachments` `detect_mime`（下記§6） |
 | `multipart` | 生バイト body + `?fileName=` クエリ | `banto-server` `routes/backups.rs`・app `rest/attachments.rs` のアップロード |
 | `tower-http` | `axum::middleware::from_fn` の手書き | `security_headers.rs` / `csrf.rs` |
@@ -283,6 +283,9 @@ ADR-0018 §5）。transport の注入の形はレビューで担保する。
   一意キーの昇順（grid の client sort だけは、受け取った配列の順を保つ）。
   共通の fixture `crates/banto-storage/testdata/list-order-parity.json` を 3 つの
   テストが読むので、どれかを変えるときは fixture と 3 つを同時に直す。
+  **絞り込みの `between`（半開区間 `[from, to)` を文字列で比べる。date-time-pickers §5.9）も同じ 3 つの実装で共通**で、
+  共通の fixture `crates/banto-storage/testdata/filter-between-parity.json` を SQL（SQLite・PostgreSQL）・InMemory・
+  grid の client filter のテストが読む。
   **境界（`asOfId`）付きの一覧**（Issue #248、[ADR-0015](adr/0015-snapshot-list-resource.md)）:
   通知なしに行が増減する一覧（監査ログ）は `@banto/admin-core` の
   `SnapshotListResource` で読み、サーバー側は次を守る — 境界の決定・行・件数を
@@ -444,7 +447,7 @@ ADR-0018 §5）。transport の注入の形はレビューで担保する。
   `AttachmentsPanel.svelte` の `++loadToken`（superseded な結果を破棄して URL を revoke）は
   この契約の手書きの実例で、置き換えない。
 
-## 9. テーマトークンのみ・生値は theme に集約 [機械検査済み: packages の色値のみ。寸法は未検査]
+## 9. テーマトークンのみ・生値は theme に集約 [機械検査済み: packages の色値、packages と admin-template の文字サイズ・枠線幅]
 
 UI CSS は `var(--banto-*)` トークンのみを使い、色・寸法の**生値をコンポーネントに
 書かない**。生値の集約先は `packages/theme/src/css/banto.css`。glass プリセットは
@@ -455,9 +458,9 @@ UI CSS は `var(--banto-*)` トークンのみを使い、色・寸法の**生�
 設定の QR コードの白地（暗い配色でも読み取れるよう固定）等が既存例。理由コメント無しの生値は書かない）。
 
 **寸法**とは、余白・文字サイズ・枠線幅の段階のこと。トークンは `--banto-space-1`〜`-8`・
-`--banto-font-size-xs`/`sm`/`md`/`lg`/`xl`・`--banto-border-width`/`-strong`（値と丸めの規則は
+`--banto-font-size-xs`/`sm`/`md`/`base`/`lg`/`xl`・`--banto-border-width`/`-strong`（値と丸めの規則は
 [theme-dimension-tokens.md](design/theme-dimension-tokens.md) §5.2）。本文の文字サイズは root の `1rem` を
-継承し、トークンを付けない。次は「寸法」に含めず、トークンにしなくてよい（理由コメントも不要）:
+継承する。本文の大きさを明示するときだけ `--banto-font-size-base`（`1rem`）を使い、生の `font-size: 1rem` は書かない。次は「寸法」に含めず、トークンにしなくてよい（理由コメントも不要）:
 
 - `0`、`em` 単位の値（文脈相対。アイコンと文字の間隔など）、`1px` 未満の調整やヘアラインのオフセット
   （`-1px` の margin など）、`calc()` の中で部品の形から導く値。
@@ -465,9 +468,22 @@ UI CSS は `var(--banto-*)` トークンのみを使い、色・寸法の**生�
   部品・アプリが共有するときだけ用途名のトークン（既存の `--banto-shell-*` のような）にする。
 - `3px`・`4px` の縁（左端の強調バーなど）。部品の形として扱う。
 
-寸法の機械検査はまだ無い（レビューで守る）。既存の生の寸法は範囲ごとの PR で段階のトークンへ移している
-途中で、移行が終わった範囲から `font-size` と `border-width` の生値だけを検査に足す予定
-（theme-dimension-tokens.md §6・D8）。
+**文字サイズと枠線幅は機械検査で守る**（rule `raw-dimensions`、theme-dimension-tokens.md §7 D8）。
+`packages/*/src` と `apps/admin-template/src` の `.svelte` の `<style>` と `.css` で、`font-size`・`font` と
+`border`・`border-*`（`-width` を含む）・`outline`・`outline-width` の値に生の絶対値（`px`・`rem`・`pt`・`mm`・
+`vw` など、`small`・`thin` などのキーワード）があると落ちる。許可するのは `0`・`none`・`inherit` などのキーワード、
+`em`・`%` などの相対値、`var(--banto-*)`（フォールバック込み）、`--banto-*` を使う `calc()`/`min()`/`max()`/`clamp()`、
+`border` 系の `3px`・`4px`（上の強調の縁。`outline` には効かない）。`border-radius`・`border-color`・`border-style`・
+`border-collapse`・`outline-offset` などの幅でないプロパティと、余白（誤検知が多いので見ない）・部品の形
+（`width`・`height`。1px の区切り線の `height` を含む）は対象外。判定は `scripts/lib/raw-dimensions.mjs`、
+例はそのテスト `scripts/raw-dimensions.test.mjs`。属性（SVG の `font-size="…"`）・`style` 属性・`style:` ディレクティブ・
+Tailwind のクラスは見ないので、そこはレビューで守る。
+
+例外の書き方: 部品の形などで段に入れない値は、(1) その行か宣言の直前に理由のコメントを書き、(2)
+`scripts/verify-architecture.mjs` の `RAW_DIMENSION_ALLOWLIST` に「ファイル → 許す値」を理由つきで足す（rule 5 の
+`RAW_COLOR_ALLOWLIST` と同じ方式）。許可リストは小さく保つ。許した値がファイルから無くなると「もう使われていない」
+として落ちるので、そのときは項目を外す。現在の項目は印刷 CSS（`@banto/report` の `print.css`。テーマ非依存の
+`11pt`・`1px`）と、display プリセットだけが置く `/monitor` の壁掛け時刻（`clamp(3rem, 12vw, 7rem)`）の 2 つ。
 
 ## 10. 3-way provider 分岐 + demo は明示拒否
 
@@ -488,7 +504,7 @@ LAN 閲覧公開（#189）の `publicViewer` は**4番目のモードではな�
 
 ## 11. マイグレーションの流儀
 
-- 連番ファイル名（`0001_items.sql` … `0008_audit_log_pending_id.sql`）を `sqlx::migrate!`
+- 連番ファイル名（`0001_items.sql` … `0024_recurring_revenue.sql`）を `sqlx::migrate!`
   で埋め込み実行。V2「PostgreSQL アプリ全体対応」以降、方言ごとに2系統に分岐:
   `apps/admin-template/core/migrations-sqlite/`（従来の DDL を後方互換のため
   byte 等価で維持）と `.../migrations-postgres/`（同一スキーマの Postgres 厳密

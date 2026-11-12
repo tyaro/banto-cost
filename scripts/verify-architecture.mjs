@@ -47,6 +47,11 @@
  *  14. scaffold が編集するファイル（全プリセットの `--dry-run --list-touched`）⊆
  *      template-acceptance.yml の push / pull_request 両方の paths の glob。
  *      足し忘れると受け入れ CI が走らず、アンカー切れが静かに潜伏する。ADR-0008
+ *  15. §9 文字サイズと枠線幅の生値を書かない（theme-dimension-tokens.md §7 D8）
+ *      … packages/星/src（theme を含む。トークン定義はカスタムプロパティなので
+ *        対象外になる）と apps/admin-template/src の .svelte <style> と .css で、
+ *        font-size / font と border・outline 系の幅に生の絶対値が無いこと。
+ *        余白は見ない。判定は scripts/lib/raw-dimensions.mjs（テストあり）
  *
  * 許可リストへの追加は「設計判断としてコード内コメントで正当化されている」
  * ことを条件とし、理由をここに1行で書く（レビュー対象）。
@@ -57,6 +62,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { readI18nMode } from './lib/i18n-mode.mjs';
 import { collectScaffoldTouchedFiles } from './lib/scaffold-touched.mjs';
+import { findRawDimensions } from './lib/raw-dimensions.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -74,6 +80,25 @@ const RAW_COLOR_ALLOWLIST = new Map([
 	// 印刷 CSS はテーマ非依存の白地・黒文字固定（帳票の再現性優先、
 	// template-scope §3 / report-plan §3.4）
 	['packages/report/src/ReportView.svelte', new Set(['#ffffff'])]
+]);
+
+/**
+ * conventions §9（寸法）: 文字サイズ・枠線幅の生値を許可するファイルと、その値・根拠。
+ * 小さく保つ。`0`・`em`・`%`・`var(--banto-*)`・border 系の `3px`/`4px`（強調の縁＝
+ * 部品の形）は検査側で許可済みなので、ここには書かない。項目ごとに理由を書き、
+ * 対象のファイルにも理由のコメントを置く。使われなくなった値は違反として報告する。
+ */
+const RAW_DIMENSION_ALLOWLIST = new Map([
+	// 印刷 CSS はテーマ非依存（帳票の再現性優先。print.css 冒頭のコメント、report-plan §3.4）。
+	// 紙の上の大きさを pt で固定し、罫線も画面のトークン（密度や上書き）に追従させない。
+	['packages/report/src/print.css', { values: ['11pt', '1px'], reason: '印刷はテーマ非依存' }],
+	// display プリセットの scaffold だけが置くファイル（雛形は scripts/lib/templates/display/
+	// monitor/+page.svelte。banto 本体には無い）。壁掛け表示の大きな時刻は画面の幅に追従する
+	// 部品の形で、文字サイズの段に入れない（雛形にも理由のコメントあり）。
+	[
+		'apps/admin-template/src/routes/(app)/monitor/+page.svelte',
+		{ values: ['3rem', '12vw', '7rem'], reason: '表示盤の時刻は画面幅に追従する部品の形' }
+	]
 ]);
 
 /**
@@ -1478,6 +1503,62 @@ const isAllowedPackageImport = (spec) =>
 				`scaffold が編集する ${edited.length} ファイル（全プリセット）が、${WF} の push / pull_request 両方の paths に含まれる`
 			);
 	}
+}
+
+// --- 15. 文字サイズと枠線幅の生値（conventions §9、theme-dimension-tokens.md D8） --
+//
+// 寸法トークンへの移行（PR-2〜PR-6d）が終わった範囲＝packages 全体と
+// apps/admin-template/src を対象にする。余白は誤検知が多いので見ない（D8-b）。
+// 判定（何を生値とみなし何を許可するか）は scripts/lib/raw-dimensions.mjs に置き、
+// scripts/raw-dimensions.test.mjs で違反する例・許可される例を固定している。
+// 属性（SVG の font-size="…"）・style 属性・style: ディレクティブ・.ts の中の CSS は見ない。
+
+{
+	const rule = 'raw-dimensions';
+	let checkedBlocks = 0;
+	const sources = [
+		...[...walk('packages', ['.svelte', '.css'])].filter((f) => f.includes('/src/')),
+		...walk('apps/admin-template/src', ['.svelte', '.css'])
+	];
+	for (const file of sources) {
+		if (file.includes('/paraglide/')) continue; // 生成物
+		const src = read(file);
+		const entry = RAW_DIMENSION_ALLOWLIST.get(file);
+		const allowed = new Set(entry?.values ?? []);
+		const used = new Set();
+		const blocks = file.endsWith('.css')
+			? [{ css: src, offset: 0 }]
+			: [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => ({
+					css: m[1],
+					offset: src.slice(0, m.index + m[0].indexOf('>') + 1).split('\n').length - 1
+				}));
+		for (const { css, offset } of blocks) {
+			checkedBlocks++;
+			for (const hit of findRawDimensions(css)) {
+				if (allowed.has(hit.raw)) {
+					used.add(hit.raw);
+					continue;
+				}
+				fail(
+					rule,
+					file,
+					`${hit.line + offset} 行目 \`${hit.prop}\` の生値 \`${hit.raw}\` — ${
+						hit.prop.startsWith('font')
+							? '--banto-font-size-*（xs/sm/md/base/lg/xl）'
+							: '--banto-border-width / --banto-border-width-strong'
+					} を使う（§9）`
+				);
+			}
+		}
+		for (const value of allowed)
+			if (!used.has(value))
+				fail(rule, file, `許可リストの \`${value}\` がもう使われていない — 許可リストから外す`);
+	}
+	if (!results.some((r) => r.includes(`[${rule}]`)))
+		pass(
+			rule,
+			`packages・admin-template の ${checkedBlocks} スタイル（<style>・.css）に未許可の文字サイズ・枠線幅の生値なし`
+		);
 }
 
 // --- 結果 -------------------------------------------------------------------

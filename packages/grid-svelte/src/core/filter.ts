@@ -3,7 +3,8 @@
  * No Svelte imports — usable standalone and easy to unit test.
  */
 import type { FilterState, GridColumn } from '../types';
-import { getColumnValue } from './sort';
+import { matchesBetween } from './dateRange';
+import { getColumnValue, isTemporalColumn } from './sort';
 
 function isNullish(value: unknown): boolean {
 	return value === null || value === undefined;
@@ -38,6 +39,22 @@ function matchOne<TRow>(
 		? getColumnValue(row, column)
 		: (row as Record<string, unknown>)[filter.field];
 
+	// Dates / times / dates and times compare as text (date-time-pickers
+	// §5.9): `toComparable` would read `2026-11-07` as UTC midnight but
+	// `2026-11-07T09:30` as local time, and `09:30` not at all.
+	if (isTemporalColumn(column) && typeof value === 'string' && typeof filter.value === 'string') {
+		switch (filter.op) {
+			case 'lt':
+				return value < filter.value;
+			case 'lte':
+				return value <= filter.value;
+			case 'gt':
+				return value > filter.value;
+			case 'gte':
+				return value >= filter.value;
+		}
+	}
+
 	switch (filter.op) {
 		case 'eq':
 			return looseEquals(value, filter.value);
@@ -65,6 +82,8 @@ function matchOne<TRow>(
 			return isNullish(value);
 		case 'not_null':
 			return !isNullish(value);
+		case 'between':
+			return matchesBetween(value, filter.value);
 		default:
 			return true;
 	}

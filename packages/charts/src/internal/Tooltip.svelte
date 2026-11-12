@@ -55,10 +55,10 @@
 		z-index: 20;
 		max-width: 220px;
 		background: var(--banto-surface-overlay);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
-		padding: 0.45rem 0.6rem;
-		font-size: 12px;
+		padding: var(--banto-space-2);
+		font-size: var(--banto-font-size-md);
 		color: var(--banto-text);
 		box-shadow: var(--banto-shadow-md);
 		/* Glass preset: the overlay surface goes translucent there - blur what's
@@ -69,14 +69,14 @@
 
 	.tt-title {
 		color: var(--banto-text-muted);
-		margin-bottom: 0.25rem;
+		margin-bottom: var(--banto-space-1);
 		white-space: nowrap;
 	}
 
 	.tt-row {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 	}
 
 	.tt-swatch {
@@ -93,7 +93,7 @@
 
 	.tt-value {
 		margin-left: auto;
-		padding-left: 0.75rem;
+		padding-left: var(--banto-space-3);
 		color: var(--banto-text);
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;

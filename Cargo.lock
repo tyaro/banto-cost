@@ -39,6 +39,7 @@ dependencies = [
  "banto-core",
  "banto-server",
  "banto-storage",
+ "chrono",
  "cost-domain",
  "futures-util",
  "rust-embed",
@@ -255,6 +256,7 @@ dependencies = [
 name = "banto-core"
 version = "0.1.0-beta.1"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

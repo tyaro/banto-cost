@@ -333,20 +333,20 @@
 
 	main {
 		flex: 1;
-		padding: 1.25rem;
+		padding: var(--banto-space-5);
 	}
 
 	/* Dock layout (nav-launcher-plan.md §4.1): the fixed bar must not cover
 	   the end of the page. */
 	.shell.with-launcher main {
-		padding-bottom: calc(1.25rem + var(--banto-shell-launcher-reserve));
+		padding-bottom: calc(var(--banto-space-5) + var(--banto-shell-launcher-reserve));
 	}
 
 	/* A top / left / right bar (D4) takes the room on that side instead. */
 	.shell.launcher-top main,
 	.shell.launcher-left main,
 	.shell.launcher-right main {
-		padding-bottom: 1.25rem;
+		padding-bottom: var(--banto-space-5);
 	}
 
 	/* The top bar sits below the header (the header stays the top row): the
@@ -362,15 +362,15 @@
 	}
 
 	.shell.launcher-top main {
-		padding-top: calc(1.25rem + var(--banto-shell-launcher-reserve));
+		padding-top: calc(var(--banto-space-5) + var(--banto-shell-launcher-reserve));
 	}
 
 	.shell.launcher-left main {
-		padding-left: calc(1.25rem + var(--banto-shell-launcher-reserve));
+		padding-left: calc(var(--banto-space-5) + var(--banto-shell-launcher-reserve));
 	}
 
 	.shell.launcher-right main {
-		padding-right: calc(1.25rem + var(--banto-shell-launcher-reserve));
+		padding-right: calc(var(--banto-space-5) + var(--banto-shell-launcher-reserve));
 	}
 
 	.palette-host {
@@ -387,7 +387,8 @@
 		.shell.launcher-top main,
 		.shell.launcher-left main,
 		.shell.launcher-right main {
-			padding: 1.25rem 1.25rem calc(1.25rem + var(--banto-shell-launcher-tabbar-reserve));
+			padding: var(--banto-space-5) var(--banto-space-5)
+				calc(var(--banto-space-5) + var(--banto-shell-launcher-tabbar-reserve));
 		}
 
 		.overlay-backdrop {

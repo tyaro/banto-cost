@@ -14,7 +14,8 @@
 	import { linearScale, niceTicks } from './core/scale';
 	import { ganttDomain, ganttLayout, toMs, type GanttTask } from './core/gantt';
 	import { seriesColorVar } from './core/color';
-	import { leftMarginFor } from './core/labels';
+	import { leftMarginFor, truncateLabel } from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import type { ChartMargin, TooltipRow } from './types';
 	import ChartContainer from './internal/ChartContainer.svelte';
 	import Tooltip from './internal/Tooltip.svelte';
@@ -45,6 +46,9 @@
 	const msg = { ...defaultChartMessages, ...messages };
 
 	const DEFAULT_MARGIN: ChartMargin = { top: 24, right: 16, bottom: 24, left: 96 };
+	// Task label end <-> plot edge: used for the label's x, its truncation and
+	// the margin estimate alike, so a label that sets the margin is never cut.
+	const TASK_LABEL_GAP = 10;
 	const MIN_TICK_SPACING = 80;
 	const BAR_RATIO = 0.6;
 
@@ -57,10 +61,23 @@
 	const bars = $derived(domain ? ganttLayout(tasks, domain) : []);
 
 	// Left margin auto-fits the widest task label so long names aren't clipped.
+	// The estimate uses the rendered task-label font (D9-b: read from the first
+	// task label, 11px until/unless it can be read).
+	let taskFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTaskFont = trackFontSize((px) => (taskFontSize = px));
 	const MARGIN = $derived.by(() => {
 		const base = { ...DEFAULT_MARGIN, ...margins };
 		if (margins?.left !== undefined) return base;
-		return { ...base, left: Math.max(base.left, leftMarginFor(tasks.map((t) => t.label))) };
+		return {
+			...base,
+			left: Math.max(
+				base.left,
+				leftMarginFor(
+					tasks.map((t) => t.label),
+					{ fontSize: taskFontSize, gap: TASK_LABEL_GAP, totalWidth: plotWidth }
+				)
+			)
+		};
 	});
 
 	// Derived total height: header/footer margins + one row per task. Empty
@@ -157,19 +174,23 @@
 			/>
 
 			<!-- Task rows: label + bar (+ progress overlay). -->
-			{#each bars as bar (tasks[bar.index].id)}
+			{#each bars as bar, bi (tasks[bar.index].id)}
 				{@const y = rowY(bar.index) + barOffset}
 				{@const bx = m.innerLeft + bar.startFrac * m.innerWidth}
 				{@const bw = Math.max(1, bar.widthFrac * m.innerWidth)}
 				{@const color = seriesColorVar(bar.colorIndex)}
+				<!-- Cut with an ellipsis when the margin hit its cap (full text in <title>). -->
+				{@const full = tasks[bar.index].label}
+				{@const shown = truncateLabel(full, m.innerLeft - TASK_LABEL_GAP, taskFontSize)}
 				<text
-					x={m.innerLeft - 10}
+					x={m.innerLeft - TASK_LABEL_GAP}
 					y={rowY(bar.index) + rowHeight / 2}
 					class="task-label"
 					text-anchor="end"
 					dominant-baseline="middle"
+					{@attach bi === 0 ? trackTaskFont : null}
 				>
-					{tasks[bar.index].label}
+					{shown}{#if shown !== full}<title>{full}</title>{/if}
 				</text>
 				<rect
 					x={bx}
@@ -247,12 +268,12 @@
 
 	.task-label {
 		fill: var(--banto-text);
-		font-size: 12px;
+		font-size: var(--banto-font-size-md);
 	}
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -265,6 +286,6 @@
 
 	.today-label {
 		fill: var(--banto-text-muted);
-		font-size: 10px;
+		font-size: var(--banto-font-size-xs);
 	}
 </style>

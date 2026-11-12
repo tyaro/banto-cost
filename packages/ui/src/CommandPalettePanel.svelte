@@ -259,7 +259,7 @@
 		width: min(560px, calc(100vw - 2rem));
 		max-height: min(60vh, 480px);
 		background: var(--banto-surface-overlay);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-lg);
 		overflow: hidden;
@@ -287,12 +287,12 @@
 		flex: 0 0 auto;
 		width: 100%;
 		box-sizing: border-box;
-		padding: 0.9rem 1rem;
+		padding: var(--banto-space-4) var(--banto-space-4);
 		border: none;
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		background: transparent;
 		color: var(--banto-text);
-		font-size: 1rem;
+		font-size: var(--banto-font-size-base);
 	}
 
 	.search:focus {
@@ -303,21 +303,21 @@
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
-		padding: 0.4rem;
+		padding: var(--banto-space-2);
 	}
 
 	.empty {
 		margin: 0;
-		padding: 1rem;
+		padding: var(--banto-space-4);
 		text-align: center;
 		color: var(--banto-text-muted);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 	}
 
 	.group-heading {
-		padding: 0.5rem 0.6rem 0.25rem;
+		padding: var(--banto-space-2) var(--banto-space-2) var(--banto-space-1);
 		color: var(--banto-text-muted);
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
@@ -327,12 +327,12 @@
 		display: block;
 		width: 100%;
 		box-sizing: border-box;
-		padding: 0.55rem 0.7rem;
+		padding: var(--banto-space-2) var(--banto-space-3);
 		border: none;
 		border-radius: var(--banto-radius-md);
 		background: transparent;
 		color: var(--banto-text);
-		font-size: 0.875rem;
+		font-size: var(--banto-font-size-md);
 		text-align: left;
 		cursor: pointer;
 		transition: background var(--banto-duration-fast) var(--banto-ease-out);
@@ -343,7 +343,7 @@
 	.result.rich {
 		display: flex;
 		align-items: center;
-		gap: 0.55rem;
+		gap: var(--banto-space-2);
 	}
 
 	.icon {
@@ -359,12 +359,12 @@
 
 	.shortcut {
 		flex: 0 0 auto;
-		padding: 0.05rem 0.4rem;
-		border: 1px solid var(--banto-border);
+		padding: 0.05rem var(--banto-space-2);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-sm);
 		color: var(--banto-text-muted);
 		font-family: inherit;
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.result:disabled {

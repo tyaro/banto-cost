@@ -152,7 +152,7 @@
 	.report-view {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.toolbar {
@@ -160,11 +160,11 @@
 		align-items: center;
 		justify-content: space-between;
 		flex-wrap: wrap;
-		gap: 0.75rem;
+		gap: var(--banto-space-3);
 	}
 
 	.title {
-		font-size: 0.95rem;
+		font-size: var(--banto-font-size-md);
 		font-weight: 600;
 		color: var(--banto-text);
 	}
@@ -172,12 +172,12 @@
 	.toolbar-actions {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
+		gap: var(--banto-space-3);
 		margin-left: auto;
 	}
 
 	.warnings {
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-warning-tint-text);
 	}
 
@@ -195,12 +195,12 @@
 	.print-btn {
 		height: var(--banto-control-height-sm);
 		box-sizing: border-box;
-		padding: 0 1rem;
+		padding: 0 var(--banto-space-4);
 		border: none;
 		border-radius: var(--banto-radius-md);
 		background: var(--banto-primary-solid);
 		color: var(--banto-on-solid);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 		font-weight: 600;
 		cursor: pointer;
 		transition: background var(--banto-duration-fast) var(--banto-ease-out);
@@ -220,7 +220,7 @@
 		justify-content: center;
 		background: var(--banto-surface-subtle);
 		border-radius: var(--banto-radius-lg);
-		padding: 2rem 1rem;
+		padding: var(--banto-space-7) var(--banto-space-4);
 	}
 
 	.paper {

@@ -555,14 +555,14 @@
 	.page {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.workspace {
 		display: grid;
 		grid-template-columns: minmax(320px, 1fr) minmax(360px, 1fr);
 		align-items: start;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	@media (max-width: 1099.98px) {
@@ -575,37 +575,37 @@
 	.edit-column {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.card-head {
 		display: flex;
 		align-items: flex-start;
-		gap: 0.65rem;
-		margin-bottom: 0.75rem;
+		gap: var(--banto-space-3);
+		margin-bottom: var(--banto-space-3);
 		color: var(--banto-text-muted);
 	}
 
 	.card-head h2 {
 		margin: 0;
-		font-size: 1rem;
+		font-size: var(--banto-font-size-base);
 		color: var(--banto-text);
 	}
 
 	.card-head p {
-		margin: 0.2rem 0 0;
-		font-size: 0.8rem;
+		margin: var(--banto-space-1) 0 0;
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-text-muted);
 	}
 
 	.role-row {
-		margin-bottom: 0.75rem;
+		margin-bottom: var(--banto-space-3);
 	}
 
 	.note {
-		margin: 0 0 0.5rem;
+		margin: 0 0 var(--banto-space-2);
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.grid-wrap {
@@ -613,13 +613,13 @@
 	}
 
 	.edit-field {
-		margin-bottom: 0.75rem;
+		margin-bottom: var(--banto-space-3);
 	}
 
 	.capabilities {
 		margin-top: 1.25rem;
 		padding-top: 1.25rem;
-		border-top: 1px solid var(--banto-border);
+		border-top: var(--banto-border-width) solid var(--banto-border);
 	}
 
 	.capabilities h3 {
@@ -627,7 +627,7 @@
 		align-items: center;
 		gap: 0.4rem;
 		margin: 0 0 0.5rem;
-		font-size: 0.875rem;
+		font-size: var(--banto-font-size-md);
 		color: var(--banto-text);
 	}
 
@@ -657,18 +657,18 @@
 	}
 
 	.capability-label {
-		font-size: 0.875rem;
+		font-size: var(--banto-font-size-md);
 		color: var(--banto-text);
 	}
 
 	.capability-label code {
 		margin-left: 0.35rem;
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-text-muted);
 	}
 
 	.capability-desc {
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-text-muted);
 	}
 
@@ -679,27 +679,27 @@
 	}
 
 	.danger-zone {
-		margin-top: 1.25rem;
-		padding-top: 1.25rem;
-		border-top: 1px solid var(--banto-danger);
+		margin-top: var(--banto-space-5);
+		padding-top: var(--banto-space-5);
+		border-top: var(--banto-border-width) solid var(--banto-danger);
 	}
 
 	.danger-zone h3 {
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
-		margin: 0 0 0.75rem;
-		font-size: 0.875rem;
+		gap: var(--banto-space-2);
+		margin: 0 0 var(--banto-space-3);
+		font-size: var(--banto-font-size-md);
 		color: var(--banto-danger);
 	}
 
 	.danger-section + .danger-section {
-		margin-top: 1rem;
-		padding-top: 1rem;
-		border-top: 1px dashed var(--banto-border);
+		margin-top: var(--banto-space-4);
+		padding-top: var(--banto-space-4);
+		border-top: var(--banto-border-width) dashed var(--banto-border);
 	}
 
 	.danger-section .banto-btn {
-		margin-top: 0.25rem;
+		margin-top: var(--banto-space-1);
 	}
 </style>

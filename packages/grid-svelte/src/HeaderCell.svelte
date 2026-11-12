@@ -23,6 +23,8 @@
 	import { DEFAULT_COLUMN_WIDTH, type FilterState, type GridColumn } from './types';
 	import type { GridState } from './state.svelte';
 	import FilterPopover from './FilterPopover.svelte';
+	import type { Component } from 'svelte';
+	import type { FilterDateRangeInputProps } from './cellEditors';
 	import { defaultGridMessages, type GridMessages } from './messages';
 
 	interface Props {
@@ -42,6 +44,8 @@
 		onSortOrFilterChange?: () => void;
 		/** i18n layer 1 (docs/conventions.md §13): overrides for this component's (and FilterPopover's) visible strings. Defaults reproduce today's Japanese output. */
 		messages?: Partial<GridMessages>;
+		/** Injected day-range input for a date / date-and-time column's filter (`CellEditors.dateRange`). */
+		dateRangeInput?: Component<FilterDateRangeInputProps>;
 	}
 
 	// Aliased to avoid clashing with the `$state` rune (a local binding named
@@ -56,7 +60,8 @@
 		onDragMove,
 		onDragEnd,
 		onSortOrFilterChange,
-		messages = {}
+		messages = {},
+		dateRangeInput
 	}: Props = $props();
 
 	// `messages` is merged once (i18n layer 1: an override bundle, not
@@ -237,6 +242,7 @@
 				onClear={clearFilter}
 				onClose={(reason) => closeFilter(reason === 'escape')}
 				{messages}
+				{dateRangeInput}
 			/>
 		{/if}
 	{/if}
@@ -258,7 +264,7 @@
 		display: flex;
 		align-items: center;
 		height: 100%;
-		border-right: 1px solid var(--banto-border);
+		border-right: var(--banto-border-width) solid var(--banto-border);
 		box-sizing: border-box;
 		user-select: none;
 		transition: background var(--banto-duration-fast) var(--banto-ease-out);
@@ -278,9 +284,9 @@
 		flex: 1;
 		display: flex;
 		align-items: center;
-		gap: 0.3rem;
+		gap: var(--banto-space-1);
 		height: 100%;
-		padding: 0 0.6rem;
+		padding: 0 var(--banto-space-2);
 		min-width: 0;
 		user-select: none;
 		touch-action: none;
@@ -320,12 +326,12 @@
 	}
 
 	.sort-arrow {
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		color: var(--banto-primary);
 	}
 
 	.sort-priority {
-		font-size: 0.65rem;
+		font-size: var(--banto-font-size-xs);
 		color: var(--banto-text-inverse);
 		background: var(--banto-primary);
 		border-radius: 999px;
@@ -341,8 +347,8 @@
 		background: none;
 		color: var(--banto-text-muted);
 		cursor: pointer;
-		padding: 0 0.4rem;
-		font-size: 0.7rem;
+		padding: 0 var(--banto-space-2);
+		font-size: var(--banto-font-size-xs);
 		flex-shrink: 0;
 	}
 

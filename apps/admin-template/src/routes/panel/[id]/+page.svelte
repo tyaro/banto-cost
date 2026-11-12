@@ -79,7 +79,7 @@
 		display: grid;
 		place-items: center;
 		margin: 0;
-		padding: 1rem;
+		padding: var(--banto-space-4);
 		text-align: center;
 		color: var(--banto-text-muted);
 	}
@@ -94,12 +94,12 @@
 		flex: 0 0 auto;
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 		height: var(--banto-dock-titlebar-height, 2rem);
-		padding: 0 0.75rem;
+		padding: 0 var(--banto-space-3);
 		background: var(--banto-surface-raised);
-		border-bottom: 1px solid var(--banto-border);
-		font-size: 0.85rem;
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
+		font-size: var(--banto-font-size-md);
 		font-weight: 600;
 		color: var(--banto-text);
 	}
@@ -109,7 +109,7 @@
 		min-height: 0;
 		overflow: auto;
 		box-sizing: border-box;
-		padding: 0.75rem;
+		padding: var(--banto-space-3);
 		background: var(--banto-surface);
 	}
 </style>

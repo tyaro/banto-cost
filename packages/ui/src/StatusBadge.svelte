@@ -47,10 +47,10 @@
 	.status-badge {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.3rem;
-		padding: 0.15rem 0.5rem;
+		gap: var(--banto-space-1);
+		padding: var(--banto-space-1) var(--banto-space-2);
 		border-radius: var(--banto-radius-sm);
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 		line-height: 1.5;
 		font-weight: 600;
 		white-space: nowrap;
