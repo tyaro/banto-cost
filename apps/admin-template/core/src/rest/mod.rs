@@ -82,6 +82,7 @@
 //! | DELETE | `/api/budget-versions/{id}?rowVersion=` | - | 204 (editor+ + `ManageProject`, draft only) |
 //! | POST   | `/api/budget-versions/{id}/approve` | `BudgetVersionInput` | `BudgetVersion` (editor+ + `ApproveBudget`, self-approval allowed and audited) |
 //! | GET    | `/api/projects/{id}/forecast` | - | `ForecastOverview` (any role + `ViewProjectAmounts`) |
+//! | GET    | `/api/projects/{id}/summary` | - | `ProjectSummary` (any role + `ViewProjectAmounts`; the overall list's row of the project) |
 //! | POST   | `/api/projects/{id}/forecast/draft` | - | `ForecastDraftCreated` (editor+ + `ManageProject`; the existing draft when there is one) |
 //! | PUT    | `/api/forecast-versions/{id}` | `ForecastDraftInput` | `ForecastVersion` (editor+ + `ManageProject`, draft only) |
 //! | DELETE | `/api/forecast-versions/{id}?rowVersion=` | - | 204 (editor+ + `ManageProject`, draft only) |

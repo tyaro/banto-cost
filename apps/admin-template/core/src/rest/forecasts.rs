@@ -1,13 +1,14 @@
 //! `/api/projects/{id}/forecast*`, `/api/forecast-versions/*` and
-//! `/api/portfolio` (banto-cost P5, spec §6.6・§9, T06・T28・T30). The Tauri
-//! twins are the `project_forecast` / `forecast_draft_*` / `portfolio_overview`
-//! commands in `src-tauri`; both sides authorize through
+//! `/api/portfolio`, `/api/projects/{id}/summary` (banto-cost P5, spec §6.6・§9,
+//! T06・T28・T30). The Tauri twins are the `project_forecast` /
+//! `forecast_draft_*` / `portfolio_overview` / `project_summary` commands in `src-tauri`; both sides authorize through
 //! `AuthzService::authorize_audited` with the same `Operation`s (ADR-0028,
 //! conventions §1).
 //!
 //! | Route | Decision |
 //! |-------|----------|
 //! | project forecast (versions, draft, comparison) | `ViewProjectAmounts` |
+//! | project summary (the overall list's row of one project) | `ViewProjectAmounts` |
 //! | create / update / delete a draft | `ManageProject` on the project |
 //! | adopt a draft | `AdoptForecast` with `APPROVAL_POLICY` (submitter = last editor) |
 //! | portfolio (全体一覧) | rows: `admin` all, others `visible_projects`; amounts and alerts: `amount_projects` |
@@ -27,7 +28,7 @@ use crate::forecasts::{
     ForecastDraftCreated, ForecastDraftInput, ForecastOverview, ForecastVersion,
     ForecastVersionInput, RESOURCE,
 };
-use crate::portfolio::Portfolio;
+use crate::portfolio::{Portfolio, ProjectSummary};
 
 async fn project_forecast(
     State(state): State<BusinessState>,
@@ -42,6 +43,23 @@ async fn project_forecast(
         )
         .await?;
     Ok(Json(state.forecasts.overview(id).await?))
+}
+
+/// The summary at the top of the project's page (review D-1): the overall
+/// list's row of this project, amounts and alerts included.
+async fn project_summary(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(id): Path<i64>,
+) -> Result<Json<ProjectSummary>, ApiError> {
+    state
+        .guard(
+            &session,
+            Operation::ViewProjectAmounts { project_id: id },
+            RESOURCE,
+        )
+        .await?;
+    Ok(Json(state.forecasts.portfolio().project(id).await?))
 }
 
 async fn portfolio(
@@ -207,6 +225,7 @@ pub(super) fn forecast_read_router(
 ) -> Router {
     Router::new()
         .route("/api/projects/{id}/forecast", get(project_forecast))
+        .route("/api/projects/{id}/summary", get(project_summary))
         .route("/api/portfolio", get(portfolio))
         .with_state(super::projects::state(services, audit, auth.clone()))
         .layer(middleware::from_fn_with_state(auth, require_auth))

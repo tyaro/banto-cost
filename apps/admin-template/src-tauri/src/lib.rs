@@ -66,7 +66,7 @@ use admin_template_core::orders::{
 use admin_template_core::pipeline::{
     PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
 };
-use admin_template_core::portfolio::Portfolio;
+use admin_template_core::portfolio::{Portfolio, ProjectSummary};
 use admin_template_core::projects::{Project, ProjectInput, ProjectsService};
 use admin_template_core::recurring_revenue::RESOURCE as RECURRING_RESOURCE;
 use admin_template_core::rest::{api_router, user_auth_state, Services};
@@ -4798,7 +4798,8 @@ async fn budget_draft_approve_body(
 
 // --- banto-cost P5: completion forecasts and the overall list ---------------
 // Twins of `/api/projects/{id}/forecast*`, `/api/forecast-versions/*` and
-// `/api/portfolio` (`admin_template_core::rest::forecasts`): the same role
+// `/api/portfolio`, `/api/projects/{id}/summary`
+// (`admin_template_core::rest::forecasts`): the same role
 // floors, the same `Operation`s through `authorize_audited`
 // (`ViewProjectAmounts`, `ManageProject`, `AdoptForecast` with
 // `APPROVAL_POLICY`), the same scopes for the overall list (rows: admin all,
@@ -4826,6 +4827,29 @@ async fn project_forecast_body(
     )
     .await?;
     state.forecasts.overview(project_id).await
+}
+
+#[tauri::command]
+async fn project_summary(
+    state: State<'_, AppState>,
+    project_id: i64,
+) -> Result<ProjectSummary, BantoError> {
+    project_summary_body(&state, project_id).await
+}
+
+async fn project_summary_body(
+    state: &AppState,
+    project_id: i64,
+) -> Result<ProjectSummary, BantoError> {
+    let identity = require_role(state, Role::Viewer, FORECAST_RESOURCE).await?;
+    business_guard(
+        state,
+        &identity,
+        Operation::ViewProjectAmounts { project_id },
+        FORECAST_RESOURCE,
+    )
+    .await?;
+    state.forecasts.portfolio().project(project_id).await
 }
 
 #[tauri::command]
@@ -7049,6 +7073,7 @@ pub fn run() {
             budget_draft_delete,
             budget_draft_approve,
             project_forecast,
+            project_summary,
             forecast_draft_create,
             forecast_draft_update,
             forecast_draft_delete,

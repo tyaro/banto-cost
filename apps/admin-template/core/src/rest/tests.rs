@@ -5212,6 +5212,27 @@ async fn t06_t12_t30_rest_forecast_versions_and_portfolio_follow_scope() {
     assert!(row["forecastCost"].is_null());
     assert_eq!(row["alerts"], json!([]));
 
+    // The project page's summary (review D-1): the same row for the manager,
+    // refused to the admin who may not see this project's amounts.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/summary"), &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let summary = body_json(response).await;
+    let mine_row = find(&mine);
+    assert_eq!(summary["projectId"], id);
+    assert_eq!(summary["forecastProfit"], mine_row["forecastProfit"]);
+    assert_eq!(summary["alerts"], mine_row["alerts"]);
+    assert_eq!(summary["asOf"], mine["asOf"]);
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/summary"), &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
     let writes: Vec<_> = audit
         .list(ListParams::default())
         .await

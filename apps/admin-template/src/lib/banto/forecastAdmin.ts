@@ -169,6 +169,15 @@ export interface PortfolioRow {
 	updateReasons: string[];
 }
 
+/**
+ * Mirrors `admin_template_core::portfolio::ProjectSummary`: the overall
+ * list's row of one project, for the summary at the top of its page.
+ */
+export interface ProjectSummary extends PortfolioRow {
+	/** The business date the alerts were judged on. */
+	asOf: string;
+}
+
 export interface PortfolioTotals {
 	projectCount: number;
 	amountCount: number;
@@ -207,6 +216,13 @@ export async function getProjectForecast(projectId: number): Promise<ForecastOve
 	guard();
 	if (tauri()) return invokeCommand<ForecastOverview>('project_forecast', { projectId });
 	return httpRequest<ForecastOverview>(`/api/projects/${projectId}/forecast`, { method: 'GET' });
+}
+
+/** The project's row of the overall list, amounts and alerts included (`ViewProjectAmounts`). */
+export async function getProjectSummary(projectId: number): Promise<ProjectSummary> {
+	guard();
+	if (tauri()) return invokeCommand<ProjectSummary>('project_summary', { projectId });
+	return httpRequest<ProjectSummary>(`/api/projects/${projectId}/summary`, { method: 'GET' });
 }
 
 /** Start a draft (today's base date, the last remaining input), or get the existing one. */
