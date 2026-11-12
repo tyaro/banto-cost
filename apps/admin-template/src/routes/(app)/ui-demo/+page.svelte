@@ -12,7 +12,11 @@
 	 * screenshot never depends on timing; the skeleton pulse is stopped by
 	 * `prefers-reduced-motion` (the visual project forces it).
 	 *
-	 * The Menu card (phase 2a), the CommandPalette card (phase 2b), the
+	 * The Menu card (phase 2a), the DateInput card (date-time-pickers PR-1),
+	 * the TimeInput card (PR-2), the BantoGrid date cell card (PR-4), the
+	 * DateTimeInput card (PR-5), the DateRangeInput card and the grid's datetime
+	 * column (PR-6),
+	 * the CommandPalette card (phase 2b), the
 	 * Toast card (phase 2c) and the Modal / Drawer card (phase 4) are closed /
 	 * empty on load, so the screenshot shows only their triggers; opening,
 	 * keyboard and focus behaviour are covered by the package's jsdom tests
@@ -25,6 +29,10 @@
 	 */
 	import {
 		CommandPalette,
+		DateInput,
+		DateRangeInput,
+		DateTimeInput,
+		dayOfWeek,
 		Drawer,
 		EmptyState,
 		ErrorState,
@@ -38,8 +46,10 @@
 		PageHeader,
 		StatusBadge,
 		SurfaceCard,
+		TimeInput,
 		type CommandPaletteItem,
-		type StatusBadgeVariant
+		type StatusBadgeVariant,
+		type UiMessages
 	} from '@banto/ui';
 	import {
 		ChevronDown,
@@ -56,7 +66,16 @@
 		X
 	} from '@lucide/svelte';
 	import * as m from '#lib/paraglide/messages.js';
+	import { getLocale } from '#lib/paraglide/runtime.js';
 	import { toastStore } from '#lib/toast.svelte.js';
+	import { BantoGrid, columnsFromSchema, type CellEdit } from '@banto/grid-svelte';
+	import {
+		columnValidationMessages,
+		dateInputMessages,
+		dateRangeInputMessages,
+		dateTimeInputMessages,
+		gridMessages
+	} from '#lib/banto/i18n.js';
 
 	const variants: StatusBadgeVariant[] = ['neutral', 'success', 'warning', 'danger', 'info'];
 
@@ -95,6 +114,86 @@
 		overlayClosed += 1;
 	}
 	let selected = $state<string | undefined>(undefined);
+
+	// DateInput card (date-time-pickers PR-1): fixed values and a fixed range
+	// so the closed page is deterministic; the open calendar's screenshot
+	// pins the clock (e2e/visual/visual.spec.ts). The package's text comes in
+	// through `messages`, the month / weekday names from `Intl` with the
+	// current Paraglide locale (§5.5).
+	let dueDate = $state<string | null>('2026-11-07');
+	let shipDate = $state<string | null>(null);
+	const isWeekend = (date: string) => [0, 6].includes(dayOfWeek(date));
+	const dateMessages = dateInputMessages();
+	// Inside the sample Modal: a picker over a Modal, Esc closes the calendar
+	// first and the Modal on the second press (date-time-pickers §8, PR-3).
+	let modalDate = $state<string | null>(null);
+
+	// TimeInput card (date-time-pickers PR-2): a 30-minute list without a step
+	// (any minute can be typed, D8) and a 15-minute list inside office hours.
+	// Fixed values, so the open list's screenshot is deterministic.
+	let startTime = $state<string | null>('09:30');
+	let meetingTime = $state<string | null>(null);
+	// DateTimeInput card (date-time-pickers PR-5): one box, one dialog with the
+	// calendar and the time list; the second sample bounds both and steps the
+	// list. Fixed values, so the closed page is deterministic.
+	let startsAt = $state<string | null>('2026-11-07T09:30');
+	let visitAt = $state<string | null>(null);
+	const dateTimeMessages = dateTimeInputMessages();
+	// DateRangeInput card (date-time-pickers PR-6): a start and an end day in
+	// one group; the second sample bounds both ends. Fixed values, so the
+	// closed page is deterministic.
+	let stayRange = $state<{ from: string | null; to: string | null }>({
+		from: '2026-11-10',
+		to: '2026-11-14'
+	});
+	let campaignRange = $state<{ from: string | null; to: string | null }>({ from: null, to: null });
+	const dateRangeMessages = dateRangeInputMessages();
+	// BantoGrid card (date-time-pickers PR-4): an editable date column gets
+	// the DateInput the root layout injects (`provideCellEditors`); the range
+	// comes from the schema (min / max, like the ship date above). Fixed
+	// rows, so the closed page is deterministic; edits stay on this page.
+	interface Shipment {
+		code: string;
+		due: string | null;
+		shippedAt: string | null;
+	}
+	let shipments = $state<Shipment[]>([
+		{ code: 'A-100', due: '2026-11-07', shippedAt: '2026-11-06T09:30' },
+		{ code: 'B-200', due: null, shippedAt: null },
+		{ code: 'C-300', due: '2026-11-20', shippedAt: '2026-11-19T15:00' }
+	]);
+	const shipmentColumns = columnsFromSchema<Shipment>(
+		{
+			fields: [
+				{ name: 'code', label: m['uiDemo.gridDate.code'](), type: 'text', readonly: true },
+				{
+					name: 'due',
+					label: m['uiDemo.gridDate.due'](),
+					type: 'date',
+					min: '2026-11-02',
+					max: '2026-11-27'
+				},
+				{
+					name: 'shippedAt',
+					label: m['uiDemo.gridDate.shippedAt'](),
+					type: 'datetime',
+					min: '2026-11-02T09:00',
+					max: '2026-11-27T18:00'
+				}
+			]
+		},
+		{ messages: columnValidationMessages() }
+	);
+	function saveShipment(edit: CellEdit<Shipment>) {
+		shipments = shipments.map((row) =>
+			row.code === edit.rowId ? { ...row, [edit.field]: edit.value } : row
+		);
+	}
+	const timeMessages: UiMessages = {
+		timePickerOpen: () => m['timePicker.open'](),
+		timePickerList: () => m['timePicker.list'](),
+		timeFormatHint: () => m['timePicker.formatHint']()
+	};
 
 	// Static sample commands: two groups, an icon, a shortcut hint and a
 	// disabled row. The palette's own text reuses the app's palette messages;
@@ -269,6 +368,133 @@
 		</div>
 	</SurfaceCard>
 
+	<SurfaceCard title="DateInput" description={m['uiDemo.date.desc']()}>
+		<div class="grid">
+			<div class="sample">
+				<label class="caption" for="ui-demo-due-date">{m['uiDemo.date.label']()}</label>
+				<DateInput
+					id="ui-demo-due-date"
+					bind:value={dueDate}
+					locale={getLocale()}
+					messages={dateMessages}
+				/>
+				<span class="caption" data-testid="ui-demo-due-date-value">
+					{m['uiDemo.date.value']()}: {dueDate ?? m['uiDemo.date.empty']()}
+				</span>
+			</div>
+			<div class="sample">
+				<label class="caption" for="ui-demo-ship-date">{m['uiDemo.date.rangeLabel']()}</label>
+				<DateInput
+					id="ui-demo-ship-date"
+					bind:value={shipDate}
+					min="2026-11-02"
+					max="2026-11-27"
+					isDateDisabled={isWeekend}
+					locale={getLocale()}
+					messages={dateMessages}
+				/>
+				<span class="caption" data-testid="ui-demo-ship-date-value">
+					{m['uiDemo.date.value']()}: {shipDate ?? m['uiDemo.date.empty']()}
+				</span>
+			</div>
+		</div>
+	</SurfaceCard>
+
+	<SurfaceCard title="TimeInput" description={m['uiDemo.time.desc']()}>
+		<div class="grid">
+			<div class="sample">
+				<label class="caption" for="ui-demo-start-time">{m['uiDemo.time.label']()}</label>
+				<TimeInput id="ui-demo-start-time" bind:value={startTime} messages={timeMessages} />
+				<span class="caption" data-testid="ui-demo-start-time-value">
+					{m['uiDemo.date.value']()}: {startTime ?? m['uiDemo.date.empty']()}
+				</span>
+			</div>
+			<div class="sample">
+				<label class="caption" for="ui-demo-meeting-time">{m['uiDemo.time.stepLabel']()}</label>
+				<TimeInput
+					id="ui-demo-meeting-time"
+					bind:value={meetingTime}
+					step={15}
+					min="09:00"
+					max="18:00"
+					messages={timeMessages}
+				/>
+				<span class="caption" data-testid="ui-demo-meeting-time-value">
+					{m['uiDemo.date.value']()}: {meetingTime ?? m['uiDemo.date.empty']()}
+				</span>
+			</div>
+		</div>
+	</SurfaceCard>
+
+	<SurfaceCard title="DateTimeInput" description={m['uiDemo.dateTime.desc']()}>
+		<div class="grid">
+			<div class="sample">
+				<label class="caption" for="ui-demo-starts-at">{m['uiDemo.dateTime.label']()}</label>
+				<DateTimeInput
+					id="ui-demo-starts-at"
+					bind:value={startsAt}
+					locale={getLocale()}
+					messages={dateTimeMessages}
+				/>
+				<span class="caption" data-testid="ui-demo-starts-at-value">
+					{m['uiDemo.date.value']()}: {startsAt ?? m['uiDemo.date.empty']()}
+				</span>
+			</div>
+			<div class="sample">
+				<label class="caption" for="ui-demo-visit-at">{m['uiDemo.dateTime.rangeLabel']()}</label>
+				<DateTimeInput
+					id="ui-demo-visit-at"
+					bind:value={visitAt}
+					min="2026-11-02T09:00"
+					max="2026-11-27T18:00"
+					step={30}
+					locale={getLocale()}
+					messages={dateTimeMessages}
+				/>
+				<span class="caption" data-testid="ui-demo-visit-at-value">
+					{m['uiDemo.date.value']()}: {visitAt ?? m['uiDemo.date.empty']()}
+				</span>
+			</div>
+		</div>
+	</SurfaceCard>
+
+	<SurfaceCard title="DateRangeInput" description={m['uiDemo.dateRange.desc']()}>
+		<div class="grid">
+			<div class="sample">
+				<span class="caption" id="ui-demo-stay-label">{m['uiDemo.dateRange.label']()}</span>
+				<DateRangeInput
+					id="ui-demo-stay"
+					labelledBy="ui-demo-stay-label"
+					bind:value={stayRange}
+					locale={getLocale()}
+					messages={dateRangeMessages}
+				/>
+				<span class="caption" data-testid="ui-demo-stay-value">
+					{m['uiDemo.date.value']()}: {stayRange.from ?? m['uiDemo.date.empty']()} – {stayRange.to ??
+						m['uiDemo.date.empty']()}
+				</span>
+			</div>
+			<div class="sample">
+				<span class="caption" id="ui-demo-campaign-label">{m['uiDemo.dateRange.rangeLabel']()}</span
+				>
+				<DateRangeInput
+					id="ui-demo-campaign"
+					labelledBy="ui-demo-campaign-label"
+					bind:value={campaignRange}
+					min="2026-11-02"
+					max="2026-11-27"
+					isDateDisabled={isWeekend}
+					locale={getLocale()}
+					messages={dateRangeMessages}
+				/>
+				<span class="caption" data-testid="ui-demo-campaign-value">
+					{m['uiDemo.date.value']()}: {campaignRange.from ?? m['uiDemo.date.empty']()} – {campaignRange.to ??
+						m['uiDemo.date.empty']()}
+				</span>
+			</div>
+		</div>
+	</SurfaceCard>
+
 	<SurfaceCard title="CommandPalette" description={m['uiDemo.palette.desc']()}>
 		<div class="row">
 			<button
@@ -428,6 +654,21 @@
 			</div>
 		</div>
 	</SurfaceCard>
+
+	<SurfaceCard
+		title="BantoGrid + DateInput / DateTimeInput"
+		description={m['uiDemo.gridDate.desc']()}
+	>
+		<div class="grid-sample" data-testid="ui-demo-grid-date">
+			<BantoGrid
+				rows={shipments}
+				columns={shipmentColumns}
+				getRowId={(row) => row.code}
+				onCellEdit={saveShipment}
+				messages={gridMessages()}
+			/>
+		</div>
+	</SurfaceCard>
 </div>
 
 <!-- Outside the cards: under the glass preset SurfaceCard has a
@@ -442,7 +683,18 @@
 		overlayClosed += 1;
 	}}
 >
-	<p class="body-text">{m['uiDemo.overlay.modalBody']()}</p>
+	<div class="stack">
+		<p class="body-text">{m['uiDemo.overlay.modalBody']()}</p>
+		<div class="field">
+			<label class="caption" for="ui-demo-modal-date">{m['uiDemo.overlay.modalDate']()}</label>
+			<DateInput
+				id="ui-demo-modal-date"
+				bind:value={modalDate}
+				locale={getLocale()}
+				messages={dateMessages}
+			/>
+		</div>
+	</div>
 </Modal>
 
 <Drawer
@@ -500,59 +752,65 @@
 	.page {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.stack {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	.grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-		gap: 1rem;
+		grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+		gap: var(--banto-space-4);
 	}
 
 	.row {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 0.75rem;
+		gap: var(--banto-space-3);
 	}
 
 	.row--spaced {
-		margin-top: 0.75rem;
+		margin-top: var(--banto-space-3);
 	}
 
 	.sample {
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 		min-width: 0;
 	}
 
+	/* The grid sample's frame (a part's shape, conventions §9): the grid
+	   scrolls inside a fixed height; three rows and the header fit. */
+	.grid-sample {
+		height: 12rem;
+	}
+
 	.sample--frame {
-		padding: 0.75rem;
-		border: 1px dashed var(--banto-border);
+		padding: var(--banto-space-3);
+		border: var(--banto-border-width) dashed var(--banto-border);
 		border-radius: var(--banto-radius-md);
 	}
 
 	.field {
 		display: flex;
 		flex-direction: column;
-		gap: 0.3rem;
+		gap: var(--banto-space-1);
 	}
 
 	.caption {
 		color: var(--banto-text-muted);
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.body-text {
 		margin: 0;
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 	}
 
 	/* Samples must not claim the page-level view-transition name (see the

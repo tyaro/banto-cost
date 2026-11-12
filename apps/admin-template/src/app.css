@@ -49,11 +49,11 @@ body {
 .banto-btn {
 	display: inline-flex;
 	align-items: center;
-	gap: 0.4rem;
+	gap: var(--banto-space-2);
 	height: var(--banto-control-height);
-	padding: 0 0.9rem;
+	padding: 0 var(--banto-space-4);
 	border-radius: var(--banto-radius-md);
-	border: 1px solid transparent;
+	border: var(--banto-border-width) solid transparent;
 	font: inherit;
 	color: var(--banto-text);
 	cursor: pointer;
@@ -98,8 +98,8 @@ body {
 
 .banto-input {
 	height: var(--banto-control-height);
-	padding: 0 0.6rem;
-	border: 1px solid var(--banto-border-strong);
+	padding: 0 var(--banto-space-2);
+	border: var(--banto-border-width) solid var(--banto-border-strong);
 	border-radius: var(--banto-radius-md);
 	background: transparent;
 	color: var(--banto-text);

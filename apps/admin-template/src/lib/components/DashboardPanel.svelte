@@ -36,7 +36,7 @@
 	.memo {
 		margin: 0;
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		text-wrap: pretty;
 	}
 

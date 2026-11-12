@@ -325,13 +325,13 @@
 		min-height: 100vh;
 		display: grid;
 		place-items: center;
-		padding: 1.5rem;
+		padding: var(--banto-space-6);
 	}
 
 	.login-card {
 		width: min(320px, 100%);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-md);
 		overflow: hidden;
@@ -347,20 +347,20 @@
 	.form-pane {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-		padding: 2rem;
+		gap: var(--banto-space-4);
+		padding: var(--banto-space-7);
 	}
 
 	form {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: var(--banto-space-4);
 	}
 
 	h1 {
 		margin: 0;
 		text-align: center;
-		font-size: 1.5rem;
+		font-size: var(--banto-font-size-xl);
 		font-feature-settings: 'palt';
 		text-wrap: balance;
 	}
@@ -369,14 +369,14 @@
 		margin: 0;
 		text-align: center;
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		text-wrap: pretty;
 	}
 
 	.demo-note {
 		margin: 0;
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		text-wrap: pretty;
 	}
 
@@ -386,7 +386,7 @@
 		color: var(--banto-text-muted);
 		flex-direction: row;
 		align-items: center;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 		cursor: pointer;
 	}
 
@@ -399,16 +399,16 @@
 		margin: 0;
 		text-align: center;
 		color: var(--banto-danger);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.skip-login {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
-		margin-top: 0.25rem;
-		padding-top: 1rem;
-		border-top: 1px solid var(--banto-border);
+		gap: var(--banto-space-2);
+		margin-top: var(--banto-space-1);
+		padding-top: var(--banto-space-4);
+		border-top: var(--banto-border-width) solid var(--banto-border);
 	}
 
 	.skip-login .banto-btn--secondary {
@@ -463,8 +463,8 @@
 			position: relative;
 			flex-direction: column;
 			justify-content: center;
-			gap: 0.6rem;
-			padding: 3rem;
+			gap: var(--banto-space-2);
+			padding: var(--banto-space-8);
 			overflow: hidden;
 			color: #fff;
 			/* Background generated with no image assets (design.md §9): two
@@ -512,8 +512,8 @@
 		.brand-name {
 			position: relative;
 			z-index: 1;
-			margin: 0.5rem 0 0;
-			font-size: 1.75rem;
+			margin: var(--banto-space-2) 0 0;
+			font-size: var(--banto-font-size-xl);
 			font-weight: 700;
 			font-feature-settings: 'palt';
 		}
@@ -523,7 +523,7 @@
 			z-index: 1;
 			margin: 0;
 			color: rgb(255 255 255 / 0.75);
-			font-size: 0.9rem;
+			font-size: var(--banto-font-size-md);
 			text-wrap: pretty;
 		}
 

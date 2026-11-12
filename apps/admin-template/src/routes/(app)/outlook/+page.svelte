@@ -308,7 +308,7 @@
 		flex-direction: column;
 		gap: var(--banto-space-2);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
 		padding: var(--banto-space-4);
@@ -366,7 +366,7 @@
 	th,
 	td {
 		padding: var(--banto-space-2);
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		text-align: left;
 		white-space: nowrap;
 	}
@@ -378,7 +378,7 @@
 
 	tfoot th,
 	tfoot td {
-		border-top: 2px solid var(--banto-border);
+		border-top: var(--banto-border-width-strong) solid var(--banto-border);
 	}
 
 	.num {

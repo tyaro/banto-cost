@@ -59,7 +59,7 @@
 
 <style>
 	.body {
-		margin: 0 0 1rem;
+		margin: 0 0 var(--banto-space-4);
 		color: var(--banto-text);
 		text-wrap: pretty;
 	}
@@ -68,6 +68,6 @@
 		display: flex;
 		flex-wrap: wrap;
 		justify-content: flex-end;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 	}
 </style>

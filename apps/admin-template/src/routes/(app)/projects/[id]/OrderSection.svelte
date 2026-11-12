@@ -697,7 +697,7 @@
 		flex-direction: column;
 		gap: var(--banto-space-3);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
 		padding: min(var(--banto-space-5), 3%);
@@ -737,7 +737,7 @@
 		flex-direction: column;
 		gap: var(--banto-space-1);
 		padding: var(--banto-space-3);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 	}
 
@@ -790,7 +790,7 @@
 	th,
 	td {
 		padding: var(--banto-space-2);
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 		text-align: left;
 		vertical-align: top;
 		white-space: nowrap;

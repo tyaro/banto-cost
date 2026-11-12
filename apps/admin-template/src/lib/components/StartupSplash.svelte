@@ -19,18 +19,18 @@
 		display: grid;
 		place-items: center;
 		align-content: center;
-		gap: 0.75rem;
-		padding: 1rem;
+		gap: var(--banto-space-3);
+		padding: var(--banto-space-4);
 		text-align: center;
 		color: var(--banto-text-muted);
 	}
 	h1 {
-		font-size: 1.125rem;
+		font-size: var(--banto-font-size-lg);
 		color: var(--banto-text);
 	}
 	button {
-		padding: 0.5rem 1.25rem;
-		border: 1px solid var(--banto-border);
+		padding: var(--banto-space-2) var(--banto-space-5);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius);
 		background: transparent;
 		color: var(--banto-text);

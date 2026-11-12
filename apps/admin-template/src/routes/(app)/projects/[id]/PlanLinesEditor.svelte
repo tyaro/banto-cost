@@ -139,7 +139,7 @@
 		gap: var(--banto-space-2);
 		margin: 0;
 		padding: var(--banto-space-3);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 	}
 

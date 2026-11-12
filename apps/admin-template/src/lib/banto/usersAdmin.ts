@@ -38,7 +38,7 @@ export interface UserSummary {
 	createdAt: string;
 }
 
-/** Mirrors `users_create`'s Tauri `UserIdentityResult` / REST `UserIdentityResponse` - no `createdAt` (see their doc comments). */
+/** Mirrors `users_create`'s `UserIdentityView` (Tauri and REST alike) - no `createdAt` (see its doc comment). */
 export interface CreatedUser {
 	id: number;
 	username: string;

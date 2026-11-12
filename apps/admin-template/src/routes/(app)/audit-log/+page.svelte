@@ -364,31 +364,31 @@
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 	}
 
 	.note {
 		flex: 0 0 auto;
 		margin: 0;
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.load-error {
 		flex: 0 0 auto;
-		padding: 0.5rem 0.75rem;
+		padding: var(--banto-space-2) var(--banto-space-3);
 		border-left: 3px solid var(--banto-danger-solid);
 		border-radius: var(--banto-radius-sm);
 		background: var(--banto-danger-tint);
 		color: var(--banto-danger-tint-text);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 	}
 
 	.load-error p {
 		margin: 0;
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.25rem 0.5rem;
+		gap: var(--banto-space-1) var(--banto-space-2);
 	}
 
 	.load-error-detail {
@@ -400,7 +400,7 @@
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 0.5rem 0.75rem;
+		gap: var(--banto-space-2) var(--banto-space-3);
 	}
 
 	.grid-wrap {
@@ -433,30 +433,30 @@
 		max-height: 40%;
 		overflow-y: auto;
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-top: 3px solid var(--banto-primary);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
-		padding: 1rem 1.25rem;
+		padding: var(--banto-space-4) var(--banto-space-5);
 	}
 
 	.detail h3 {
-		margin: 0 0 0.75rem;
-		font-size: 0.95rem;
+		margin: 0 0 var(--banto-space-3);
+		font-size: var(--banto-font-size-md);
 	}
 
 	.detail h4 {
-		margin: 0.75rem 0 0.5rem;
-		font-size: 0.85rem;
+		margin: var(--banto-space-3) 0 var(--banto-space-2);
+		font-size: var(--banto-font-size-md);
 		color: var(--banto-text-muted);
 	}
 
 	dl {
 		display: grid;
 		grid-template-columns: max-content 1fr;
-		gap: 0.35rem 1rem;
+		gap: var(--banto-space-1) var(--banto-space-4);
 		margin: 0;
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 	}
 
 	dt {
@@ -469,11 +469,11 @@
 
 	pre {
 		margin: 0;
-		padding: 0.75rem;
+		padding: var(--banto-space-3);
 		background: var(--banto-bg);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		white-space: pre-wrap;
 		word-break: break-word;
 	}

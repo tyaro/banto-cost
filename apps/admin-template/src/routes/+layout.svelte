@@ -2,18 +2,39 @@
 	import '../app.css';
 	import { refreshAll } from '$app/navigation';
 	import { page } from '$app/state';
+	import { provideFieldInputs } from '@banto/forms';
 	import { bantoReady } from '#lib/banto/setup.js'; // initBanto() (+ EventProvider) before any route guard runs (spec §3, §11.1)
 	import { initLocale } from '#lib/banto/locale.js'; // registers the Paraglide client strategy + syncs <html lang> (ADR-0005)
 	import { settings } from '#lib/settings.svelte.js';
 	import ToastHost from '#lib/components/ToastHost.svelte';
 	import StartupSplash from '#lib/components/StartupSplash.svelte';
 	import { isStartupDeferral } from '#lib/banto/startupGate.js';
+	import { provideCellEditors } from '@banto/grid-svelte';
+	import FormDateInput from '#lib/components/FormDateInput.svelte';
+	import CellDateInput from '#lib/components/CellDateInput.svelte';
+	import FormTimeInput from '#lib/components/FormTimeInput.svelte';
+	import CellTimeInput from '#lib/components/CellTimeInput.svelte';
+	import FormDateTimeInput from '#lib/components/FormDateTimeInput.svelte';
+	import CellDateTimeInput from '#lib/components/CellDateTimeInput.svelte';
+	import FilterDateRangeInput from '#lib/components/FilterDateRangeInput.svelte';
 	import {
 		isNavigationSettled,
 		trackFirstNavigation
 	} from '#lib/banto/navigationSettled.svelte.js';
 
 	let { children } = $props();
+
+	// The pickers every schema form and grid below uses (date-time-pickers §5.7 /
+	// §5.8, D1-a): @banto/forms and @banto/grid-svelte never import @banto/ui,
+	// so the app hands them the components. A form / grid can still override
+	// them with its `fieldInputs` / `cellEditors` prop.
+	provideFieldInputs({ date: FormDateInput, time: FormTimeInput, datetime: FormDateTimeInput });
+	provideCellEditors({
+		date: CellDateInput,
+		time: CellTimeInput,
+		datetime: CellDateTimeInput,
+		dateRange: FilterDateRangeInput
+	});
 
 	// Start theme handling (applies persisted mode, watches OS changes) and sync
 	// <html lang> to the persisted locale (ADR-0005; the strategy itself is

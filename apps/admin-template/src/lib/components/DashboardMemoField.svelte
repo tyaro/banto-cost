@@ -66,7 +66,7 @@
 	.memo-field {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 		height: 100%;
 		min-height: 0;
 	}
@@ -75,16 +75,16 @@
 		flex: 1 1 auto;
 		min-height: 4rem;
 		height: auto;
-		padding: 0.5rem 0.6rem;
+		padding: var(--banto-space-2) var(--banto-space-2);
 		resize: none;
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 		line-height: 1.6;
 	}
 
 	.message {
 		margin: 0;
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.message.error {
@@ -95,7 +95,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: flex-end;
-		gap: 0.5rem;
+		gap: var(--banto-space-2);
 		min-height: 2rem;
 	}
 
