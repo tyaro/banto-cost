@@ -27,7 +27,7 @@ v0.1.0-beta.1（2026-11-08）をプレリリースしました。P0〜P7c まで
 
 ## Banto との同期
 
-`packages/*`・`crates/banto-*` と `apps/admin-template` の画面の土台は Banto のコピーです。Banto の新版は [docs/upgrading.md](../upgrading.md) の手順で、上流のタグ間の差分を3方向マージで取り込みます（商品 items・添付などの banto-cost にない部分は外します）。
+`packages/*`・`crates/banto-*` と `apps/admin-template` の画面の土台は Banto のコピーです。Banto の新版は [docs/upgrading.md](../upgrading.md) の手順で、上流のタグ間の差分を3方向マージで取り込みます（商品 items・添付などの banto-cost にない部分は外します）。画面の寸法が変わる版では、取り込んだ後に `visual-baselines.yml`（`commit: true`）で visual の基準画像を作り直します。bot のコミットでは CI が動かないので、その後に通常の push が要ります。
 
 | 取り込んだ版 | 日付       | 見送ったもの                                                                                       |
 | ------------ | ---------- | -------------------------------------------------------------------------------------------------- |
