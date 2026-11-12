@@ -24,9 +24,7 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 		await expect(name).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 		await name.hover();
 		await expect(name).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-		// name / note; the date is the injected DateInput (Banto v7 date-time-pickers
-		// PR-3), which keeps its own box and sits under a sibling stacked label.
-		await expect(form.locator('.banto-field-control')).toHaveCount(2);
+		await expect(form.locator('.banto-field-control')).toHaveCount(3);
 		await expect(name).toHaveCSS('border-bottom-width', '2px');
 		await form.getByRole('button', { name: copy['common.save'], exact: true }).click();
 		await expect(name).toHaveAttribute('aria-invalid', 'true');
@@ -39,16 +37,13 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 		await expect(name).not.toHaveAttribute('aria-describedby');
 		await expect(error).toHaveCount(0);
 		await note.fill('Example note');
-		const date = form.getByRole('textbox', { name: copy['customers.fieldUpdatedAt'] });
-		await expect(date).toHaveClass(/date-input-text/);
+		const date = form.getByLabel(copy['customers.fieldUpdatedAt']);
 		await expect(date).toHaveJSProperty('readOnly', true);
 		await expect(date).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 		await expect(date).toBeEnabled();
-		// Read-only: the calendar cannot be opened.
-		await expect(form.getByRole('button', { name: copy['datePicker.open'] })).toBeDisabled();
 		await date.focus();
 		await expect(date).toBeFocused();
-		await expect(date).not.toHaveCSS('box-shadow', 'none');
+		await expect(date).toHaveCSS('outline-style', 'solid');
 
 		await page.setViewportSize({ width: 320, height: 700 });
 		await page.evaluate(() => (document.documentElement.style.fontSize = '200%'));
@@ -60,14 +55,6 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 			}));
 			expect(bounds.labelBottom).toBeLessThan(bounds.valueTop);
 		}
-		const dateBounds = await date.evaluate((element) => {
-			const label = document.querySelector(`label[for="${element.id}"]`)!;
-			return {
-				labelBottom: label.getBoundingClientRect().bottom,
-				valueTop: element.getBoundingClientRect().top
-			};
-		});
-		expect(dateBounds.labelBottom).toBeLessThanOrEqual(dateBounds.valueTop);
 		for (const action of await form.locator('.footer > button, .footer > a.banto-btn').all()) {
 			const fits = await action.evaluate((element) => ({
 				width: element.scrollWidth <= element.clientWidth,
