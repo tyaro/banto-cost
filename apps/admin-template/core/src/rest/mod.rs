@@ -109,6 +109,7 @@
 //! | GET    | `/api/projects/{id}/monthly.csv` | - | `CsvExport` (any role + `ViewProjectAmounts`; audited `export`) |
 //! | GET    | `/api/reports/portfolio.csv` | - | `CsvExport` (any role; rows `visible_projects` (admin all), amounts `amount_projects`; audited) |
 //! | GET    | `/api/reports/period-monthly.csv?period=N` | - | `CsvExport` (any role; `amount_projects`; audited) |
+//! | GET    | `/api/calendar` | - | `BusinessCalendar` (any role; business date in Asia/Tokyo, fiscal periods) |
 //! | GET    | `/api/portfolio` | - | `Portfolio` (any role; rows `visible_projects` (admin all), amounts and alerts `amount_projects`) |
 //! | GET    | `/api/vendors` | - | `WorkMaster[]` (any role; admin or `ViewMasters`) |
 //! | POST   | `/api/vendors` | `WorkMasterInput` | `WorkMaster` (editor+; admin or `EditMasters`) |

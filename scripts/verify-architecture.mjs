@@ -686,7 +686,9 @@ const isAllowedPackageImport = (spec) =>
 			tauri: 'period_monthly_csv',
 			rest: 'GET /api/reports/period-monthly.csv',
 			role: 'Viewer'
-		}
+		},
+		// banto-cost P8d：業務日付と期（金額・氏名なし、ログインしていれば誰でも）。
+		{ tauri: 'business_calendar_get', rest: 'GET /api/calendar', role: 'Viewer' }
 	];
 
 	// REST-only（Tauri 側に対を持たないのが正しい mutating ルート）。
@@ -778,6 +780,7 @@ const isAllowedPackageImport = (spec) =>
 		'project_monthly_csv',
 		'portfolio_csv',
 		'period_monthly_csv',
+		'business_calendar_get',
 		'vendors_list',
 		'direct_costs_list',
 		'direct_costs_approvals',
@@ -840,6 +843,7 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/projects/{id}/monthly.csv',
 		'GET /api/reports/portfolio.csv',
 		'GET /api/reports/period-monthly.csv',
+		'GET /api/calendar',
 		'GET /api/portfolio',
 		'GET /api/projects/{id}/summary',
 		'GET /api/vendors',

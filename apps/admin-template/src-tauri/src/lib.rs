@@ -5765,6 +5765,22 @@ async fn period_monthly_csv_body(state: &AppState, period: i32) -> Result<CsvExp
     Ok(csv)
 }
 
+/// Twin of `GET /api/calendar` (P8d): the business date in the company's
+/// time zone and the fiscal periods. Any signed-in role (no amounts, no names).
+#[tauri::command]
+async fn business_calendar_get(
+    state: State<'_, AppState>,
+) -> Result<admin_template_core::business_date::BusinessCalendar, BantoError> {
+    business_calendar_get_body(&state).await
+}
+
+async fn business_calendar_get_body(
+    state: &AppState,
+) -> Result<admin_template_core::business_date::BusinessCalendar, BantoError> {
+    require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
+    Ok(admin_template_core::business_date::calendar())
+}
+
 // --- banto-cost P4d: vendors, direct costs and purchase orders ---------------
 // Twins of `/api/vendors/*`, `/api/direct-costs/*`, `/api/purchase-orders/*`
 // and `/api/projects/{id}/costs` (`admin_template_core::rest::costs`): the
@@ -7101,6 +7117,7 @@ pub fn run() {
             project_monthly_csv,
             portfolio_csv,
             period_monthly_csv,
+            business_calendar_get,
             vendors_list,
             vendors_create,
             vendors_update,
@@ -13223,6 +13240,15 @@ mod tests {
         let names = user_names_list_body(&state, &editor)
             .await
             .expect("member reads user names");
+        // The business calendar (P8d): today in Asia/Tokyo and the periods.
+        let calendar = business_calendar_get_body(&state)
+            .await
+            .expect("a signed-in user reads the calendar");
+        assert_eq!(calendar.time_zone, "Asia/Tokyo");
+        assert_eq!(
+            calendar.today,
+            admin_template_core::business_date::today().to_string()
+        );
         assert!(names.iter().any(|n| n.display_name == "編集者"));
         let input: WorkMasterInput =
             serde_json::from_value(serde_json::json!({ "name": "据付", "sortOrder": 70 }))

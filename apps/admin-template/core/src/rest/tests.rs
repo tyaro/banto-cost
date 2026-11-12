@@ -5952,6 +5952,31 @@ async fn t12_t15_rest_monthly_figures_and_csv_follow_scope() {
 }
 
 #[tokio::test]
+async fn t15_rest_business_calendar_is_read_by_any_signed_in_role() {
+    let (router, _audit, _admin, _editor, viewer) = router_with_role_tokens_and_audit().await;
+    // A viewer with no business capability still reads the calendar: it has
+    // no amounts or names, only the business date and the fiscal periods.
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/calendar", &viewer))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cal = body_json(response).await;
+    assert_eq!(cal["timeZone"], "Asia/Tokyo");
+    assert_eq!(cal["utcOffsetMinutes"], 540);
+    assert_eq!(cal["startMonth"], 6);
+    let today = cal["today"].as_str().unwrap();
+    assert_eq!(today, crate::business_date::today().to_string());
+    let current = cal["currentPeriod"].as_i64().unwrap();
+    let periods = cal["periods"].as_array().unwrap();
+    assert!(periods.iter().any(|p| p["period"] == current), "{cal}");
+    // Signed out: refused like every business read.
+    let response = router.clone().oneshot(get("/api/calendar")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn t37_rest_fixed_costs_need_finance_rate_and_post_a_month_once() {
     let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
     grant(

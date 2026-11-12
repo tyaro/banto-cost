@@ -350,13 +350,6 @@ impl BudgetsService {
         now_expr(self.db.dialect())
     }
 
-    fn today(&self) -> &'static str {
-        match self.db.dialect() {
-            Dialect::Sqlite => "date('now','localtime')",
-            Dialect::Postgres => "CURRENT_DATE::text",
-        }
-    }
-
     /// The project's status, or not found.
     async fn project_status(&self, project_id: i64) -> Result<ProjectStatus, BantoError> {
         let sql = self.sql("SELECT status FROM projects WHERE id = ?");
@@ -528,11 +521,11 @@ impl BudgetsService {
                 replayed: true,
             });
         }
-        let insert = self.sql(&format!(
+        let insert = self.sql(
             "INSERT INTO budget_versions (project_id, status, created_on, created_by, updated_by) \
-             VALUES (?, 'draft', {}, ?, ?) RETURNING id",
-            self.today()
-        ));
+             VALUES (?, 'draft', ?, ?, ?) RETURNING id",
+        );
+        let today = crate::business_date::today().to_string();
         let current = self.sql(
             "SELECT id FROM budget_versions WHERE project_id = ? AND status = 'approved' \
              ORDER BY version_no DESC LIMIT 1",
@@ -546,7 +539,7 @@ impl BudgetsService {
         );
         let result: Result<i64, BantoError> = async {
             Ok(in_tx!(&self.db, tx => {
-                let id: i64 = scalar!(&mut *tx, insert, project_id, actor_user_id, actor_user_id)?;
+                let id: i64 = scalar!(&mut *tx, insert, project_id, &today, actor_user_id, actor_user_id)?;
                 let base: Option<(i64,)> = fetch_optional!(&mut *tx, current, project_id)?;
                 if let Some((base,)) = base {
                     execute!(&mut *tx, copy, id, base)?;
