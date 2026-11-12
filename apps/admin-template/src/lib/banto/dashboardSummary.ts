@@ -7,15 +7,15 @@
 import type { PipelineOverview } from './pipelineAdmin';
 import type { OutlookView } from './ordersAdmin';
 
-/** `YYYY-MM` of a local date. */
-export function monthOf(date: Date): string {
-	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-}
-
-/** This month and next month (`YYYY-MM`, local time), crossing the year end. */
-export function currentAndNextMonth(today: Date): { current: string; next: string } {
-	const next = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-	return { current: monthOf(today), next: monthOf(next) };
+/**
+ * This month and next month (`YYYY-MM`) of a business date (`YYYY-MM-DD`),
+ * crossing the year end.
+ */
+export function currentAndNextMonth(today: string): { current: string; next: string } {
+	const year = Number(today.slice(0, 4));
+	const month = Number(today.slice(5, 7));
+	const next = month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`;
+	return { current: today.slice(0, 7), next };
 }
 
 /**

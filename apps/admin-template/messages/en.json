@@ -934,6 +934,7 @@
   "outlook.description": "Per month: recognized revenue, ordered revenue plan, and pre-order revenue weighted by probability. Never added to the order-month figures.",
   "outlook.from": "From",
   "outlook.to": "To",
+  "outlook.thisPeriod": "This period",
   "outlook.show": "Show",
   "outlook.live": "Current outlook",
   "outlook.compare": "Compare with snapshot",

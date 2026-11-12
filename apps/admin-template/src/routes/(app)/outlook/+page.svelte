@@ -17,6 +17,8 @@
 	 * Scope: the server returns only projects whose amounts the caller may
 	 * see (`amount_projects`); saving a snapshot needs `report.all`.
 	 */
+	import PeriodHint from '#lib/components/PeriodHint.svelte';
+	import { businessCalendar, currentPeriod } from '#lib/banto/businessCalendar.svelte.js';
 	import { resolve } from '$app/paths';
 	import { isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
@@ -55,6 +57,18 @@
 	let label = $state('');
 	let saving = $state(false);
 	const forbidden = $derived(isForbiddenError(loadError));
+
+	// P8d: the current fiscal period's months (6月〜翌5月) in one click.
+	const thisPeriod = $derived.by(() => {
+		const current = currentPeriod();
+		return businessCalendar()?.periods.find((p) => p.period === current) ?? null;
+	});
+	function showThisPeriod() {
+		if (!thisPeriod) return;
+		from = thisPeriod.firstMonth;
+		to = thisPeriod.lastMonth;
+		void load();
+	}
 
 	async function load() {
 		if (!available) return;
@@ -137,11 +151,11 @@
 			}}
 		>
 			<label class="field">
-				<span>{m['outlook.from']()}</span>
+				<span>{m['outlook.from']()}<PeriodHint month={from} /></span>
 				<input class="banto-input" type="month" placeholder="YYYY-MM" bind:value={from} />
 			</label>
 			<label class="field">
-				<span>{m['outlook.to']()}</span>
+				<span>{m['outlook.to']()}<PeriodHint month={to} /></span>
 				<input class="banto-input" type="month" placeholder="YYYY-MM" bind:value={to} />
 			</label>
 			<label class="field">
@@ -165,6 +179,14 @@
 				</label>
 			{/if}
 			<button type="submit" class="banto-btn banto-btn--primary">{m['outlook.apply']()}</button>
+			{#if thisPeriod}
+				<button
+					type="button"
+					class="banto-btn banto-btn--secondary"
+					title={thisPeriod.label}
+					onclick={showThisPeriod}>{m['outlook.thisPeriod']()}</button
+				>
+			{/if}
 		</form>
 
 		{#if !view}

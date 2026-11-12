@@ -10,6 +10,7 @@
 	 * The server refuses every write dated in a closed month; this page only
 	 * shows the state.
 	 */
+	import PeriodHint from '#lib/components/PeriodHint.svelte';
 	import { isProviderError, notify } from '@banto/admin-core';
 	import { resolve } from '$app/paths';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
@@ -26,14 +27,14 @@
 		type WarningCode
 	} from '#lib/banto/closingAdmin.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
-	import { formatSignedYen, formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
+	import { formatSignedYen, formatYen, isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 
 	const available = isPipelineAvailable();
 	const canWrite = $derived(canWriteResources(sessionStore.role));
 
-	let month = $state(previousMonth(new Date()));
+	let month = $state(previousMonth(todayIso()));
 	let view = $state<MonthClosing | null>(null);
 	let months = $state<MonthRow[]>([]);
 	let loadError = $state<unknown>(null);
@@ -158,7 +159,7 @@
 			}}
 		>
 			<label class="field">
-				<span>{m['closing.month']()}</span>
+				<span>{m['closing.month']()}<PeriodHint {month} /></span>
 				<input class="banto-input" type="month" placeholder="YYYY-MM" bind:value={month} />
 			</label>
 			<button type="submit" class="banto-btn banto-btn--primary">{m['closing.show']()}</button>

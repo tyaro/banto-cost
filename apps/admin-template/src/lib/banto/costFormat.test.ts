@@ -110,7 +110,7 @@ describe('calc basis display (P4a)', () => {
 		expect(calcItemLabel({ key: 'added_later', label: '後から追加' })).toBe('後から追加');
 	});
 
-	it('formats the local date as YYYY-MM-DD', () => {
+	it('formats the local date as YYYY-MM-DD before the calendar is loaded', () => {
 		expect(todayIso(new Date(2026, 10, 6, 23, 59))).toBe('2026-11-06');
 	});
 });

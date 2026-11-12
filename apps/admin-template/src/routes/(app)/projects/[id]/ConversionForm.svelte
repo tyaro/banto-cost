@@ -13,7 +13,7 @@
 	import * as m from '#lib/paraglide/messages.js';
 	import { convertOrder, type ConversionRequest } from '#lib/banto/ordersAdmin.js';
 	import { VERSION_STAGES, type VersionStage } from '#lib/banto/pipelineAdmin.js';
-	import { stageLabel } from '#lib/banto/costFormat.js';
+	import { stageLabel, todayIso } from '#lib/banto/costFormat.js';
 	import PlanLinesEditor, {
 		newPlanLine,
 		parsePlanLines,
@@ -34,13 +34,7 @@
 
 	const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-	function today(): string {
-		const d = new Date();
-		const pad = (n: number) => String(n).padStart(2, '0');
-		return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-	}
-
-	let convertedOn = $state(today());
+	let convertedOn = $state(todayIso());
 	let confirmedAmount = $state('');
 	let basis = $state('');
 	let plannedStart = $state('');

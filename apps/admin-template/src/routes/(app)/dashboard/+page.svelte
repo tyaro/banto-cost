@@ -40,7 +40,7 @@
 		type PipelineOverview
 	} from '#lib/banto/pipelineAdmin.js';
 	import { getOutlook, type OutlookView } from '#lib/banto/ordersAdmin.js';
-	import { formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
+	import { formatYen, isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
 	import {
 		attentionProjectIds,
 		currentAndNextMonth,
@@ -73,7 +73,7 @@
 	const available = isPipelineAvailable();
 	// Re-read on every load, so a dashboard left open across a month end shows
 	// the new month after 再読み込み (the tiles read it together with the outlook).
-	let months = $state(currentAndNextMonth(new Date()));
+	let months = $state(currentAndNextMonth(todayIso()));
 
 	type Source<T> =
 		{ state: 'loading' } | { state: 'ok'; value: T } | { state: 'error'; error: unknown };
@@ -85,7 +85,7 @@
 	async function load(): Promise<void> {
 		if (!available) return;
 		const token = ++loadToken;
-		const range = currentAndNextMonth(new Date());
+		const range = currentAndNextMonth(todayIso());
 		overview = { state: 'loading' };
 		outlook = { state: 'loading' };
 		const [o, l] = await Promise.allSettled([

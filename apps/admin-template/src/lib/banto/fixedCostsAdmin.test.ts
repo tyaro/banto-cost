@@ -8,7 +8,7 @@ describe('fixed costs helpers', () => {
 	});
 
 	it('posts this month by default', () => {
-		expect(currentMonth(new Date(2026, 10, 7))).toBe('2026-11');
-		expect(currentMonth(new Date(2027, 0, 1))).toBe('2027-01');
+		expect(currentMonth('2026-11-07')).toBe('2026-11');
+		expect(currentMonth('2027-01-01')).toBe('2027-01');
 	});
 });
