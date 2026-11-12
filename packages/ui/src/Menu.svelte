@@ -13,6 +13,8 @@
 	 *   on neither side, its height is capped to the larger side and it
 	 *   scrolls internally; that scroll (wheel, or the browser bringing a
 	 *   focused item into view) does not count as an ancestor scroll (#427).
+	 *   The placement and the resize / scroll watch live in
+	 *   `anchoredPopover.ts`, shared with DateInput.
 	 * - Keyboard: see the table in §7.5. Enter/Space on menu items is
 	 *   native `<button>` behavior (handled in MenuItem); everything else
 	 *   funnels through the handlers below.
@@ -21,6 +23,7 @@
 	 * which imports nothing but `svelte`.
 	 */
 	import { flushSync, type Snippet } from 'svelte';
+	import { computeAnchoredPosition, watchAnchoredPopover } from './anchoredPopover';
 	import { setMenuContext } from './menuContext';
 
 	interface MenuTriggerProps {
@@ -71,66 +74,9 @@
 		list[wrapped]?.focus();
 	}
 
-	// Distance between the trigger and the menu, and the menu and the
-	// viewport edges (px).
-	const GAP = 4;
-
 	function computePosition(): void {
 		if (!triggerEl || !popoverEl) return;
-		// Measure the natural height: drop the cap a previous computePosition()
-		// (e.g. before a resize) may have set. Set imperatively (not through a
-		// `style:` directive) so the cap is in place synchronously, before the
-		// open-time focus scrolls an item into view. Dropping the cap resets
-		// the menu's own scroll, so it is restored afterwards (resize).
-		const scrollTop = popoverEl.scrollTop;
-		popoverEl.style.removeProperty('max-height');
-		const triggerRect = triggerEl.getBoundingClientRect();
-		const menuRect = popoverEl.getBoundingClientRect();
-		const viewportWidth = document.documentElement.clientWidth;
-		const viewportHeight = document.documentElement.clientHeight;
-
-		const below = triggerRect.bottom + GAP;
-		const aboveTop = triggerRect.top - menuRect.height - GAP;
-		let top = below;
-		let height = menuRect.height;
-		if (below + menuRect.height <= viewportHeight) {
-			// Fits below (the default side).
-		} else if (aboveTop >= 0) {
-			top = aboveTop;
-		} else {
-			// Fits on neither side: take the roomier one and cap the menu's
-			// whole box (padding and border included) to it.
-			const spaceBelow = Math.max(viewportHeight - below - GAP, 0);
-			const spaceAbove = Math.max(triggerRect.top - GAP - GAP, 0);
-			if (spaceAbove > spaceBelow) {
-				height = Math.min(menuRect.height, spaceAbove);
-				top = triggerRect.top - height - GAP;
-			} else {
-				height = Math.min(menuRect.height, spaceBelow);
-			}
-		}
-		if (height < menuRect.height) {
-			// Under `content-box` (the browser default; apps often reset to
-			// `border-box`) `max-height` excludes padding + border, so take
-			// them off the whole-box space computed above.
-			const style = getComputedStyle(popoverEl);
-			const frame =
-				style.boxSizing === 'border-box'
-					? 0
-					: [
-							style.paddingTop,
-							style.paddingBottom,
-							style.borderTopWidth,
-							style.borderBottomWidth
-						].reduce((sum, value) => sum + (parseFloat(value) || 0), 0);
-			popoverEl.style.maxHeight = `${Math.max(height - frame, 0)}px`;
-			popoverEl.scrollTop = scrollTop;
-		}
-
-		let left = placement === 'bottom-start' ? triggerRect.left : triggerRect.right - menuRect.width;
-		left = Math.min(Math.max(left, GAP), viewportWidth - menuRect.width - GAP);
-
-		coords = { top, left };
+		coords = computeAnchoredPosition(triggerEl, popoverEl, placement);
 	}
 
 	let focusIntent: 'first' | 'last' | 'none' = 'none';
@@ -233,23 +179,9 @@
 
 	$effect(() => {
 		if (!open) return;
-		function handleResize(): void {
-			computePosition();
-		}
-		function handleScroll(event: Event): void {
-			// The menu's own scroll (long menus, #427) - wheel, or the browser
-			// bringing a focused item into view - is not an ancestor scroll.
-			if (event.target instanceof Node && popoverEl?.contains(event.target)) return;
-			// Menus are short-lived; re-tracking the trigger on scroll isn't
-			// worth the complexity, so close instead (§7.4).
-			closeMenu();
-		}
-		window.addEventListener('resize', handleResize);
-		window.addEventListener('scroll', handleScroll, true);
-		return () => {
-			window.removeEventListener('resize', handleResize);
-			window.removeEventListener('scroll', handleScroll, true);
-		};
+		// Resize re-places; an ancestor scroll closes, the menu's own scroll
+		// (long menus, #427) does not (anchoredPopover.ts, §7.4).
+		return watchAnchoredPopover(popoverEl, { reposition: computePosition, close: closeMenu });
 	});
 </script>
 
@@ -283,8 +215,8 @@
 		margin: 0;
 		min-width: 180px;
 		max-width: 320px;
-		padding: 0.35rem;
-		border: 1px solid var(--banto-border);
+		padding: var(--banto-space-1);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 		background: var(--banto-surface-overlay);
 		box-shadow: var(--banto-shadow-lg);

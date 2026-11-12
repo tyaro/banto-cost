@@ -59,9 +59,11 @@ describe('columnsFromSchema', () => {
 		expect(byId('name').filterType).toBe('text');
 		expect(byId('price').filterType).toBe('number');
 		expect(byId('price').align).toBe('right');
-		// date/select/checkbox: not filterable by default (FilterPopover has
-		// no ops for them).
-		expect(byId('updatedAt').filterable).toBeUndefined();
+		// date: a day range (date-time-pickers §5.9), read-only columns too.
+		expect(byId('updatedAt').filterable).toBe(true);
+		expect(byId('updatedAt').filterType).toBe('date');
+		// select/checkbox: not filterable by default (FilterPopover has no ops
+		// for them).
 		expect(byId('category').filterable).toBeUndefined();
 	});
 
@@ -97,6 +99,18 @@ describe('columnsFromSchema', () => {
 		expect(price.validate?.(1200, row)).toBeNull();
 		// required uses isEmpty semantics: 0 is a present value, not empty.
 		expect(price.validate?.(0, row)).toBeNull();
+	});
+
+	it('reads only numeric bounds, like forms (a string bound is a date, date-time-pickers D9)', () => {
+		const [qty, note] = columnsFromSchema<Row>({
+			fields: [
+				{ name: 'qty', label: '数量', type: 'number', min: '2026-01-01', max: 10 },
+				{ name: 'note', label: '備考', type: 'text', max: '2026-12-31' }
+			]
+		});
+		expect(qty.validate?.(-5, row)).toBeNull();
+		expect(qty.validate?.(11, row)).toBe('10以下で入力してください');
+		expect(note.validate?.('x'.repeat(100), row)).toBeNull();
 	});
 
 	it('editable: false derives a fully read-only grid', () => {

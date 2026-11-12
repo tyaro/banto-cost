@@ -26,6 +26,13 @@ tokio = { version = "1" }
 axum = { version = "0.8", default-features = true, features = ["json"] }
 tower = "0.5"
 uuid = { version = "1", features = ["v4"] }
+# Date/time conversions (ADR-0029, an exception to ADR-0002; Banto's own ADR-0028
+# covers the local date of its items demo, which banto-cost does not have):
+# `banto-core::datetime` is the one place that turns `SystemTime` / epoch days
+# into `YYYY-MM-DD...` text. `default-features = false` drops `std`/`clock`/
+# `oldtime`/`wasmbind`; a crate that needs more adds just that feature (the
+# app core's local date adds `clock`).
+chrono = { version = "0.4", default-features = false }
 rust-embed = "8"
 if-addrs = "0.15"
 futures-util = "0.3"

@@ -15,6 +15,42 @@ function isNullish(value: unknown): boolean {
 	return value === null || value === undefined;
 }
 
+const TEMPORAL_EDITORS: ReadonlySet<string> = new Set(['date', 'time', 'datetime']);
+const TEMPORAL_FILTERS: ReadonlySet<string> = new Set(['date', 'datetime']);
+
+/**
+ * Does the column hold canonical dates / times / dates and times (its
+ * `editor` or `filterType` says so, or `columnsFromSchema` gave it
+ * {@link compareTemporal} - a read-only `time` column has neither)? Their strings sort in time order, so the
+ * client sort and filter compare them as text (date-time-pickers §5.9) - the
+ * order SQL's `TEXT` comparison and the `between` filter use - instead of
+ * `localeCompare` (which may weigh `-` / `:` / `T` by the locale's rules).
+ */
+export function isTemporalColumn<TRow>(column: GridColumn<TRow> | undefined): boolean {
+	if (!column) return false;
+	return (
+		column.comparator === compareTemporal ||
+		(column.editor !== undefined && TEMPORAL_EDITORS.has(column.editor)) ||
+		(column.filterType !== undefined && TEMPORAL_FILTERS.has(column.filterType))
+	);
+}
+
+/** Code-unit order of two strings (`<` / `>`): the order of canonical date / time text. */
+export function compareText(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The comparator `columnsFromSchema` gives `date` / `time` / `datetime`
+ * columns - including read-only ones, which carry no `editor` - so they sort
+ * as text (see {@link isTemporalColumn}). Non-strings fall back to the
+ * default comparison.
+ */
+export function compareTemporal(a: unknown, b: unknown): number {
+	if (typeof a === 'string' && typeof b === 'string') return compareText(a, b);
+	return compareNonNull(a, b);
+}
+
 /** Compare two non-null values: numbers numerically, dates by time, strings via localeCompare. */
 function compareNonNull(a: unknown, b: unknown): number {
 	if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime();
@@ -38,7 +74,11 @@ function compareForSort<TRow>(
 	if (aNull) return 1;
 	if (bNull) return -1;
 
-	const base = column.comparator ? column.comparator(va, vb) : compareNonNull(va, vb);
+	const base = column.comparator
+		? column.comparator(va, vb)
+		: isTemporalColumn(column)
+			? compareTemporal(va, vb)
+			: compareNonNull(va, vb);
 	return direction === 'asc' ? base : -base;
 }
 

@@ -194,6 +194,53 @@ pane の外（ページや controller）で `createFormDraft` を作り、pane �
   既存の `NumberField`（`type="number"`）は変わらない。
 - 文言（`message`・検証の `messages.notANumber`）は解決済みの文字列で渡す。
 
+## 日付の入力と注入（date-time-pickers PR-3）
+
+`type: 'date'` の値は `YYYY-MM-DD`（実在の日）か、空なら **`null`**（`''` ではない。
+[docs/design/date-time-pickers.md](../../docs/design/date-time-pickers.md) D6）。
+
+- **検証**: `validateField` は正規の形でない値を `dateInvalid` にする。`min` / `max` は正規の文字列で、両端を含む
+  （`min: '2026-11-02'`）。`isDateDisabled(date)` が `true` の日は `dateDisabled`。順は必須 → 形式 → 範囲 →
+  無効日 → `validate`。`min` / `max` は型ごとに読み、型に合わない側の値（date の数値など）は無視する。
+- **ピッカーの注入**: forms は `@banto/ui` を import しない（docs/conventions.md §4）。アプリが部品を渡す。
+
+  ```svelte
+  <!-- +layout.svelte: 下のすべての BantoForm / DraftDateField に効く -->
+  <script lang="ts">
+  	import { provideFieldInputs } from '@banto/forms';
+  	import FormDateInput from '#lib/components/FormDateInput.svelte'; // DateInput + messages + locale
+
+  	provideFieldInputs({ date: FormDateInput });
+  </script>
+  ```
+
+  フォームごとに替えるときは `<BantoForm fieldInputs={{ date: OtherInput }} … />`（型ごとに context より優先）。
+  渡される props は `DateFieldInputProps`（`@banto/ui` の `DateInput` の props の一部）。注入が無ければネイティブの
+  `<input type="date">` のまま。
+
+- **FormStore の経路**（`BantoForm`）: 打った文字列はそのまま値に入り、blur・Enter で部品が正規の形に直す。
+  解析できない文字列は値のまま残って形式のエラーになる（古い日付が黙って送信されない）。検証（`touch`）は
+  フォーカスが部品全体（入力欄・ボタン・カレンダー）から出たときだけ走る。
+- **FormDraft の経路**（`DraftDateField`）: 打った文字列は `draft.raw` に入り、`commit` が寛容な形（`2026/11/7`・
+  全角・`11/7` は今年）を `YYYY-MM-DD` に直して検証する。カレンダーで選んだ日はすぐに確定する。
+- `appearance="underline"` のフォームでも、注入した部品は自分の枠のまま（下線にならない）。ラベルは上に並ぶ。
+
+## 時刻・日時の型（date-time-pickers PR-5）
+
+`type: 'time'` の値は `HH:mm`（00:00〜23:59）、`type: 'datetime'` は `YYYY-MM-DDTHH:mm`（タイムゾーンを持たない
+壁時計の時刻、[設計書](../../docs/design/date-time-pickers.md) D4）。空は date と同じく `null`。
+
+- **検証**: 形式 → `min` / `max`（正規の文字列、両端を含む）→（datetime のみ）`isDateDisabled`（値の日で判定）→
+  `step`（分。0:00 からの刻みに合うか。省略・正でない整数なら検査しない）。文言は `ValidationMessages` の任意の
+  `timeInvalid` / `timeMin` / `timeMax` / `timeStep` / `dateTimeInvalid` / `dateTimeMin` / `dateTimeMax`
+  （datetime の `min` / `max` は空白区切りで文言に渡す）。Rust の `banto_core::datetime` が同じ規則・同じ既定の文言。
+- **ピッカーの注入**: `provideFieldInputs({ date, time, datetime })`。渡される props は `TimeFieldInputProps` /
+  `DateTimeFieldInputProps`（`@banto/ui` の `TimeInput` / `DateTimeInput` の props の一部。`step` も渡る）。注入が無ければ
+  ネイティブの `<input type="time">` / `<input type="datetime-local">`（`step` は秒に直して渡す）。
+- **経路**: `BantoForm`（FormStore）も `DraftDateField`（FormDraft。`def.type` に合う部品を使う）も date と同じ流れ。
+  `FormDraft.commit` は `930` → `09:30`、`2026/11/7 9:30` → `2026-11-07T09:30` に直す。秒付き・`24:00`・日付だけの
+  datetime は形式のエラー。datetime の入力欄は空白区切り（`2026-11-07 09:30`）で見せる。
+
 ## 依存
 
 `dependencies`/`peerDependencies` は空。`@banto/*` 間の import もゼロ

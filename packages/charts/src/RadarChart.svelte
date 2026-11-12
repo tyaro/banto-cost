@@ -8,8 +8,17 @@
 	 * would make polygon area meaningless to compare).
 	 */
 	import { niceTicks } from './core/scale';
-	import { radarPoints, ringPolygon, spokeAngle, spokeLabelAnchor } from './core/radar';
+	import {
+		labelMaxWidth,
+		radarPoints,
+		radarRadius,
+		ringPolygon,
+		spokeAngle,
+		spokeLabelAnchor
+	} from './core/radar';
+	import { estimateLabelWidth, truncateLabel } from './core/labels';
 	import { seriesColorVar } from './core/color';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import { getValue, toNumber, type Accessor, type TooltipRow } from './types';
 	import ChartContainer from './internal/ChartContainer.svelte';
 	import Legend from './internal/Legend.svelte';
@@ -45,7 +54,13 @@
 		messages = {}
 	}: Props = $props();
 
+	// Room for the perimeter labels at the 11px label font; scaled by the
+	// rendered axis-label font (D9-b: read from the first label, 11px
+	// until/unless it can be read) so a larger root font size or token
+	// override doesn't push the side labels out of the chart.
 	const LABEL_PADDING = 34;
+	let labelFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackLabelFont = trackFontSize((px) => (labelFontSize = px));
 	const LABEL_GAP = 10;
 	const RING_RATIOS = [0.25, 0.5, 0.75, 1];
 	const VERTEX_RADIUS = 4;
@@ -53,6 +68,9 @@
 	const formatValueDisplay = $derived(formatValue ?? ((n: number) => n.toLocaleString()));
 
 	const axisLabels = $derived(data.map((row) => getValue(row, axis)));
+	const labelWidths = $derived(
+		axisLabels.map((label) => estimateLabelWidth(String(label ?? ''), labelFontSize))
+	);
 	const valueMatrix = $derived(
 		series.map((s) => data.map((row) => toNumber(getValue(row, s.value))))
 	);
@@ -77,7 +95,10 @@
 	function geometry(width: number, plotHeight: number) {
 		const cx = width / 2;
 		const cy = plotHeight / 2;
-		const radius = Math.max(0, Math.min(width, plotHeight) / 2 - LABEL_PADDING);
+		const padding = (LABEL_PADDING * labelFontSize) / DEFAULT_LABEL_FONT_SIZE;
+		// ... and never wider than what keeps the estimated side labels inside.
+		// (never below half of the available half-size: `radarRadius`).
+		const radius = radarRadius(width, plotHeight, padding, labelWidths, LABEL_GAP);
 		return { cx, cy, radius };
 	}
 
@@ -119,14 +140,21 @@
 					g.radius > 0
 						? ringPolygon(data.length, (g.radius + LABEL_GAP) / g.radius, g.cx, g.cy, g.radius)[i]
 						: { x: g.cx, y: g.cy }}
+				{@const full = String(axisLabel ?? '')}
+				{@const shown = truncateLabel(
+					full,
+					labelMaxWidth(i, data.length, g.cx, g.cx * 2, g.radius, LABEL_GAP),
+					labelFontSize
+				)}
 				<text
 					x={labelPoint.x}
 					y={labelPoint.y}
 					class="axis-label"
 					text-anchor={anchor.textAnchor}
 					dominant-baseline={anchor.dominantBaseline}
+					{@attach i === 0 ? trackLabelFont : null}
 				>
-					{String(axisLabel ?? '')}
+					{shown}{#if shown !== full}<title>{full}</title>{/if}
 				</text>
 			{/each}
 
@@ -198,7 +226,7 @@
 
 	.axis-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 	}
 
 	.vertex {

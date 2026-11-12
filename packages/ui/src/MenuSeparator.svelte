@@ -7,7 +7,7 @@
 <style>
 	.menu-separator {
 		height: 1px;
-		margin: 0.3rem 0.2rem;
+		margin: var(--banto-space-1) var(--banto-space-1);
 		background: var(--banto-border);
 	}
 </style>

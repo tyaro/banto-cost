@@ -22,6 +22,8 @@
 	import { linearScale, niceTicks } from './core/scale';
 	import { linePath, roundedTopBarPath } from './core/path';
 	import { seriesColorVar } from './core/color';
+	import { leftMarginForTicks } from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import type { ChartMargin, TooltipRow } from './types';
 	import ChartContainer from './internal/ChartContainer.svelte';
 	import Legend from './internal/Legend.svelte';
@@ -61,7 +63,24 @@
 	const t = { ...defaultChartMessages, ...messages };
 
 	const DEFAULT_MARGIN: ChartMargin = { top: 8, right: 16, bottom: 26, left: 48 };
-	const MARGIN = $derived({ ...DEFAULT_MARGIN, ...margins });
+	// The default left margin grows to fit the y tick labels at the rendered
+	// tick font (D9-b: read from the first y tick label, 11px until/unless it
+	// can be read); never below the previous fixed default, and an explicit
+	// `margins.left` still wins as-is.
+	// Measured container width (bound from ChartContainer) so the margin cap can
+	// be relative to it (40%), same as LineChart.
+	let plotWidth: number = $state(0);
+	let tickFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTickFont = trackFontSize((px) => (tickFontSize = px));
+	// Lazy (`$derived.by`): the ticks/formatters are declared below.
+	const MARGIN = $derived.by((): ChartMargin => ({
+		...DEFAULT_MARGIN,
+		left: leftMarginForTicks(valueTicks.map(formatCount), DEFAULT_MARGIN.left, {
+			fontSize: tickFontSize,
+			totalWidth: plotWidth
+		}),
+		...margins
+	}));
 	const RADIUS = 4;
 	const CURVE_SAMPLES = 64;
 
@@ -151,13 +170,13 @@
 
 <div class="banto-histogram">
 	<Legend items={legendItems} />
-	<ChartContainer {label} {height} empty={isEmpty} {messages}>
+	<ChartContainer {label} {height} empty={isEmpty} bind:width={plotWidth} {messages}>
 		{#snippet plot({ width, height: plotHeight })}
 			{@const m = plotMetrics(width, plotHeight)}
 			{@const xScale = linearScale(domain, [m.innerLeft, m.innerLeft + m.innerWidth])}
 			{@const valueScale = linearScale([0, domainMax], [m.innerTop + m.innerHeight, m.innerTop])}
 
-			{#each valueTicks as tick (tick)}
+			{#each valueTicks as tick, ti (tick)}
 				<line
 					x1={m.innerLeft}
 					x2={m.innerLeft + m.innerWidth}
@@ -171,6 +190,7 @@
 					class="tick-label"
 					text-anchor="end"
 					dominant-baseline="middle"
+					{@attach ti === 0 ? trackTickFont : null}
 				>
 					{formatCount(tick)}
 				</text>
@@ -273,7 +293,7 @@
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 

@@ -27,7 +27,13 @@ export type FilterOp =
 	| 'starts_with'
 	| 'in'
 	| 'is_null'
-	| 'not_null';
+	| 'not_null'
+	/**
+	 * Half-open range `[from, to)` (date-time-pickers §5.9, D12): the value is
+	 * `[from | null, to | null]`, matched as text (`from <= v && v < to`); a
+	 * `null` end drops that side. Mirrors Rust's `FilterOp::Between`.
+	 */
+	| 'between';
 
 export interface FilterState {
 	field: string;

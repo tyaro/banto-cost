@@ -83,7 +83,8 @@ const FILTER_OPS: ReadonlySet<FilterOp> = new Set([
 	'starts_with',
 	'in',
 	'is_null',
-	'not_null'
+	'not_null',
+	'between'
 ]);
 
 function isNonEmptyString(value: unknown): value is string {
@@ -119,7 +120,23 @@ function isFilterState(value: unknown): value is FilterState {
 		isNonEmptyString(candidate.field) &&
 		typeof candidate.op === 'string' &&
 		FILTER_OPS.has(candidate.op as FilterOp) &&
-		'value' in candidate
+		'value' in candidate &&
+		(candidate.op !== 'between' || isBetweenValue(candidate.value))
+	);
+}
+
+/**
+ * A `between` value is `[from | null, to | null]` (date-time-pickers §5.9) -
+ * anything else would be a 400 from the server (`list_query.rs`) and match
+ * nothing on the client, so a saved one rejects the snapshot like any other
+ * malformed filter. Mirrors `isBetweenValue` in `@banto/grid-svelte`'s
+ * `core/dateRange.ts` (admin-core cannot import it).
+ */
+function isBetweenValue(value: unknown): boolean {
+	return (
+		Array.isArray(value) &&
+		value.length === 2 &&
+		value.every((end) => end === null || typeof end === 'string')
 	);
 }
 

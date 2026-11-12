@@ -1,8 +1,28 @@
 <script lang="ts" generics="TRow">
-	/** Column filter editor, opened from HeaderCell's filter icon (spec §4.3). */
-	import { onMount } from 'svelte';
+	/**
+	 * Column filter editor, opened from HeaderCell's filter icon (spec §4.3).
+	 *
+	 * A `date` / `datetime` column (date-time-pickers §5.9, PR-6) gets a day
+	 * range instead of an operator and a value: the injected
+	 * `dateRangeInput` (`CellEditors.dateRange`, the app's `DateRangeInput`),
+	 * else two native `<input type="date">` in a `role="group"`. Both ends are
+	 * inclusive days; apply sends `between` with the day after the end day
+	 * (`dateRangeToBetween`, the one place for that rule). A box whose text is
+	 * not a date, or an end before the start, shows an error and applies
+	 * nothing; both ends empty clears the filter.
+	 *
+	 * The calendar of the injected input is a DOM child of this popover (in
+	 * the top layer): its keys stop inside it and its Esc closes only the
+	 * calendar (DateInput's promise 1), so the next Esc - from the text box -
+	 * reaches the window handler below and closes this popover. A pointerdown
+	 * in the calendar is inside `rootEl`, so it does not close this popover.
+	 */
+	import { onMount, type Component } from 'svelte';
 	import type { FilterOp, FilterState, GridColumn } from './types';
 	import { defaultGridMessages, type GridMessages } from './messages';
+	import type { FilterDateRangeInputProps } from './cellEditors';
+	import { parseDateText } from './core/date';
+	import { betweenToDateRange, dateRangeToBetween, type DateRangeValue } from './core/dateRange';
 
 	interface Props {
 		id?: string;
@@ -14,6 +34,8 @@
 		onClose: (reason: 'escape' | 'outside') => void;
 		/** i18n layer 1 (docs/conventions.md §13): overrides for this component's visible strings. Defaults reproduce today's Japanese output. */
 		messages?: Partial<GridMessages>;
+		/** Injected day-range input for a `date` / `datetime` column; omitted: two native date inputs. */
+		dateRangeInput?: Component<FilterDateRangeInputProps>;
 	}
 
 	const instanceId = $props.id();
@@ -25,7 +47,8 @@
 		onApply,
 		onClear,
 		onClose,
-		messages = {}
+		messages = {},
+		dateRangeInput
 	}: Props = $props();
 
 	// `messages` is merged once (i18n layer 1: an override bundle, not
@@ -63,6 +86,68 @@
 
 	let rootEl: HTMLDivElement | undefined = $state();
 	let valueEl: HTMLInputElement | undefined = $state();
+
+	// --- day range (date / datetime columns, §5.9) ---------------------------
+
+	const isRange = $derived(filterType === 'date' || filterType === 'datetime');
+	// Seeded once, like `op` / `value`: a `between` this popover can show as
+	// inclusive days, else empty (another op, or a host's date-and-time ends).
+	// svelte-ignore state_referenced_locally
+	const seededRange: DateRangeValue = (current?.op === 'between'
+		? betweenToDateRange(current.value)
+		: null) ?? { from: null, to: null };
+	let range: DateRangeValue = $state(seededRange);
+	// The typed text of the injected input's boxes: what apply reads (the
+	// same lenient parse as DateInput's), so a box that was never committed
+	// still counts.
+	const rangeText = { from: seededRange.from ?? '', to: seededRange.to ?? '' };
+	let nativeToEl: HTMLInputElement | undefined = $state();
+	let rangeError: string | null = $state(null);
+	const errorId = `${instanceId}-filter-error`;
+
+	/** One end as a canonical day, `null` when empty, `undefined` when it is not a date. */
+	function readEnd(end: 'from' | 'to'): string | null | undefined {
+		if (dateRangeInput) {
+			const text = rangeText[end];
+			if (text.trim() === '') return null;
+			return parseDateText(text) ?? undefined;
+		}
+		const el = end === 'from' ? valueEl : nativeToEl;
+		// A half-typed native date reads as '' - `badInput` tells it apart.
+		if (el?.validity.badInput) return undefined;
+		return el?.value ? el.value : null;
+	}
+
+	function applyRange() {
+		const from = readEnd('from');
+		const to = readEnd('to');
+		if (from === undefined || to === undefined) {
+			rangeError = t.filterRangeInvalid();
+			return;
+		}
+		if (from === null && to === null) {
+			onClear();
+			return;
+		}
+		if (from !== null && to !== null && to < from) {
+			rangeError = t.filterRangeOrder();
+			return;
+		}
+		onApply({ field: column.id, op: 'between', value: dateRangeToBetween({ from, to }) });
+	}
+
+	function handleRangeKeydown(event: KeyboardEvent) {
+		if (
+			event.key === 'Enter' &&
+			!event.isComposing &&
+			event.keyCode !== 229 &&
+			!event.defaultPrevented
+		) {
+			// As the text input below: cancel the native Enter before applying.
+			event.preventDefault();
+			applyRange();
+		}
+	}
 
 	// This runs once per opening, not when the draft or operator changes.
 	onMount(() => valueEl?.focus({ preventScroll: true }));
@@ -103,6 +188,10 @@
 	});
 
 	function apply() {
+		if (isRange) {
+			applyRange();
+			return;
+		}
 		// An empty value means "no filter": applying it would be a no-op for
 		// text and, worse, Number('') === 0 would silently filter by 0 for
 		// number columns. Treat it as clearing the filter instead. `value`
@@ -121,35 +210,89 @@
 <div
 	{id}
 	class="filter-popover"
+	class:filter-popover--range={isRange}
 	bind:this={rootEl}
 	role="dialog"
 	aria-label={t.filterAriaLabel(column.header.trim() || column.id)}
 >
-	<select bind:value={op} aria-label={t.filterOperatorLabel()}>
-		{#each ops as item (item.value)}
-			<option value={item.value}>{item.label}</option>
-		{/each}
-	</select>
-	<input
-		bind:this={valueEl}
-		aria-label={t.filterValueLabel()}
-		type={filterType === 'number' ? 'number' : 'text'}
-		bind:value
-		placeholder={t.filterValuePlaceholder()}
-		onkeydown={(event) => {
-			if (
-				event.key === 'Enter' &&
-				!event.isComposing &&
-				event.keyCode !== 229 &&
-				!event.defaultPrevented
-			) {
-				// Applying restores focus to the trigger. Cancel native Enter
-				// activation first so it cannot click that trigger and reopen us.
-				event.preventDefault();
-				apply();
-			}
-		}}
-	/>
+	{#if isRange}
+		{@const DateRange = dateRangeInput}
+		{#if DateRange}
+			<DateRange
+				bind:fromInputEl={() => valueEl, (el) => (valueEl = el)}
+				value={range}
+				onValueChange={(next) => {
+					// A component that only reports values (no `onTextInput`) is
+					// read through them; a later keystroke overrides.
+					for (const end of ['from', 'to'] as const) {
+						if (next[end] !== range[end]) rangeText[end] = next[end] ?? '';
+					}
+					range = next;
+				}}
+				onTextInput={(end, text) => {
+					rangeText[end] = text;
+					rangeError = null;
+				}}
+				label={t.filterRangeLabel()}
+				describedBy={rangeError ? errorId : undefined}
+				invalid={!!rangeError}
+				orientation="vertical"
+				onkeydown={handleRangeKeydown}
+			/>
+		{:else}
+			<div class="filter-range" role="group" aria-label={t.filterRangeLabel()}>
+				<input
+					bind:this={valueEl}
+					type="date"
+					aria-label={t.filterRangeStart()}
+					aria-describedby={rangeError ? errorId : undefined}
+					aria-invalid={rangeError ? 'true' : undefined}
+					value={range.from ?? ''}
+					oninput={() => (rangeError = null)}
+					onkeydown={handleRangeKeydown}
+				/>
+				<input
+					bind:this={nativeToEl}
+					type="date"
+					aria-label={t.filterRangeEnd()}
+					aria-describedby={rangeError ? errorId : undefined}
+					aria-invalid={rangeError ? 'true' : undefined}
+					value={range.to ?? ''}
+					oninput={() => (rangeError = null)}
+					onkeydown={handleRangeKeydown}
+				/>
+			</div>
+		{/if}
+		{#if rangeError}
+			<p id={errorId} class="filter-error" role="alert">{rangeError}</p>
+		{/if}
+	{:else}
+		<select bind:value={op} aria-label={t.filterOperatorLabel()}>
+			{#each ops as item (item.value)}
+				<option value={item.value}>{item.label}</option>
+			{/each}
+		</select>
+		<input
+			bind:this={valueEl}
+			aria-label={t.filterValueLabel()}
+			type={filterType === 'number' ? 'number' : 'text'}
+			bind:value
+			placeholder={t.filterValuePlaceholder()}
+			onkeydown={(event) => {
+				if (
+					event.key === 'Enter' &&
+					!event.isComposing &&
+					event.keyCode !== 229 &&
+					!event.defaultPrevented
+				) {
+					// Applying restores focus to the trigger. Cancel native Enter
+					// activation first so it cannot click that trigger and reopen us.
+					event.preventDefault();
+					apply();
+				}
+			}}
+		/>
+	{/if}
 	<div class="actions">
 		<button type="button" class="apply" onclick={apply}>{t.filterApply()}</button>
 		<button type="button" class="clear" onclick={onClear}>{t.filterClear()}</button>
@@ -164,11 +307,11 @@
 		z-index: 20;
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 		width: 190px;
-		padding: 0.6rem;
+		padding: var(--banto-space-2);
 		background: var(--banto-surface-overlay);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-md);
 		box-shadow: var(--banto-shadow-lg);
 		/* Standard preset: no-op (var(--banto-backdrop) is `none`). Glass
@@ -176,17 +319,35 @@
 		backdrop-filter: var(--banto-backdrop, none);
 	}
 
+	.filter-popover--range {
+		/* Room for a date text box and its calendar button (the shape of the
+		   popover, not a dimension step). */
+		width: 220px;
+	}
+
+	.filter-range {
+		display: flex;
+		flex-direction: column;
+		gap: var(--banto-space-2);
+	}
+
+	.filter-error {
+		margin: 0;
+		color: var(--banto-danger);
+		font-size: var(--banto-font-size-sm);
+	}
+
 	select,
 	input {
 		width: 100%;
 		box-sizing: border-box;
 		height: var(--banto-control-height-sm);
-		padding: 0 0.4rem;
-		border: 1px solid var(--banto-border-strong);
+		padding: 0 var(--banto-space-2);
+		border: var(--banto-border-width) solid var(--banto-border-strong);
 		border-radius: var(--banto-radius-md);
 		background: var(--banto-surface);
 		color: var(--banto-text);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		transition: box-shadow var(--banto-duration-fast) var(--banto-ease-out);
 	}
 
@@ -214,17 +375,17 @@
 
 	.actions {
 		display: flex;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 		justify-content: flex-end;
 	}
 
 	button {
 		box-sizing: border-box;
 		height: var(--banto-control-height-sm);
-		border: 1px solid var(--banto-border-strong);
+		border: var(--banto-border-width) solid var(--banto-border-strong);
 		border-radius: var(--banto-radius-md);
-		padding: 0 0.6rem;
-		font-size: 0.75rem;
+		padding: 0 var(--banto-space-2);
+		font-size: var(--banto-font-size-sm);
 		cursor: pointer;
 		background: var(--banto-surface);
 		color: var(--banto-text);

@@ -418,7 +418,7 @@
 		/* DockHost's floating layer is pointer-transparent; the window itself is not. */
 		pointer-events: auto;
 		border-radius: var(--banto-radius-lg);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		box-shadow: var(--banto-dock-shadow);
 		background: var(--banto-surface);
 		/* Glass preset (spec M12): blur what's behind the window when the
@@ -450,12 +450,12 @@
 		flex: 0 0 auto;
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
+		gap: var(--banto-space-2);
 		height: var(--banto-dock-titlebar-height);
-		padding: 0 0.4rem 0 0.7rem;
+		padding: 0 var(--banto-space-2) 0 var(--banto-space-3);
 		background: var(--banto-surface-raised);
-		border-bottom: 1px solid var(--banto-border);
-		font-size: 0.8rem;
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
+		font-size: var(--banto-font-size-sm);
 		font-weight: 600;
 		color: var(--banto-text);
 		user-select: none;
@@ -474,7 +474,7 @@
 
 	.icon {
 		flex: 0 0 auto;
-		font-size: 0.9rem;
+		font-size: var(--banto-font-size-md);
 	}
 
 	.title {
@@ -499,7 +499,7 @@
 		background: transparent;
 		color: var(--banto-text-muted);
 		cursor: pointer;
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 		touch-action: none;
 		transition:
 			background var(--banto-duration-fast) var(--banto-ease-out),

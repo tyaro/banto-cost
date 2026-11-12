@@ -41,12 +41,12 @@
 	.surface-card {
 		display: flex;
 		flex-direction: column;
-		gap: 0.75rem;
+		gap: var(--banto-space-3);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 		box-shadow: var(--banto-shadow-sm);
-		padding: 1.25rem;
+		padding: var(--banto-space-5);
 		/* Glass preset (spec M12): cards are in the translucent scope
 		   (plan §3.3) - no-op under standard (--banto-backdrop: none). */
 		backdrop-filter: var(--banto-backdrop, none);
@@ -55,15 +55,15 @@
 
 	h2 {
 		margin: 0;
-		font-size: 1rem;
+		font-size: var(--banto-font-size-base);
 		font-weight: 600;
 		font-feature-settings: 'palt';
 	}
 
 	header p {
-		margin: 0.25rem 0 0;
+		margin: var(--banto-space-1) 0 0;
 		color: var(--banto-text-muted);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		text-wrap: pretty;
 	}
 
@@ -76,8 +76,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: flex-end;
-		gap: 0.5rem;
-		padding-top: 0.75rem;
-		border-top: 1px solid var(--banto-border);
+		gap: var(--banto-space-2);
+		padding-top: var(--banto-space-3);
+		border-top: var(--banto-border-width) solid var(--banto-border);
 	}
 </style>

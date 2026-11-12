@@ -23,12 +23,12 @@
 	.banto-unsaved {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
-		padding: 0.15rem 0.55rem;
+		gap: var(--banto-space-1);
+		padding: var(--banto-space-1) var(--banto-space-2);
 		border-radius: var(--banto-radius-sm);
 		background: var(--banto-warning-tint);
 		color: var(--banto-warning-tint-text);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		font-weight: 600;
 		white-space: nowrap;
 	}

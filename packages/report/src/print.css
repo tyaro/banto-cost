@@ -11,6 +11,11 @@
  * §3.4/§7 "帳票面の配色... テーマ非依存"). Every color value below is a
  * plain literal for that reason - this is the one file in the app where
  * that is correct, not an oversight.
+ *
+ * The same holds for the raw dimensions below (11pt body text, 1px rules):
+ * paper sizes stay fixed instead of following the screen's dimension tokens
+ * (conventions §9). They are allowlisted in scripts/verify-architecture.mjs
+ * (RAW_DIMENSION_ALLOWLIST, rule `raw-dimensions`).
  */
 
 .report-body {

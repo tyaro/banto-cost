@@ -21,9 +21,9 @@
 
 <style>
 	.menu-group-label {
-		margin: 0.2rem 0.6rem 0.15rem;
+		margin: var(--banto-space-1) var(--banto-space-2) var(--banto-space-1);
 		color: var(--banto-text-muted);
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;

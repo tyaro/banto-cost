@@ -32,6 +32,7 @@
 	import { everyNthIndex } from './core/ticks-time';
 	import { seriesColorVar } from './core/color';
 	import { leftMarginForTicks, rightMarginForTicks } from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import {
 		fullViewport,
 		isFullViewport,
@@ -211,15 +212,21 @@
 	// caller's (or default) left margin, so labels that already fit keep the
 	// exact previous layout. Right: with no right series it stays exactly the
 	// caller's (or default) right margin, so the classic single-axis layout is
-	// unchanged.
+	// unchanged. Both estimates use the rendered y-tick font (D9-b: read from
+	// the first left y tick label - both axes share the class - 11px
+	// until/unless it can be read).
+	let tickFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTickFont = trackFontSize((px) => (tickFontSize = px));
 	const MARGIN = $derived.by(() => {
 		const base = { ...DEFAULT_MARGIN, ...margins };
 		const left = leftMarginForTicks(leftTicks.map(formatYValue), base.left, {
-			totalWidth: plotWidth
+			totalWidth: plotWidth,
+			fontSize: tickFontSize
 		});
 		if (!hasRight) return { ...base, left };
 		const right = rightMarginForTicks(rightTicks.map(formatYRightValue), base.right, {
-			totalWidth: plotWidth
+			totalWidth: plotWidth,
+			fontSize: tickFontSize
 		});
 		return { ...base, left, right };
 	});
@@ -476,7 +483,7 @@
 			{/each}
 
 			<!-- Gridlines + left y ticks (recessive, rule 4). -->
-			{#each leftTicks as tick (tick)}
+			{#each leftTicks as tick, ti (tick)}
 				<line
 					x1={m.innerLeft}
 					x2={m.innerRight}
@@ -490,6 +497,7 @@
 					class="tick-label y-tick"
 					text-anchor="end"
 					dominant-baseline="middle"
+					{@attach ti === 0 ? trackTickFont : null}
 				>
 					{formatYValue(tick)}
 				</text>
@@ -680,7 +688,7 @@
 	}
 
 	.band-label {
-		font-size: 10px;
+		font-size: var(--banto-font-size-xs);
 		opacity: 0.8;
 	}
 
@@ -692,13 +700,13 @@
 	}
 
 	.marker-label {
-		font-size: 10px;
+		font-size: var(--banto-font-size-xs);
 		opacity: 0.85;
 	}
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -713,14 +721,14 @@
 
 	.reset-zoom {
 		position: absolute;
-		top: 6px;
-		right: 6px;
+		top: var(--banto-space-2);
+		right: var(--banto-space-2);
 		z-index: 21;
-		padding: 0.15rem 0.5rem;
-		font-size: 11px;
+		padding: var(--banto-space-1) var(--banto-space-2);
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-text);
 		background: var(--banto-surface-raised, var(--banto-surface));
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius);
 		cursor: pointer;
 		box-shadow: var(--banto-shadow-sm);

@@ -538,7 +538,7 @@
 		display: flex;
 		flex-direction: column;
 		color: var(--banto-text);
-		font-size: 0.9rem;
+		font-size: var(--banto-font-size-md);
 		outline: none;
 	}
 
@@ -546,7 +546,7 @@
 		display: flex;
 		align-items: center;
 		min-height: var(--banto-control-height, 2.25rem);
-		padding: 0 0.4rem;
+		padding: 0 var(--banto-space-2);
 		border-radius: var(--banto-radius-md);
 		cursor: default;
 		position: relative;
@@ -556,7 +556,7 @@
 		display: grid;
 		align-items: center;
 		border-radius: 0;
-		border-bottom: 1px solid var(--banto-border);
+		border-bottom: var(--banto-border-width) solid var(--banto-border);
 	}
 
 	.tree-row:hover {
@@ -605,7 +605,7 @@
 	.primary {
 		display: flex;
 		align-items: center;
-		gap: 0.35rem;
+		gap: var(--banto-space-1);
 		min-width: 0;
 		flex: 1;
 	}
@@ -635,7 +635,7 @@
 	}
 	.chevron {
 		display: inline-block;
-		font-size: 0.7rem;
+		font-size: var(--banto-font-size-xs);
 		line-height: 1;
 		transition: transform var(--banto-duration-base) var(--banto-ease-out);
 	}
@@ -670,9 +670,9 @@
 		font: inherit;
 		color: var(--banto-text);
 		background: var(--banto-surface);
-		border: 1px solid var(--banto-primary);
+		border: var(--banto-border-width) solid var(--banto-primary);
 		border-radius: var(--banto-radius-sm);
-		padding: 0.1rem 0.35rem;
+		padding: var(--banto-space-1) var(--banto-space-1);
 	}
 	.rename:focus-visible {
 		outline: none;
@@ -680,9 +680,9 @@
 	}
 
 	.badge {
-		font-size: 0.75rem;
+		font-size: var(--banto-font-size-sm);
 		color: var(--banto-text-muted);
-		padding-inline-start: 0.25rem;
+		padding-inline-start: var(--banto-space-1);
 	}
 	.badge.error {
 		color: var(--banto-danger);
@@ -692,32 +692,32 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		padding: 0 0.5rem;
+		padding: 0 var(--banto-space-2);
 		color: var(--banto-text);
 	}
 
 	.grid-header {
 		display: grid;
 		align-items: center;
-		border-bottom: 1px solid var(--banto-border-strong);
+		border-bottom: var(--banto-border-width) solid var(--banto-border-strong);
 		background: var(--banto-surface-subtle, var(--banto-surface));
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		font-weight: 600;
 		color: var(--banto-text-muted);
 	}
 	.grid-header-cell {
-		padding: 0.4rem 0.5rem;
+		padding: var(--banto-space-2) var(--banto-space-2);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 	.grid-header-cell.name {
-		padding-inline-start: 0.6rem;
+		padding-inline-start: var(--banto-space-2);
 	}
 
 	.empty {
-		padding: 1rem 0.75rem;
+		padding: var(--banto-space-4) var(--banto-space-3);
 		color: var(--banto-text-muted);
-		font-size: 0.85rem;
+		font-size: var(--banto-font-size-md);
 	}
 </style>

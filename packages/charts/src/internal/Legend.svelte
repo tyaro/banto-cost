@@ -33,17 +33,17 @@
 	.chart-legend {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.75rem;
-		font-size: 11px;
+		gap: var(--banto-space-3);
+		font-size: var(--banto-font-size-sm);
 		line-height: 1;
 		color: var(--banto-text-muted);
-		padding: 0 0.25rem 0.4rem;
+		padding: 0 var(--banto-space-1) var(--banto-space-2);
 	}
 
 	.legend-item {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
+		gap: var(--banto-space-1);
 	}
 
 	.legend-swatch {

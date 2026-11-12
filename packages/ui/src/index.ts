@@ -20,6 +20,14 @@
  * parse / match / format helpers) plus `hasVisibleModalLayer` in
  * `layering.ts` (docs/design/shared-primitives-upstream-plan.md §3.6, D2-a -
  * the app keeps the key wiring and the command list).
+ * Date pickers (docs/design/date-time-pickers.md PR-1): `DateInput` and the
+ * pure date helpers of `datetime.ts` (parse / calendar / `Intl` names), with
+ * the popover placement shared with Menu (`anchoredPopover.ts`, internal).
+ * PR-2: `TimeInput` (combobox + listbox, step) and the time helpers.
+ * PR-5: `DateTimeInput` (one text box, one dialog: the calendar and a time
+ * list) and the date-and-time helpers.
+ * PR-6: `DateRangeInput` (two `DateInput`s in a `role="group"`, inclusive
+ * days; the grid's filter turns them into a half-open `between`).
  * Components take text, icons, state and actions through props / snippets /
  * callbacks and import nothing but `svelte` (verify:architecture rule
  * `package-bare-imports`). Consumers
@@ -27,6 +35,50 @@
  * tokens.
  */
 export { default as CommandPalette } from './CommandPalette.svelte';
+export { default as DateInput } from './DateInput.svelte';
+export { default as TimeInput } from './TimeInput.svelte';
+export { default as DateTimeInput } from './DateTimeInput.svelte';
+export { default as DateRangeInput } from './DateRangeInput.svelte';
+export {
+	DEFAULT_TIME_STEP,
+	addDays,
+	addMonths,
+	addYears,
+	clampDate,
+	dayOfWeek,
+	daysInMonth,
+	formatDateTimeText,
+	formatFullDate,
+	formatMonthYear,
+	isBlankDateText,
+	formatTime,
+	isIsoDate,
+	isIsoDateTime,
+	isIsoTime,
+	isLeapYear,
+	joinDateTime,
+	isOnTimeStep,
+	isOutOfRange,
+	minutesToTime,
+	monthGrid,
+	nearestTime,
+	normalizeTimeStep,
+	parseDateText,
+	parseDateTimeText,
+	parseIsoDate,
+	parseIsoDateTime,
+	parseIsoTime,
+	parseTimeText,
+	resolveWeekStart,
+	timeOptions,
+	timeToMinutes,
+	todayDate,
+	weekdayNames,
+	type DateParts,
+	type DateTimeParts,
+	type TimeParts,
+	type Weekday
+} from './datetime';
 export { default as Drawer } from './Drawer.svelte';
 export { default as Modal } from './Modal.svelte';
 export type { DrawerProps, ModalProps, OverlayProps } from './overlay';

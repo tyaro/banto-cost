@@ -137,6 +137,18 @@ fn validate_username(username: &str) -> Result<String, BantoError> {
             }],
         });
     }
+    // `.` is the separator of the per-user UI setting key
+    // (`ui.{username}.{key}`), so a name containing it could collide with
+    // another user's key. Only *new* names go through here (setup/create);
+    // accounts that predate this rule keep working everywhere else.
+    if trimmed.contains('.') {
+        return Err(BantoError::Validation {
+            field_errors: vec![FieldError {
+                field: "username".to_string(),
+                message: "ユーザー名に「.」は使えません".to_string(),
+            }],
+        });
+    }
     Ok(trimmed.to_string())
 }
 
@@ -171,6 +183,32 @@ pub struct UserSummary {
     pub display_name: String,
     pub role: Role,
     pub created_at: String,
+}
+
+/// Wire shape of a freshly created account (`users_create`'s REST body and
+/// Tauri return value, spec M10): everything [`UserIdentity`] carries except
+/// `auth_epoch`, which must never reach the wire - hence this type instead
+/// of a `Serialize` derive on `UserIdentity`. No `created_at` (unlike
+/// [`UserSummary`]): `UsersService::create_user` does not read it back from
+/// the DB, only the row it just inserted.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserIdentityView {
+    pub id: i64,
+    pub username: String,
+    pub display_name: String,
+    pub role: Role,
+}
+
+impl From<UserIdentity> for UserIdentityView {
+    fn from(identity: UserIdentity) -> Self {
+        Self {
+            id: identity.id,
+            username: identity.username,
+            display_name: identity.display_name,
+            role: identity.role,
+        }
+    }
 }
 
 /// Local credential store (spec §8.2): argon2id password hashes in the
@@ -1238,6 +1276,55 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, BantoError::Validation { .. }));
+    }
+
+    #[tokio::test]
+    async fn setup_first_user_rejects_username_with_dot() {
+        let svc = service().await;
+        let err = svc
+            .setup_first_user("a.b", "password123", "オーナー")
+            .await
+            .unwrap_err();
+        match err {
+            BantoError::Validation { field_errors } => {
+                assert_eq!(field_errors[0].field, "username");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+        assert!(!svc.is_initialized().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn create_user_rejects_username_with_dot() {
+        let svc = service().await;
+        svc.setup_first_user("owner", "password123", "オーナー")
+            .await
+            .unwrap();
+        let err = svc
+            .create_user("a.b", "password123", "別オーナー", Role::Editor)
+            .await
+            .unwrap_err();
+        match err {
+            BantoError::Validation { field_errors } => {
+                assert_eq!(field_errors[0].field, "username");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_succeeds_for_a_preexisting_username_with_dot() {
+        let svc = service().await;
+        let hash = hash_password("password123").unwrap();
+        sqlx::query("INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)")
+            .bind("old.user")
+            .bind(hash)
+            .bind("旧アカウント")
+            .execute(svc.db.as_sqlite().expect("sqlite"))
+            .await
+            .unwrap();
+        let id = svc.verify("old.user", "password123").await.unwrap();
+        assert_eq!(id.expect("login works").username, "old.user");
     }
 
     #[tokio::test]

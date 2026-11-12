@@ -361,7 +361,7 @@
 		width: 100%;
 		height: 100%;
 		background: var(--banto-bg);
-		border: 1px solid var(--banto-border);
+		border: var(--banto-border-width) solid var(--banto-border);
 		border-radius: var(--banto-radius-lg);
 	}
 
@@ -384,7 +384,7 @@
 	.snap-guide {
 		position: absolute;
 		background: var(--banto-dock-snap-fill);
-		border: 2px solid var(--banto-dock-snap-border);
+		border: var(--banto-border-width-strong) solid var(--banto-dock-snap-border);
 		border-radius: var(--banto-radius-md);
 		box-sizing: border-box;
 		pointer-events: none;
@@ -394,17 +394,17 @@
 	/* Drag ghost follows the pointer every move - no transition, same reason as .snap-guide. */
 	.drag-ghost {
 		position: fixed;
-		transform: translate(14px, 14px);
+		transform: translate(var(--banto-space-4), var(--banto-space-4));
 		display: flex;
 		align-items: center;
-		gap: 0.35rem;
+		gap: var(--banto-space-1);
 		max-width: 16rem;
-		padding: 0.35rem 0.65rem;
+		padding: var(--banto-space-1) var(--banto-space-3);
 		background: var(--banto-dock-ghost-bg);
-		border: 1px solid var(--banto-dock-ghost-border);
+		border: var(--banto-border-width) solid var(--banto-dock-ghost-border);
 		border-radius: var(--banto-radius-md);
 		box-shadow: var(--banto-dock-shadow);
-		font-size: 0.8rem;
+		font-size: var(--banto-font-size-sm);
 		font-weight: 600;
 		color: var(--banto-text);
 		pointer-events: none;

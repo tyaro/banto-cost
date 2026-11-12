@@ -20,6 +20,7 @@
 	 */
 	import { linearScale, niceTicks } from './core/scale';
 	import { leftMarginForTicks } from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import { stackSeries } from './core/stack';
 	import { bandAreaPath, linePath, type Point } from './core/path';
 	import { everyNthIndex } from './core/ticks-time';
@@ -107,6 +108,10 @@
 
 	// Left margin auto-expands to fit the y tick labels (never below the
 	// caller's/default left margin, so labels that already fit are unchanged).
+	// The estimate uses the rendered y-tick font (D9-b: read from the first y
+	// tick label, 11px until/unless it can be read).
+	let tickFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTickFont = trackFontSize((px) => (tickFontSize = px));
 	const MARGIN = $derived.by(() => {
 		const m = { ...DEFAULT_MARGIN, ...margins };
 		return {
@@ -114,7 +119,7 @@
 			left: leftMarginForTicks(
 				ticks.map((t) => formatYValue(t)),
 				m.left,
-				{ totalWidth: plotWidth }
+				{ totalWidth: plotWidth, fontSize: tickFontSize }
 			)
 		};
 	});
@@ -205,7 +210,7 @@
 		{#snippet plot()}
 			{@const m = metrics}
 			<!-- Gridlines + y ticks (recessive, rule 4). -->
-			{#each ticks as tick (tick)}
+			{#each ticks as tick, ti (tick)}
 				<line
 					x1={m.innerLeft}
 					x2={m.innerRight}
@@ -219,6 +224,7 @@
 					class="tick-label"
 					text-anchor="end"
 					dominant-baseline="middle"
+					{@attach ti === 0 ? trackTickFont : null}
 				>
 					{formatYValue(tick)}
 				</text>
@@ -331,7 +337,7 @@
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 </style>

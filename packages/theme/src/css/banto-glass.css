@@ -16,6 +16,10 @@
 :root[data-banto-preset='glass'] {
 	--banto-surface: rgb(255 255 255 / 0.62);
 	--banto-surface-raised: rgb(255 255 255 / 0.55);
+	/* Floating surfaces (menus, pickers, popovers, dialogs, toasts) sit on top of
+     page text, so they stay OPAQUE even under glass - same literal as the
+     standard theme's overlay (keep in sync). The blur stays on them. */
+	--banto-surface-overlay: #ffffff;
 	--banto-border: rgb(148 158 172 / 0.45);
 
 	--banto-backdrop: blur(14px) saturate(1.5);
@@ -38,6 +42,8 @@
 	--banto-shell-launcher-tabbar-base: #262a31;
 	--banto-surface: rgb(30 33 39 / 0.55);
 	--banto-surface-raised: rgb(38 42 49 / 0.5);
+	/* Opaque floating surface (see the light x glass block; = standard dark raised). */
+	--banto-surface-overlay: #262a31;
 	--banto-border: rgb(255 255 255 / 0.14);
 
 	--banto-bg-image:

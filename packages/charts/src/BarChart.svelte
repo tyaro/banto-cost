@@ -16,7 +16,13 @@
 	import { stackSeries, type StackSegment } from './core/stack';
 	import { roundedTopBarPath } from './core/path';
 	import { seriesColorVar } from './core/color';
-	import { leftMarginFor, rightMarginForLastTick } from './core/labels';
+	import {
+		leftMarginFor,
+		leftMarginForTicks,
+		rightMarginForLastTick,
+		truncateLabel
+	} from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import { getValue, toNumber, type Accessor, type ChartMargin, type TooltipRow } from './types';
 	import ChartContainer from './internal/ChartContainer.svelte';
 	import Legend from './internal/Legend.svelte';
@@ -95,15 +101,38 @@
 	// reserves half the LAST bottom value-tick label (middle-anchored, so
 	// half of it overhangs the plot's right edge). Both are estimates from
 	// `core/labels.ts` and can be overridden per side via the `margins` prop.
+	// The estimates use the rendered tick font (D9-b: read from the first
+	// category label (horizontal) / y tick label (vertical), 11px
+	// until/unless it can be read).
+	// Measured container width (bound from ChartContainer) so the margin cap can
+	// be relative to it (40%), same as LineChart.
+	let plotWidth: number = $state(0);
+	let tickFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTickFont = trackFontSize((px) => (tickFontSize = px));
 	const MARGIN = $derived.by((): ChartMargin => {
 		const base = horizontal
 			? {
 					top: 8,
-					right: rightMarginForLastTick(formatValueDisplay(valueTicks[valueTicks.length - 1] ?? 0)),
+					right: rightMarginForLastTick(
+						formatValueDisplay(valueTicks[valueTicks.length - 1] ?? 0),
+						{ fontSize: tickFontSize, totalWidth: plotWidth }
+					),
 					bottom: 26,
-					left: leftMarginFor(categories.map((cat) => String(cat ?? '')))
+					left: leftMarginFor(
+						categories.map((cat) => String(cat ?? '')),
+						{ fontSize: tickFontSize, totalWidth: plotWidth }
+					)
 				}
-			: { top: 8, right: 16, bottom: 26, left: 48 };
+			: {
+					top: 8,
+					right: 16,
+					bottom: 26,
+					// Vertical: the value tick labels, never below the previous 48px.
+					left: leftMarginForTicks(valueTicks.map(formatValueDisplay), 48, {
+						fontSize: tickFontSize,
+						totalWidth: plotWidth
+					})
+				};
 		return { ...base, ...margins };
 	});
 
@@ -260,7 +289,7 @@
 
 <div class="banto-barchart">
 	<Legend items={legendItems} />
-	<ChartContainer {label} {height} empty={isEmpty} {messages}>
+	<ChartContainer {label} {height} empty={isEmpty} bind:width={plotWidth} {messages}>
 		{#snippet plot({ width, height: plotHeight })}
 			{@const m = plotMetrics(width, plotHeight)}
 			{@const bars = computeBars(width, plotHeight)}
@@ -293,14 +322,18 @@
 						[m.innerTop, m.innerTop + m.innerHeight],
 						CATEGORY_PADDING
 					)}
+					<!-- Cut with an ellipsis when the margin hit its cap (full text in <title>). -->
+					{@const full = String(cat ?? '')}
+					{@const shown = truncateLabel(full, m.innerLeft - 8, tickFontSize)}
 					<text
 						x={m.innerLeft - 8}
 						y={catScale.center(i)}
 						class="tick-label"
 						text-anchor="end"
 						dominant-baseline="middle"
+						{@attach i === 0 ? trackTickFont : null}
 					>
-						{cat}
+						{shown}{#if shown !== full}<title>{full}</title>{/if}
 					</text>
 				{/each}
 				<line
@@ -315,7 +348,7 @@
 					[domainMin, domainMax],
 					[m.innerTop + m.innerHeight, m.innerTop]
 				)}
-				{#each valueTicks as tick (tick)}
+				{#each valueTicks as tick, ti (tick)}
 					<line
 						x1={m.innerLeft}
 						x2={m.innerLeft + m.innerWidth}
@@ -329,6 +362,7 @@
 						class="tick-label"
 						text-anchor="end"
 						dominant-baseline="middle"
+						{@attach ti === 0 ? trackTickFont : null}
 					>
 						{formatValueDisplay(tick)}
 					</text>
@@ -412,7 +446,7 @@
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 

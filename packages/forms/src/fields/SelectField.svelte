@@ -67,8 +67,8 @@
 <style>
 	select {
 		height: var(--banto-control-height);
-		padding: 0 0.6rem;
-		border: 1px solid var(--banto-border-strong);
+		padding: 0 var(--banto-space-2);
+		border: var(--banto-border-width) solid var(--banto-border-strong);
 		border-radius: var(--banto-radius-md);
 		background: transparent;
 		color: var(--banto-text);

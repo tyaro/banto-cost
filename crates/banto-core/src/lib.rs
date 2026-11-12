@@ -5,6 +5,7 @@
 //! defined here so that Tauri commands and REST endpoints deserialize the
 //! exact same shapes.
 
+pub mod datetime;
 pub mod error;
 pub mod params;
 

@@ -3,7 +3,7 @@
  * schema-driven form. `BantoForm` reads/writes this directly; `admin-core`'s
  * `createFormResource` supplies server-side errors via `setServerErrors`.
  */
-import type { FieldDef, FieldError, FormSchema } from './types';
+import { isTemporalType, type FieldDef, type FieldError, type FormSchema } from './types';
 import { validateAll, validateField, type ValidationMessages } from './validate';
 
 function defaultsFrom(schema: FormSchema): Record<string, unknown> {
@@ -11,6 +11,8 @@ function defaultsFrom(schema: FormSchema): Record<string, unknown> {
 	for (const field of schema.fields) {
 		if (field.default !== undefined) values[field.name] = field.default;
 		else if (field.type === 'checkbox') values[field.name] = false;
+		// An empty date / time / datetime is `null`, not `''` (date-time-pickers D6).
+		else if (isTemporalType(field.type)) values[field.name] = null;
 		else values[field.name] = '';
 	}
 	return values;

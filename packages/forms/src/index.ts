@@ -12,6 +12,18 @@ export type {
 
 export { validateField, validateAll, type ValidationMessages } from './validate';
 export { FormStore, createFormStore } from './store.svelte';
+
+// Picker components injected by the app (date-time-pickers §5.7, D1-a): forms
+// never imports @banto/ui; without an injected component the native input is used.
+export {
+	provideFieldInputs,
+	getFieldInputs,
+	type FieldInputs,
+	type DateFieldInputProps,
+	type TimeFieldInputProps,
+	type DateTimeFieldInputProps,
+	type TemporalFieldInputProps
+} from './fieldInputs';
 export {
 	guardUnsavedChanges,
 	hasUnsavedChanges,
@@ -53,6 +65,7 @@ export {
 	type DraftSource
 } from './draftCoordinator.svelte';
 export { default as DraftNumberField } from './fields/DraftNumberField.svelte';
+export { default as DraftDateField } from './fields/DraftDateField.svelte';
 
 export { default as BantoForm } from './BantoForm.svelte';
 export { default as TextField } from './fields/TextField.svelte';

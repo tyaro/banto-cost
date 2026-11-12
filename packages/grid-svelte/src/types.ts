@@ -25,7 +25,13 @@ export type FilterOp =
 	| 'starts_with'
 	| 'in'
 	| 'is_null'
-	| 'not_null';
+	| 'not_null'
+	/**
+	 * Half-open range `[from, to)` (date-time-pickers §5.9, D12): the value is
+	 * `[from | null, to | null]`, matched as text (`from <= v && v < to`); a
+	 * `null` end drops that side. Mirrors Rust's `FilterOp::Between`.
+	 */
+	| 'between';
 
 export interface FilterState {
 	field: string;
@@ -33,13 +39,22 @@ export interface FilterState {
 	value: unknown;
 }
 
-export type FilterType = 'text' | 'number';
+/**
+ * What FilterPopover offers for a column: text / number operators, or a
+ * day range (`between`) for a column of canonical dates (`date`) or dates
+ * and times (`datetime`) - date-time-pickers §5.9.
+ */
+export type FilterType = 'text' | 'number' | 'date' | 'datetime';
 
 /** Built-in per-group aggregate functions for a column (spec §4.3, client mode only). */
 export type AggregateKind = 'sum' | 'avg' | 'count';
 
-/** Built-in cell editor kinds (spec §4.5). */
-export type CellEditorType = 'text' | 'number' | 'date' | 'select' | 'checkbox';
+/**
+ * Built-in cell editor kinds (spec §4.5). `time` edits a canonical `HH:mm`,
+ * `datetime` a canonical `YYYY-MM-DDTHH:mm` (date-time-pickers §5.1, PR-5).
+ */
+export type CellEditorType =
+	'text' | 'number' | 'date' | 'time' | 'datetime' | 'select' | 'checkbox';
 
 /**
  * One committed (or about-to-be-committed) cell edit, passed to
@@ -85,7 +100,12 @@ export interface GridColumn<TRow> {
 	sortable?: boolean;
 	/** Default false. */
 	filterable?: boolean;
-	/** Default 'text'; controls which ops FilterPopover offers. */
+	/**
+	 * Default 'text'; controls which ops FilterPopover offers. `date` /
+	 * `datetime` offer a day range (`between`) and also make the client sort
+	 * and filter compare the values as text (canonical strings sort in time
+	 * order, §5.9).
+	 */
 	filterType?: FilterType;
 	align?: 'left' | 'right' | 'center';
 	format?: (value: unknown, row: TRow) => string;
@@ -96,6 +116,19 @@ export interface GridColumn<TRow> {
 	editor?: CellEditorType;
 	/** Options for `editor: 'select'`. */
 	editorOptions?: { value: string | number; label: string }[];
+	/**
+	 * `editor: 'date'` / `'time'` / `'datetime'` (date-time-pickers §5.6 /
+	 * §5.8): the earliest / latest value the picker offers (canonical
+	 * `YYYY-MM-DD` / `HH:mm` / `YYYY-MM-DDTHH:mm`, inclusive), the days it
+	 * refuses (date / datetime) and the minutes between listed times (time /
+	 * datetime). Display hints for the picker (and the native input's
+	 * `min` / `max` / `step`) only - `validate` is what rejects a committed
+	 * value (`columnsFromSchema` sets both from the schema field).
+	 */
+	editorMin?: string;
+	editorMax?: string;
+	isDateDisabled?: (date: string) => boolean;
+	editorStep?: number;
 	/** Column-level validator; return a Japanese error message, or null when valid. */
 	validate?: (value: unknown, row: TRow) => string | null;
 	/**

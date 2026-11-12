@@ -20,6 +20,7 @@
 	 */
 	import { linearScale, bandScale, niceTicks } from './core/scale';
 	import { leftMarginForTicks } from './core/labels';
+	import { DEFAULT_LABEL_FONT_SIZE, trackFontSize } from './internal/label-font';
 	import { roundedTopBarPath, linePath } from './core/path';
 	import { everyNthIndex } from './core/ticks-time';
 	import { seriesColorVar } from './core/color';
@@ -89,6 +90,10 @@
 	// Measured container width (bound from ChartContainer) so the margin cap can
 	// be relative to it, same as LineChart/StackedAreaChart.
 	let plotWidth: number = $state(0);
+	// Rendered y-tick font (D9-b: read from the first y tick label, 11px
+	// until/unless it can be read) so the estimate follows the rem tokens.
+	let tickFontSize = $state(DEFAULT_LABEL_FONT_SIZE);
+	const trackTickFont = trackFontSize((px) => (tickFontSize = px));
 	const MARGIN = $derived.by(() => {
 		const m = { ...DEFAULT_MARGIN, ...margins };
 		return {
@@ -96,7 +101,7 @@
 			left: leftMarginForTicks(
 				valueTicks.map((t) => formatYValue(t)),
 				m.left,
-				{ totalWidth: plotWidth }
+				{ totalWidth: plotWidth, fontSize: tickFontSize }
 			)
 		};
 	});
@@ -234,7 +239,7 @@
 			{/each}
 
 			<!-- Gridlines + y ticks (shared axis, spec §6.4 rule 2) -->
-			{#each valueTicks as tick (tick)}
+			{#each valueTicks as tick, ti (tick)}
 				<line
 					x1={m.innerLeft}
 					x2={m.innerLeft + m.innerWidth}
@@ -248,6 +253,7 @@
 					class="tick-label"
 					text-anchor="end"
 					dominant-baseline="middle"
+					{@attach ti === 0 ? trackTickFont : null}
 				>
 					{formatYValue(tick)}
 				</text>
@@ -428,7 +434,7 @@
 	}
 
 	.band-label {
-		font-size: 10px;
+		font-size: var(--banto-font-size-xs);
 		opacity: 0.8;
 	}
 
@@ -440,13 +446,13 @@
 	}
 
 	.marker-label {
-		font-size: 10px;
+		font-size: var(--banto-font-size-xs);
 		opacity: 0.85;
 	}
 
 	.tick-label {
 		fill: var(--banto-text-muted);
-		font-size: 11px;
+		font-size: var(--banto-font-size-sm);
 		font-variant-numeric: tabular-nums;
 	}
 
