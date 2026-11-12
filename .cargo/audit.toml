@@ -36,4 +36,13 @@ ignore = [
 	# (upstream plist/tauri-utils bump) - then REMOVE both entries.
 	"RUSTSEC-2026-0194",
 	"RUSTSEC-2026-0195",
+	# libsqlite3-sys 0.30.1: bundled C SQLite CVE-2026-119375 (Medium 6.8),
+	# fixed in >=0.39.0. sqlx-sqlite 0.9.0 (the newest release) pins
+	# libsqlite3-sys <0.38, so `cargo update` cannot take the fix. Upstream
+	# launchbadge/sqlx#4502 (allows 0.39) was merged 2026-11-08 but is not
+	# released yet (checked 2026-11-12). Excluded until then by the owner's
+	# decision of 2026-11-12. Revisit: as soon as a sqlx release includes
+	# #4502, run `cargo update -p sqlx`, confirm libsqlite3-sys >=0.39 in
+	# Cargo.lock, and REMOVE this entry.
+	"RUSTSEC-2026-0459",
 ]
