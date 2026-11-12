@@ -60,6 +60,14 @@
 	let schema = $state.raw<FormSchema | null>(null);
 	let store = $state.raw<FormStore | null>(null);
 	let status = $state('');
+	/**
+	 * The status the keyed sections (OrderSection, CloseoutSection) are built
+	 * for. It follows `status` only while neither has unsaved input: saving
+	 * the basic information now stays on the page and reads it back, and a
+	 * re-key would silently drop a draft there (PR #41 review). The server
+	 * still checks the status on each of their actions.
+	 */
+	let sectionStatus = $state('');
 	let customerName = $state('');
 	let managerName = $state('');
 	let projectCode = $state('');
@@ -101,6 +109,10 @@
 			costsBusy ||
 			forecastBusy ||
 			closeoutBusy
+	});
+
+	$effect(() => {
+		if (!ordersDirty && !ordersBusy && !closeoutDirty && !closeoutBusy) sectionStatus = status;
 	});
 
 	async function loadForm() {
@@ -227,11 +239,11 @@
 	</div>
 
 	{#if schema && idValid}
-		{#key status}
+		{#key sectionStatus}
 			<OrderSection
 				projectId={parsedId}
 				code={projectCode}
-				{status}
+				status={sectionStatus}
 				rowVersion={projectRowVersion}
 				{canWrite}
 				onProjectChanged={() => void loadForm()}
@@ -277,7 +289,7 @@
 			/>
 		{/if}
 		{#if ordered}
-			{#key status}
+			{#key sectionStatus}
 				<CloseoutSection
 					projectId={parsedId}
 					{canWrite}
