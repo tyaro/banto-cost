@@ -256,8 +256,8 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		const months = await thisAndNextMonth(page);
 		const users = await api<{ id: number; username: string }[]>(page, 'GET', '/api/users');
 		const manager = users.find((user) => user.username === ADMIN_USERNAME)!;
-		// The administrator sees no amounts by default (design 第2章): grant the
-		// sales / amount / company-report capabilities first.
+		// Narrow the first administrator (who gets every capability at setup,
+		// design 2.5) to the sales / amount / company-report capabilities.
 		await api(page, 'PUT', `/api/users/${manager.id}/capabilities`, {
 			capabilities: ['pipeline.edit', 'amount.view', 'report.all']
 		});

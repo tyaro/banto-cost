@@ -12,6 +12,8 @@ vi.mock('$app/paths', () => ({ resolve: (path: string) => `/${path}` }));
 vi.mock('./banto/logout.svelte', () => ({ logoutAndLeave: vi.fn() }));
 vi.mock('./banto/logoutNotice', () => ({ notifyLogoutOutcome: vi.fn() }));
 vi.mock('./settings.svelte', () => ({ settings: {} }));
+const soleUser = vi.hoisted(() => ({ active: false }));
+vi.mock('./banto/soleUser.svelte', () => ({ soleUserStore: soleUser }));
 
 import { buildCommands } from './commands';
 import { navItems } from './navigation';
@@ -51,5 +53,19 @@ describe('navigation commands visibility', () => {
 		session.publicViewer = false;
 		session.role = 'admin';
 		expect(visibleNavPaths()).toEqual(navItems.map((i) => i.path));
+	});
+});
+
+describe('logout command (banto-cost: one-person use)', () => {
+	function logoutVisible(): boolean {
+		const command = buildCommands().find((c) => c.id === 'session.logout');
+		return command?.visible?.() ?? true;
+	}
+
+	it('is hidden while the desktop app is used by its only account, shown otherwise', () => {
+		soleUser.active = true;
+		expect(logoutVisible()).toBe(false);
+		soleUser.active = false;
+		expect(logoutVisible()).toBe(true);
 	});
 });
