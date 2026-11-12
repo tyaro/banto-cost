@@ -654,6 +654,7 @@ const isAllowedPackageImport = (spec) =>
 		// banto-cost P5 の読み取り。
 		{ tauri: 'project_forecast', rest: 'GET /api/projects/{id}/forecast', role: 'Viewer' },
 		{ tauri: 'portfolio_overview', rest: 'GET /api/portfolio', role: 'Viewer' },
+		{ tauri: 'project_summary', rest: 'GET /api/projects/{id}/summary', role: 'Viewer' },
 		// banto-cost P6a の読み取り。
 		{ tauri: 'project_closeout_get', rest: 'GET /api/projects/{id}/closeout', role: 'Viewer' },
 		// banto-cost P6b の読み取り。
@@ -765,6 +766,7 @@ const isAllowedPackageImport = (spec) =>
 		'project_costs',
 		'project_forecast',
 		'portfolio_overview',
+		'project_summary',
 		'project_closeout_get',
 		'closing_months',
 		'closing_get',
@@ -839,6 +841,7 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/reports/portfolio.csv',
 		'GET /api/reports/period-monthly.csv',
 		'GET /api/portfolio',
+		'GET /api/projects/{id}/summary',
 		'GET /api/vendors',
 		'GET /api/direct-costs',
 		'GET /api/direct-costs/approvals',

@@ -131,6 +131,19 @@ pub struct Portfolio {
     pub totals: PortfolioTotals,
 }
 
+/// One project's row of the overall list, for the summary at the top of
+/// the project's page (案件詳細の要約, review D-1). The caller has already
+/// been authorized `ViewProjectAmounts` on the project, so the amounts and
+/// the alerts are filled.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSummary {
+    /// The business date the alerts were judged on.
+    pub as_of: String,
+    #[serde(flatten)]
+    pub row: PortfolioRow,
+}
+
 #[derive(Clone)]
 pub struct PortfolioService {
     db: Db,
@@ -149,6 +162,25 @@ impl PortfolioService {
              WHERE project_id = ? AND status = 'approved' ORDER BY version_no DESC LIMIT 1",
         );
         on_pool!(&self.db, pool => fetch_optional!(pool, sql, project_id))
+    }
+
+    /// The overall list's row of one project, with its amounts and alerts
+    /// (the same rules as [`Self::overview`], never a second copy of them).
+    pub async fn project(&self, project_id: i64) -> Result<ProjectSummary, BantoError> {
+        let only = ProjectScope::Only(BTreeSet::from([project_id]));
+        let portfolio = self.overview(&only, &only).await?;
+        let row = portfolio
+            .rows
+            .into_iter()
+            .find(|r| r.project_id == project_id)
+            .ok_or_else(|| BantoError::NotFound {
+                resource: "projects".to_string(),
+                id: project_id.to_string(),
+            })?;
+        Ok(ProjectSummary {
+            as_of: portfolio.as_of,
+            row,
+        })
     }
 
     /// Rows for `visible` (code, name, status), amounts and alerts for
@@ -481,7 +513,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(none.rows.len(), 1);
+
+        // 案件詳細の要約（review D-1）は全体一覧の同じ行をそのまま返す。
+        for id in [spec, bare, lead] {
+            let one = svc.project(id).await.unwrap();
+            assert_eq!(&one.row, row(&all, id));
+            assert_eq!(one.as_of, all.as_of);
+        }
+        assert!(matches!(
+            svc.project(9_999).await,
+            Err(BantoError::NotFound { .. })
+        ));
     }
+
     #[tokio::test]
     async fn t36_funds_follow_the_target_margin_and_the_project_override() {
         let db = fixture().await;
