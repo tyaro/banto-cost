@@ -30,7 +30,7 @@ describe('loadBusinessCalendar', () => {
 		await vi.advanceTimersByTimeAsync(3000);
 		await expect(wait).resolves.toBeUndefined();
 		expect(businessCalendar()).toBeNull();
-		answer({ today: '2026-11-13', utcOffsetMinutes: 540 });
+		answer({ today: '2026-11-13', nowMs: Date.now(), utcOffsetMinutes: 540 });
 		await vi.advanceTimersByTimeAsync(0);
 		expect(businessCalendar()?.today).toBe('2026-11-13');
 	});

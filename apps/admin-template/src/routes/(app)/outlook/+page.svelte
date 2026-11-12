@@ -58,15 +58,16 @@
 	let saving = $state(false);
 	const forbidden = $derived(isForbiddenError(loadError));
 
-	// P8d: the current fiscal period's months (6月〜翌5月) in one click.
-	const thisPeriod = $derived.by(() => {
-		const current = currentPeriod();
-		return businessCalendar()?.periods.find((p) => p.period === current) ?? null;
-	});
+	// P8d: the current fiscal period's months (6月〜翌5月) in one click. The
+	// period is read at the click, so a page left open across June 1 shows
+	// the new one.
+	const hasCalendar = $derived(businessCalendar() !== null);
 	function showThisPeriod() {
-		if (!thisPeriod) return;
-		from = thisPeriod.firstMonth;
-		to = thisPeriod.lastMonth;
+		const current = currentPeriod();
+		const period = businessCalendar()?.periods.find((p) => p.period === current);
+		if (!period) return;
+		from = period.firstMonth;
+		to = period.lastMonth;
 		void load();
 	}
 
@@ -179,12 +180,9 @@
 				</label>
 			{/if}
 			<button type="submit" class="banto-btn banto-btn--primary">{m['outlook.apply']()}</button>
-			{#if thisPeriod}
-				<button
-					type="button"
-					class="banto-btn banto-btn--secondary"
-					title={thisPeriod.label}
-					onclick={showThisPeriod}>{m['outlook.thisPeriod']()}</button
+			{#if hasCalendar}
+				<button type="button" class="banto-btn banto-btn--secondary" onclick={showThisPeriod}
+					>{m['outlook.thisPeriod']()}</button
 				>
 			{/if}
 		</form>

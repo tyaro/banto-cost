@@ -7,9 +7,11 @@
  * `business_calendar_get`, `admin_template_core::business_date`) so the
  * company's numbers live in one place (`cost_domain::FiscalCalendar`,
  * `BusinessTimeZone`). The app layout loads it once after sign-in; the
- * helpers below read it synchronously. Today is computed from the clock with
- * the server's UTC offset, so a page left open past midnight moves on to the
- * next day without reloading.
+ * helpers below read it synchronously. Today is computed from the server's
+ * clock (the device clock corrected by the difference seen at load, so a
+ * device whose clock is off still agrees with the server) and the UTC offset,
+ * so a page left open past midnight moves on to the next day without
+ * reloading.
  *
  * Demo mode (no backend) or a failed load leaves the calendar unknown: the
  * date falls back to the device's local date and no period is shown.
@@ -31,6 +33,8 @@ export interface FiscalPeriod {
 /** Mirrors `admin_template_core::business_date::BusinessCalendar`. */
 export interface BusinessCalendar {
 	today: string;
+	/** The server's clock when the calendar was made (UNIX ms). */
+	nowMs: number;
 	timeZone: string;
 	utcOffsetMinutes: number;
 	startMonth: number;
@@ -47,6 +51,8 @@ export async function fetchBusinessCalendar(): Promise<BusinessCalendar> {
 }
 
 let calendar = $state<BusinessCalendar | null>(null);
+/** The server's clock minus the device's, measured when the calendar arrived. */
+let skewMs = 0;
 let loading: Promise<void> | null = null;
 
 /** How long the app layout waits for the calendar before going on without it. */
@@ -63,7 +69,9 @@ export function loadBusinessCalendar(waitMs: number = CALENDAR_WAIT_MS): Promise
 	loading ??= Promise.resolve()
 		.then(() => (isPipelineAvailable() ? fetchBusinessCalendar() : null))
 		.then((loaded) => {
-			if (loaded) calendar = loaded;
+			if (!loaded) return;
+			skewMs = loaded.nowMs - Date.now();
+			calendar = loaded;
 		})
 		.catch(() => {})
 		.finally(() => {
@@ -81,9 +89,15 @@ export function businessCalendar(): BusinessCalendar | null {
 	return calendar;
 }
 
-/** Test hook: set (or clear) the loaded calendar. */
-export function setBusinessCalendarForTest(value: BusinessCalendar | null): void {
+/** Test hook: set (or clear) the loaded calendar and the clock difference. */
+export function setBusinessCalendarForTest(value: BusinessCalendar | null, skew = 0): void {
 	calendar = value;
+	skewMs = skew;
+}
+
+/** The server's clock now (the device's without a calendar). */
+function serverNow(deviceNowMs: number): number {
+	return calendar ? deviceNowMs + skewMs : deviceNowMs;
 }
 
 function pad(n: number): string {
@@ -91,8 +105,8 @@ function pad(n: number): string {
 }
 
 /**
- * The date (`YYYY-MM-DD`) at `nowMs` in the calendar's time zone, or the
- * device's local date without a calendar.
+ * The date (`YYYY-MM-DD`) at `nowMs` (server clock) in the calendar's time
+ * zone, or the device's local date without a calendar.
  */
 export function businessDateAt(nowMs: number, cal: BusinessCalendar | null): string {
 	if (!cal) {
@@ -103,9 +117,9 @@ export function businessDateAt(nowMs: number, cal: BusinessCalendar | null): str
 	return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
-/** Today's business date (`YYYY-MM-DD`). */
+/** Today's business date (`YYYY-MM-DD`); `nowMs` is the device's clock. */
 export function businessToday(nowMs: number = Date.now()): string {
-	return businessDateAt(nowMs, calendar);
+	return businessDateAt(serverNow(nowMs), calendar);
 }
 
 /** The fiscal period of a month (`YYYY-MM` or `YYYY-MM-DD`), as `FiscalCalendar::period_of`. */
@@ -132,8 +146,8 @@ export function monthWithPeriod(month: string, cal: BusinessCalendar | null = ca
 	return name ? `${month}（${name}）` : month;
 }
 
-/** The current period, or null without a calendar. */
+/** The current period, or null without a calendar; `nowMs` is the device's clock. */
 export function currentPeriod(nowMs: number = Date.now()): number | null {
 	if (!calendar) return null;
-	return periodOfMonth(businessDateAt(nowMs, calendar), calendar);
+	return periodOfMonth(businessDateAt(serverNow(nowMs), calendar), calendar);
 }

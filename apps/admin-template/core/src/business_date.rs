@@ -58,6 +58,9 @@ pub struct FiscalPeriod {
 pub struct BusinessCalendar {
     /// The business date today (`YYYY-MM-DD`).
     pub today: String,
+    /// The server's clock when this was made (UNIX milliseconds). The screens
+    /// count from it instead of the device's clock, which may be off.
+    pub now_ms: i64,
     /// The time zone's name (`Asia/Tokyo`).
     pub time_zone: String,
     /// Its fixed offset from UTC in minutes (no daylight saving).
@@ -83,11 +86,13 @@ fn period(fiscal: &FiscalCalendar, period: i32) -> FiscalPeriod {
     }
 }
 
-/// The calendar as of `today`.
-pub fn calendar_on(today: Date) -> BusinessCalendar {
+/// The calendar at `now_ms` (UNIX milliseconds).
+pub fn calendar_at(now_ms: i64) -> BusinessCalendar {
+    let today = TIME_ZONE.date_at(now_ms.div_euclid(1000));
     let current = FISCAL.period_of(today.year_month());
     BusinessCalendar {
         today: today.to_string(),
+        now_ms,
         time_zone: TIME_ZONE.name.to_string(),
         utc_offset_minutes: TIME_ZONE.utc_offset_minutes,
         start_month: FISCAL.start_month,
@@ -102,7 +107,7 @@ pub fn calendar_on(today: Date) -> BusinessCalendar {
 
 /// The calendar as of the business date today.
 pub fn calendar() -> BusinessCalendar {
-    calendar_on(today())
+    calendar_at(Utc::now().timestamp_millis())
 }
 
 #[cfg(test)]
@@ -111,7 +116,12 @@ mod tests {
 
     #[test]
     fn t15_the_calendar_lists_the_current_period_and_its_neighbours() {
-        let cal = calendar_on(Date::parse("2026-11-12").unwrap());
+        let at = |date: &str, hour: i64| {
+            (Date::parse(date).unwrap().day_number() * 86_400 + hour * 3600) * 1000
+        };
+        // 2026-11-12 08:00 UTC = 17:00 in Tokyo.
+        let cal = calendar_at(at("2026-11-12", 8));
+        assert_eq!(cal.now_ms, at("2026-11-12", 8));
         assert_eq!(cal.today, "2026-11-12");
         assert_eq!(cal.time_zone, "Asia/Tokyo");
         assert_eq!(cal.utc_offset_minutes, 540);
@@ -128,15 +138,13 @@ mod tests {
             (p13.first_month.as_str(), p13.last_month.as_str()),
             ("2026-06", "2027-05")
         );
-        // May still belongs to the period that started the previous June.
+        // May still belongs to the period that started the previous June:
+        // 2027-05-31 14:59 UTC is May 31 in Tokyo, 15:00 is June 1.
         assert_eq!(
-            calendar_on(Date::parse("2027-05-31").unwrap()).current_period,
+            calendar_at(at("2027-05-31", 15) - 60_000).current_period,
             13
         );
-        assert_eq!(
-            calendar_on(Date::parse("2027-06-01").unwrap()).current_period,
-            14
-        );
+        assert_eq!(calendar_at(at("2027-05-31", 15)).current_period, 14);
     }
 
     #[test]

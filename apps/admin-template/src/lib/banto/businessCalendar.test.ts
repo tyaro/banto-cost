@@ -13,6 +13,7 @@ import { todayIso } from './costFormat';
 
 const CAL: BusinessCalendar = {
 	today: '2026-11-12',
+	nowMs: Date.UTC(2026, 10, 12, 8, 0, 0),
 	timeZone: 'Asia/Tokyo',
 	utcOffsetMinutes: 540,
 	startMonth: 6,
@@ -44,6 +45,17 @@ describe('businessDateAt', () => {
 		const morning = new Date(Date.UTC(2026, 10, 30, 23, 30, 0)); // 08:30 on 12-01 in Tokyo
 		expect(todayIso(morning)).toBe('2026-12-01');
 		expect(businessToday(morning.getTime())).toBe('2026-12-01');
+	});
+});
+
+describe('device clock', () => {
+	it('counts from the server clock when the device clock is off', () => {
+		// The device runs 10 minutes slow: 23:55 on its clock is 00:05 on the server's.
+		setBusinessCalendarForTest(CAL, 10 * 60_000);
+		const device = Date.UTC(2026, 10, 30, 14, 55, 0); // 23:55 in Tokyo by the device
+		expect(businessToday(device)).toBe('2026-12-01');
+		setBusinessCalendarForTest(CAL, 0);
+		expect(businessToday(device)).toBe('2026-11-30');
 	});
 });
 
