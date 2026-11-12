@@ -27,7 +27,7 @@
 	 * never see a navigation.
 	 */
 	import { untrack } from 'svelte';
-	import { isProviderError } from '@banto/admin-core';
+	import { isProviderError, onInvalidate } from '@banto/admin-core';
 	import { LoadingState, StatusBadge } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
@@ -90,6 +90,41 @@
 		untrack(() => void load(id));
 	});
 
+	// Changes made elsewhere (another user, another window, or this page's
+	// own writes) arrive as the server's change events: read again on those
+	// that move the order, the budget, the actuals or the forecast.
+	const SUMMARY_RESOURCES = [
+		'projects',
+		'time_entries',
+		'direct_costs',
+		'budgets',
+		'forecasts',
+		'fixed_costs',
+		'recurring_revenues'
+	];
+	$effect(() => {
+		const id = projectId;
+		const offs = SUMMARY_RESOURCES.map((resource) => onInvalidate(resource, () => void load(id)));
+		return () => offs.forEach((off) => off());
+	});
+
+	// The contents list only the sections on the page now: some hide
+	// themselves without the amounts or in demo mode, and others appear
+	// once loaded, so watch the page for headings coming and going.
+	let present = $state<ReadonlySet<string>>(new Set());
+	function scanHeadings() {
+		const found = new Set(toc.map((e) => e.id).filter((id) => document.getElementById(id)));
+		if (found.size !== present.size || [...found].some((id) => !present.has(id))) present = found;
+	}
+	$effect(() => {
+		void toc;
+		untrack(scanHeadings);
+		const observer = new MutationObserver(() => untrack(scanHeadings));
+		observer.observe(document.body, { childList: true, subtree: true });
+		return () => observer.disconnect();
+	});
+	const shownToc = $derived(toc.filter((e) => present.has(e.id)));
+
 	const ordered = $derived(summary !== null && isOrderedStatus(summary.status));
 	const hidden = $derived(!available || isForbiddenError(loadError));
 
@@ -98,9 +133,9 @@
 	}
 
 	function jump(event: MouseEvent, id: string) {
+		event.preventDefault();
 		const target = document.getElementById(id);
 		if (!target) return;
-		event.preventDefault();
 		if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
 		// Clear the sticky top bar of the app shell.
 		target.style.scrollMarginTop = 'calc(var(--banto-shell-header-height) + var(--banto-space-4))';
@@ -230,7 +265,7 @@
 <nav class="toc" aria-labelledby="project-toc-heading">
 	<span id="project-toc-heading" class="note">{m['projectSummary.tocLabel']()}</span>
 	<ul>
-		{#each toc as entry (entry.id)}
+		{#each shownToc as entry (entry.id)}
 			<li><a href={`#${entry.id}`} onclick={(event) => jump(event, entry.id)}>{entry.label}</a></li>
 		{/each}
 	</ul>
