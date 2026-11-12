@@ -31,7 +31,7 @@ use cost_domain::{Date, YearMonth};
 use serde::Serialize;
 
 use crate::calc_basis::applied_value;
-use crate::direct_costs::DirectCostsService;
+use crate::direct_costs::{DirectCostsService, LedgerProblem};
 use crate::forecasts::ForecastsService;
 use crate::orders::{fetch_optional, on_pool, placeholders, OrdersService};
 use crate::pipeline::PipelineService;
@@ -129,6 +129,10 @@ pub struct Portfolio {
     pub low_margin_pct: Option<i64>,
     pub rows: Vec<PortfolioRow>,
     pub totals: PortfolioTotals,
+    /// Approved direct-cost records left out of the ledger for review
+    /// (T39): those on projects whose amounts the caller may see, and those
+    /// on no project for a caller who sees every project's amounts.
+    pub ledger_problems: Vec<LedgerProblem>,
 }
 
 /// One project's row of the overall list, for the summary at the top of
@@ -272,6 +276,18 @@ impl PortfolioService {
             }
             let order = orders.summary(p.id).await?;
             let budget = self.budget(p.id).await?;
+            if !ledger.is_clean(p.id) {
+                // The direct costs cannot be settled (T39): the actuals and
+                // the judgements built on them are left empty, never shown
+                // short; the stored forecast and the order stay.
+                row.order_amount = order.confirmed_amount;
+                row.pending_addition = Some(order.pending_total);
+                row.budget_version_no = budget.map(|b| b.0);
+                row.budget_total = budget.map(|b| b.1);
+                row.alerts = vec![Alert::LedgerReview.as_str().to_string()];
+                rows.push(row);
+                continue;
+            }
             let summary = forecasts
                 .summary(p.id, &ledger, order.confirmed_amount)
                 .await?;
@@ -388,12 +404,22 @@ impl PortfolioService {
                 .map(|(alert, count)| AlertCount { alert, count })
                 .collect(),
         };
+        let ledger_problems = ledger
+            .problems()
+            .iter()
+            .filter(|p| match p.project_ids.as_slice() {
+                [] => matches!(amounts, ProjectScope::All),
+                ids => ids.iter().all(|id| amounts.contains(*id)),
+            })
+            .cloned()
+            .collect();
         Ok(Portfolio {
             as_of: today.to_string(),
             review_delay_days,
             low_margin_pct: company_low_margin,
             rows,
             totals,
+            ledger_problems,
         })
     }
 }

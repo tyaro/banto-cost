@@ -62,13 +62,22 @@ pub struct MonthState {
     pub unposted_fixed_costs: usize,
     /// その月を期間に含むのに未計上の定期売上の取り決め（受注済みで精算前の案件だけ、T38）。
     pub unrecognized_recurring: usize,
+    /// 直接費の台帳で要確認として外した承認済みの記録（読めない・不整合、T39）。
+    pub ledger_review_entries: usize,
 }
 
 /// 締めを止める理由。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CloseIssue {
     AlreadyClosed,
-    Unapproved { time_entries: usize, costs: usize },
+    Unapproved {
+        time_entries: usize,
+        costs: usize,
+    },
+    /// 直接費の台帳に要確認の記録があり、月の直接費を確定できない（T39）。
+    LedgerReview {
+        entries: usize,
+    },
 }
 
 /// 締めは止めないが知らせる項目。
@@ -144,6 +153,11 @@ pub fn check_close(status: MonthStatus, s: &MonthState) -> Result<Vec<CloseWarni
         return Err(CloseIssue::Unapproved {
             time_entries: s.unapproved_time_entries,
             costs: s.unapproved_costs,
+        });
+    }
+    if s.ledger_review_entries > 0 {
+        return Err(CloseIssue::LedgerReview {
+            entries: s.ledger_review_entries,
         });
     }
     Ok(warnings(s))
@@ -260,6 +274,18 @@ mod tests {
         assert_eq!(
             check_close(MonthStatus::Open, &MonthState::default()),
             Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn t39_直接費の台帳に要確認があれば締められない() {
+        let s = MonthState {
+            ledger_review_entries: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            check_close(MonthStatus::Open, &s),
+            Err(CloseIssue::LedgerReview { entries: 2 })
         );
     }
 

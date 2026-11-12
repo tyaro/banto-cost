@@ -42,6 +42,8 @@ pub enum Alert {
     NoForecast,
     /// 作業完了なのに未実績の発注残がある。
     OpenCommitment,
+    /// 直接費の台帳に読めない・不整合の明細があり、直接費を確定できない（T39）。
+    LedgerReview,
 }
 
 impl Alert {
@@ -58,6 +60,7 @@ impl Alert {
             Self::ForecastUpdateNeeded => "forecast_update_needed",
             Self::NoForecast => "no_forecast",
             Self::OpenCommitment => "open_commitment",
+            Self::LedgerReview => "ledger_review",
         }
     }
 }
