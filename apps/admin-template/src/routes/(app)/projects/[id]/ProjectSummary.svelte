@@ -62,6 +62,13 @@
 	async function load(id: number) {
 		if (!available) return;
 		const token = ++loadToken;
+		// Never show another project's figures while this one loads (the
+		// (app) layout re-creates the page per id today; this keeps the band
+		// safe on its own).
+		if (summary !== null && summary.projectId !== id) {
+			summary = null;
+			loadError = null;
+		}
 		try {
 			const got = await getProjectSummary(id);
 			if (token !== loadToken) return;
