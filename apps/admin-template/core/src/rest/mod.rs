@@ -294,6 +294,7 @@ mod budgets;
 mod closeouts;
 mod closing;
 mod costs;
+mod first_setup;
 mod fixed_costs;
 mod forecasts;
 mod projects;
@@ -433,14 +434,25 @@ pub fn api_router(
 
     Router::new()
         .merge(audited_auth_routes)
-        .merge(extra_auth_router(
-            users.clone(),
-            auth.clone(),
-            audit.clone(),
-            allow_setup,
-            Arc::new(grants),
-            None,
-        ))
+        .merge(
+            extra_auth_router(
+                users.clone(),
+                auth.clone(),
+                audit.clone(),
+                allow_setup,
+                Arc::new(grants),
+                None,
+            )
+            // banto-cost: the first account gets every capability (sole_user).
+            .layer(middleware::from_fn_with_state(
+                first_setup::FirstSetupState {
+                    users: users.clone(),
+                    authz: authz.clone(),
+                    audit: audit.clone(),
+                },
+                first_setup::grant_after_first_setup,
+            )),
+        )
         .merge(sse_route(auth.clone(), events.clone()))
         .merge(authz::authz_me_router(
             authz.clone(),

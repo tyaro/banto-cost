@@ -1757,6 +1757,54 @@ async fn setup_is_recorded() {
     );
 }
 
+/// banto-cost（1人で使う、sole_user）: 初回設定で作った管理者には業務の能力が
+/// すべて付き、監査に残る。2回目の設定（既に初期化済み）では何も変えない。
+#[tokio::test]
+async fn first_setup_grants_every_capability_to_the_first_admin() {
+    let (router, audit) = router_with_real_login(true).await;
+    let token = setup_and_get_token(&router).await;
+
+    let me = router
+        .clone()
+        .oneshot(get_auth("/api/authz/me", &token))
+        .await
+        .unwrap();
+    assert_eq!(me.status(), StatusCode::OK);
+    let caps = body_json(me).await["capabilities"]
+        .as_array()
+        .expect("capabilities")
+        .len();
+    assert_eq!(caps, banto_admin_services::authz::Capability::ALL.len());
+
+    let entries = audit.list(ListParams::default()).await.unwrap().rows;
+    let granted: Vec<_> = entries
+        .iter()
+        .filter(|r| r.action == "update" && r.resource == "capabilities")
+        .collect();
+    assert_eq!(granted.len(), 1, "{entries:?}");
+    assert_eq!(granted[0].actor_username.as_deref(), Some("owner"));
+    assert_eq!(granted[0].entity_id.as_deref(), Some("1"));
+    assert_eq!(granted[0].origin, "rest");
+
+    let second = router
+        .clone()
+        .oneshot(post_json(
+            "/api/auth/setup",
+            json!({ "username": "other", "password": "password123", "displayName": "別の人" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(second).await["success"], false);
+    let after = audit.list(ListParams::default()).await.unwrap().rows;
+    assert_eq!(
+        after
+            .iter()
+            .filter(|r| r.action == "update" && r.resource == "capabilities")
+            .count(),
+        1
+    );
+}
+
 /// Spec M14 (coordinator review): a self-service password change is a
 /// security event and must be recorded as `password_change` (actor =
 /// entity = the caller) - and the entry must never carry the password.
