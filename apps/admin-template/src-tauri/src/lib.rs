@@ -73,6 +73,7 @@ use admin_template_core::rest::{api_router, user_auth_state, Services};
 use admin_template_core::settings::{
     auth_server_combination_allowed, AuditSettings, AuthSettings, ServerSettings, SettingsService,
 };
+use admin_template_core::sole_user::{grant_initial_capabilities, sole_account};
 use admin_template_core::system_info::SystemInfoService;
 #[cfg(feature = "system-metrics")]
 use admin_template_core::system_metrics::SystemMetricsSampler;
@@ -787,6 +788,7 @@ async fn setup_body(
     match (state.auth_io.setup_first_user)(username, password, display_name).await {
         Ok(identity) => {
             record_ok(&state.audit, &identity, "setup", "auth", None, None).await;
+            grant_setup_capabilities(state, &identity).await;
             install_account_unless_auth_disabled(state, seq_at_entry, identity).await
         }
         Err(err @ BantoError::Validation { .. }) => Err(err),
@@ -797,6 +799,72 @@ async fn setup_body(
             seq: read_slot(state).1,
         }),
     }
+}
+
+/// banto-cost（1人で使う、`admin_template_core::sole_user`）: 初回設定で作った
+/// 管理者に業務の能力をすべて付け、監査に残す。REST の
+/// `rest::first_setup` と同じ判断。失敗しても設定とログインは妨げない。
+async fn grant_setup_capabilities(state: &AppState, identity: &UserIdentity) {
+    match grant_initial_capabilities(&state.authz, identity.id).await {
+        Ok(Some(capabilities)) => {
+            record_ok(
+                &state.audit,
+                identity,
+                "update",
+                "capabilities",
+                Some(&identity.id.to_string()),
+                Some(serde_json::json!({ "capabilities": capabilities, "reason": "setup" })),
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(err) => eprintln!("banto: 初回設定後の能力の付与に失敗しました: {err}"),
+    }
+}
+
+/// banto-cost（1人で使う）: アカウントが1件だけなら、その本人の
+/// [`DesktopSession::Account`]。起動時（`run()`）にログイン画面の代わりに
+/// 使い、`login` を `via: "sole_user"` で監査に残す。読み取りに失敗したら
+/// ログイン画面に戻す。
+async fn sole_user_session(
+    users: &UsersService,
+    audit: &AuditLogService,
+) -> Option<DesktopSession> {
+    match sole_account(users).await {
+        Ok(Some(identity)) => {
+            record_ok(
+                audit,
+                &identity,
+                "login",
+                "auth",
+                None,
+                Some(serde_json::json!({ "via": "sole_user" })),
+            )
+            .await;
+            Some(DesktopSession::Account(identity))
+        }
+        Ok(None) => None,
+        Err(err) => {
+            eprintln!("banto: アカウントの読み取りに失敗しました。ログイン画面を表示します: {err}");
+            None
+        }
+    }
+}
+
+/// banto-cost（1人で使う）: いまのセッションがアカウントが1件だけの間の
+/// その本人か。画面はこれでログアウトを隠す（LAN のブラウザは常に false）。
+#[tauri::command]
+async fn auth_sole_user(state: State<'_, AppState>) -> Result<bool, BantoError> {
+    sole_user_body(&state).await
+}
+
+async fn sole_user_body(state: &AppState) -> Result<bool, BantoError> {
+    let Some(DesktopSession::Account(session)) = current_session(state).await? else {
+        return Ok(false);
+    };
+    Ok(sole_account(&state.users)
+        .await?
+        .is_some_and(|only| only.id == session.id))
 }
 
 /// `LoginResult.error` of a login/setup refused because auth-disabled mode is
@@ -6663,7 +6731,9 @@ pub fn run() {
             //      identity, no login screen at all.
             //   2. desktop autologin - verify a keyring-stored credential
             //      against `users`, same as a normal login.
-            //   3. neither - the ordinary login screen (`auth: None`).
+            //   3. neither - banto-cost: while there is exactly one account,
+            //      that account (`sole_user_session`, no password);
+            //      otherwise the ordinary login screen (`auth: None`).
             let auth_config = tauri::async_runtime::block_on(settings.auth_config())
                 .expect("auth_config should succeed");
             let initial_auth: Option<DesktopSession> = if auth_config.disabled {
@@ -6738,6 +6808,13 @@ pub fn run() {
                 }
             } else {
                 None
+            };
+            // An autologin that did not sign in also falls back to the sole
+            // account (it is still the one person using this PC).
+            let initial_auth = if initial_auth.is_none() && !auth_config.disabled {
+                tauri::async_runtime::block_on(sole_user_session(&users, &audit))
+            } else {
+                initial_auth
             };
 
             // If LAN access was left enabled on a previous run, start the
@@ -6892,6 +6969,7 @@ pub fn run() {
             auth_check,
             auth_identity,
             auth_resolve,
+            auth_sole_user,
             auth_change_password,
             auth_config_get,
             auth_config_apply,
@@ -7156,6 +7234,79 @@ mod tests {
             metrics: None,
             started_at: std::time::Instant::now(),
         }
+    }
+
+    /// banto-cost（1人で使う）: Tauri の初回設定でも管理者に能力がすべて付き、
+    /// 監査に残る（REST の `first_setup_grants_every_capability_to_the_first_admin`
+    /// と対）。
+    #[tokio::test]
+    async fn tauri_first_setup_grants_every_capability_to_the_first_admin() {
+        let state = app_state().await;
+        let result = setup_body(
+            &state,
+            "owner".to_string(),
+            "password123".to_string(),
+            "オーナー".to_string(),
+        )
+        .await
+        .expect("setup_body");
+        assert!(result.success);
+
+        let me = authz_me_body(&state).await.expect("authz_me_body");
+        assert_eq!(me.capabilities.len(), Capability::ALL.len());
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        let granted: Vec<_> = rows
+            .iter()
+            .filter(|r| r.action == "update" && r.resource == "capabilities")
+            .collect();
+        assert_eq!(granted.len(), 1, "{rows:?}");
+        assert_eq!(granted[0].actor_username.as_deref(), Some("owner"));
+        assert_eq!(granted[0].origin, "tauri");
+    }
+
+    /// banto-cost（1人で使う）: アカウントが1件の間は起動時にその本人の
+    /// セッションになり、`auth_sole_user` は true。2件目を作ると false になり、
+    /// 次の起動ではログイン画面（`None`）。
+    #[tokio::test]
+    async fn sole_user_signs_in_only_while_there_is_one_account() {
+        let state = app_state().await;
+        assert_eq!(sole_user_session(&state.users, &state.audit).await, None);
+
+        let owner = state
+            .users
+            .setup_first_user("owner", "password123", "オーナー")
+            .await
+            .expect("setup_first_user");
+        let session = sole_user_session(&state.users, &state.audit)
+            .await
+            .expect("the only account signs in");
+        assert_eq!(session, DesktopSession::Account(owner.clone()));
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        assert!(rows.iter().any(|r| r.action == "login"
+            && r.actor_username.as_deref() == Some("owner")
+            && r.detail.as_deref().is_some_and(|d| d.contains("sole_user"))));
+
+        state.set_session_for_test(Some(session));
+        assert!(sole_user_body(&state).await.expect("sole_user_body"));
+
+        state
+            .users
+            .create_user("worker", "password123", "作業者", Role::Editor)
+            .await
+            .expect("create_user");
+        assert!(!sole_user_body(&state).await.expect("sole_user_body"));
+        assert_eq!(sole_user_session(&state.users, &state.audit).await, None);
     }
 
     /// Spec M14: the Tauri-side self-service password change must be

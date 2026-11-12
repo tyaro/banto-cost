@@ -21,6 +21,7 @@ import { notifyLogoutOutcome } from './banto/logoutNotice';
 import { navItems, navSections, resolveAppPath, type NavItem } from './navigation';
 import { settings } from './settings.svelte';
 import { sessionStore } from './session.svelte';
+import { soleUserStore } from './banto/soleUser.svelte';
 
 function isNavItemVisible(item: NavItem): boolean {
 	const { main, admin } = navSections({
@@ -95,7 +96,9 @@ function sessionCommands(): PaletteCommand[] {
 			keywords: ['logout', 'sign out'],
 			// Same condition as Header.svelte's logout button: hidden in
 			// login-not-required mode (spec M11 - there's no session to end).
-			visible: () => !sessionStore.authDisabled,
+			// banto-cost: also hidden while the desktop app is used by its only
+			// account (soleUser.svelte.ts - it signs in again on the next start).
+			visible: () => !sessionStore.authDisabled && !soleUserStore.active,
 			run: async () => {
 				// Issue #215/#255, #260: same as Header.svelte's logout.
 				await logoutAndLeave(() => goto(resolve(`login`)), { notify: notifyLogoutOutcome });

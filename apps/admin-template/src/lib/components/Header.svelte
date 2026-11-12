@@ -19,6 +19,7 @@
 	import { pageTitle } from '#lib/navigation.js';
 	import { getBantoMode, isTauri } from '#lib/banto/setup.js';
 	import { sessionStore } from '#lib/session.svelte.js';
+	import { refreshSoleUser, soleUserStore } from '#lib/banto/soleUser.svelte.js';
 	import { settings } from '#lib/settings.svelte.js';
 	import { narrowViewport } from '#lib/narrowViewport.svelte.js';
 	import { commandPaletteStore } from '#lib/commandPalette.svelte.js';
@@ -66,6 +67,13 @@
 		editor: m['role.editor'],
 		viewer: m['role.viewer']
 	} as const;
+
+	// banto-cost（1人で使う）: アカウントが1件だけの間はログアウトを隠す
+	// （次の起動でまた自動でログインするだけ）。セッションが変わるたびに読み直す。
+	$effect(() => {
+		void sessionStore.identity?.id;
+		void refreshSoleUser();
+	});
 
 	async function logout() {
 		// Issue #215/#255, #260 (I-10): log out, confirm the session, and go
@@ -259,8 +267,10 @@
 					onSelect={() => goto(resolve(`settings`))}
 				/>
 			</MenuGroup>
-			<MenuSeparator />
-			<MenuItem icon={LogOut} label={m['shell.logout']()} danger onSelect={logout} />
+			{#if !soleUserStore.active}
+				<MenuSeparator />
+				<MenuItem icon={LogOut} label={m['shell.logout']()} danger onSelect={logout} />
+			{/if}
 		</Menu>
 	{/if}
 </header>

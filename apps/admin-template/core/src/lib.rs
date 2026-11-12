@@ -25,6 +25,7 @@ pub mod projects;
 pub mod recurring_revenue;
 pub mod reports;
 pub mod rest;
+pub mod sole_user;
 pub mod time_access;
 pub mod time_entries;
 pub mod user_names;

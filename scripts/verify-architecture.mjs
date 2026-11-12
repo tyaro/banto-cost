@@ -735,6 +735,9 @@ const isAllowedPackageImport = (spec) =>
 		'auth_config_get',
 		'auth_identity',
 		'auth_resolve',
+		// banto-cost (design 2.5): is this desktop session the only account's?
+		// Desktop-only by nature (the LAN browser always logs in) - no REST twin.
+		'auth_sole_user',
 		'auth_status',
 		'backups_list',
 		'backups_pending',

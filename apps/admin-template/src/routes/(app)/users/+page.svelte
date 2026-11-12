@@ -48,6 +48,7 @@
 		type Role as UserRole,
 		type UserSummary
 	} from '#lib/banto/usersAdmin.js';
+	import { refreshSoleUser, soleUserStore } from '#lib/banto/soleUser.svelte.js';
 	import {
 		CAPABILITIES,
 		getUserCapabilities,
@@ -157,6 +158,13 @@
 			});
 			toastStore.push('success', m['users.created']());
 			createStore = createFormStore(createSchema);
+			// banto-cost（1人で使う）: 2人目を作ったらログアウトを出し、次の起動
+			// からログインが要ることを知らせる。
+			const wasSole = soleUserStore.active;
+			await refreshSoleUser();
+			if (wasSole && !soleUserStore.active) {
+				toastStore.push('info', m['users.loginNowRequired']());
+			}
 			await reload();
 		} catch (err) {
 			if (isProviderError(err) && err.body.kind === 'validation') {
@@ -336,6 +344,7 @@
 		try {
 			await deleteUser(targetId);
 			toastStore.push('success', m['users.deleted']());
+			void refreshSoleUser();
 			// roadmap M10: even a new selection of this ID no longer exists.
 			// Advance the epoch so pending saves cannot reopen the deleted user.
 			if (selected?.id === targetId) {

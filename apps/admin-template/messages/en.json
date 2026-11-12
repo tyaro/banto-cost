@@ -559,6 +559,7 @@
   "users.selectPrompt": "Select a user",
   "users.selectHint": "Click a row in the list to show the edit panel here.",
   "users.created": "Created",
+  "users.loginNowRequired": "There is now more than one user, so a login is required from the next start. Make sure you know your own username and password",
   "users.updated": "Updated",
   "users.passwordReset": "Reset the password",
   "users.deleted": "Deleted",
