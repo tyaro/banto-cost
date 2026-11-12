@@ -40,9 +40,9 @@ use banto_server::ServerEvent;
 use banto_storage::{Db, Dialect};
 use cost_domain::calc_basis::{CalcValue, Source, Usage, UsageStatus};
 use cost_domain::time::{
-    approval_cost, check_correction, check_entry, summarize, CorrectionIssue, CorrectionTarget,
-    DayEntry, EntryInput, Rework, SummaryEntry, Target, TimeIssue, TimeStatus, TimeSummary,
-    TimeWarning, DAY_LIMIT, RATE_ITEM, UNIT_ITEM,
+    approval_cost, check_correction, check_entry, counts, summarize, CorrectionIssue,
+    CorrectionTarget, DayEntry, EntryInput, Rework, SummaryEntry, Target, TimeIssue, TimeStatus,
+    TimeSummary, TimeWarning, DAY_LIMIT, RATE_ITEM, UNIT_ITEM,
 };
 use cost_domain::{calc_basis, Date, Minutes};
 use serde::{Deserialize, Serialize};
@@ -514,8 +514,15 @@ impl TimeEntriesService {
 
     /// Marks the entries not yet approved whose rate would not resolve at
     /// approval, with the same rule the approval applies (`approval_cost`).
+    /// A returned correction is history only (`counts`): it can never be
+    /// approved, so it is not marked.
     async fn mark_rate_missing(&self, rows: &mut [TimeEntry]) -> Result<(), BantoError> {
-        if rows.iter().all(|e| e.status == "approved") {
+        let awaiting = |e: &TimeEntry| {
+            e.status != "approved"
+                && TimeStatus::parse(&e.status)
+                    .is_some_and(|s| counts(s, e.corrects_id.is_some(), e.replaced_by_id.is_some()))
+        };
+        if !rows.iter().any(awaiting) {
             return Ok(());
         }
         let values: Vec<CalcValue> = CalcBasisService::new(self.db.clone())
@@ -524,7 +531,7 @@ impl TimeEntriesService {
             .iter()
             .filter_map(domain_row)
             .collect();
-        for e in rows.iter_mut().filter(|e| e.status != "approved") {
+        for e in rows.iter_mut().filter(|e| awaiting(e)) {
             let work_date = parse_date("workDate", &e.work_date)?;
             let pid = e.project_id.map(|p| p.to_string());
             let cost = approval_cost(&values, pid.as_deref(), work_date, e.minutes);
