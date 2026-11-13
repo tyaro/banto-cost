@@ -230,6 +230,8 @@ async fn app_layer_crud_round_trips_on_postgres() {
 
     concurrent_admin_removals_on_postgres(&url).await;
 
+    concurrent_revenue_plan_lines_on_postgres(&url).await;
+
     // --- backup: SQLite-only, so every op must Err (never panic) on Postgres --
     // V2 owner decision D3 (PR4): backup/restore is a SQLite-only feature.
     // Against a Postgres handle each public operation returns `Err` instead of
@@ -1358,4 +1360,112 @@ async fn concurrent_admin_removals_on_postgres(url: &str) {
     first_pool.close().await;
     second_pool.close().await;
     control.close().await;
+}
+
+/// Review §8-16 (M-5, design.md §3.6): two transactions adding a revenue
+/// plan line for the same project and month at the same time. The 0027
+/// trigger locks the project row before its check, so the second waits for
+/// the first and then sees its committed line: one line is stored, and the
+/// second insert fails instead of leaving a duplicate.
+async fn concurrent_revenue_plan_lines_on_postgres(url: &str) {
+    use std::time::Duration;
+
+    let control = banto_storage::connect_postgres(url).await.unwrap();
+    let first_pool = banto_storage::connect_postgres(url).await.unwrap();
+    let second_pool = banto_storage::connect_postgres(url).await.unwrap();
+    let user_id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (username, password_hash, display_name, role) \
+         VALUES ('plan-owner', 'unused', '架空', 'admin') RETURNING id",
+    )
+    .fetch_one(&control)
+    .await
+    .unwrap();
+    let customer_id: i64 =
+        sqlx::query_scalar("INSERT INTO customers (name) VALUES ('架空顧客') RETURNING id")
+            .fetch_one(&control)
+            .await
+            .unwrap();
+    let project_id: i64 = sqlx::query_scalar(
+        "INSERT INTO projects (code, name, customer_id, manager_user_id, status) \
+         VALUES ('PLAN-RACE', '架空案件', $1, $2, 'ordered') RETURNING id",
+    )
+    .bind(customer_id)
+    .bind(user_id)
+    .fetch_one(&control)
+    .await
+    .unwrap();
+
+    for month in [Some("2026-06"), None] {
+        let insert = "INSERT INTO revenue_plan (project_id, month, amount) VALUES ($1, $2, 100)";
+        let mut first = first_pool.begin().await.unwrap();
+        sqlx::query(insert)
+            .bind(project_id)
+            .bind(month)
+            .execute(&mut *first)
+            .await
+            .expect("the first line");
+        let second_pool = second_pool.clone();
+        let second = tokio::spawn(async move {
+            let mut tx = second_pool.begin().await.unwrap();
+            let result = sqlx::query(insert)
+                .bind(project_id)
+                .bind(month)
+                .execute(&mut *tx)
+                .await;
+            if result.is_ok() {
+                tx.commit().await.unwrap();
+            }
+            result
+        });
+        // The second insert waits on the project row the first one locked.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !second.is_finished(),
+            "{month:?}: the second insert must wait"
+        );
+        first.commit().await.unwrap();
+        let err = tokio::time::timeout(Duration::from_secs(10), second)
+            .await
+            .expect("the second insert finishes after the first commits")
+            .unwrap()
+            .expect_err("a second line for the same project and month");
+        assert!(
+            err.to_string()
+                .contains("one line per project_id and month"),
+            "{month:?}: {err}"
+        );
+        let lines: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM revenue_plan WHERE project_id = $1 AND month IS NOT DISTINCT FROM $2",
+        )
+        .bind(project_id)
+        .bind(month)
+        .fetch_one(&control)
+        .await
+        .unwrap();
+        assert_eq!(lines, 1, "{month:?}");
+    }
+
+    for sql in [
+        "DELETE FROM revenue_plan WHERE project_id = $1",
+        "DELETE FROM projects WHERE id = $1",
+    ] {
+        sqlx::query(sql)
+            .bind(project_id)
+            .execute(&control)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM customers WHERE id = $1")
+        .bind(customer_id)
+        .execute(&control)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&control)
+        .await
+        .unwrap();
+    for pool in [control, first_pool, second_pool] {
+        pool.close().await;
+    }
 }

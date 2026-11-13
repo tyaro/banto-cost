@@ -356,4 +356,223 @@ mod tests {
             .expect("the upgraded account can log in");
         assert_eq!(verified.auth_epoch, 1);
     }
+
+    /// Whether `sql` fails on the migrated in-memory database.
+    async fn refused(pool: &sqlx::SqlitePool, sql: &str) -> bool {
+        sqlx::query(sqlx::AssertSqlSafe(sql.to_owned()))
+            .execute(pool)
+            .await
+            .is_err()
+    }
+
+    /// Review §8-16 (M-1, design.md §3.6): every business date or month
+    /// column of every table is guarded by the 0027 insert and update
+    /// triggers. Finding the columns by name catches a later table that
+    /// forgets its triggers.
+    #[tokio::test]
+    async fn every_business_date_and_month_column_has_format_triggers() {
+        let db = migrate_memory().await.unwrap();
+        let pool = db.as_sqlite().expect("sqlite handle");
+        let columns: Vec<(String, String)> = sqlx::query_as(
+            "SELECT m.name, c.name FROM sqlite_master m, pragma_table_info(m.name) c \
+             WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name <> '_sqlx_migrations' \
+             ORDER BY m.name, c.cid",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let is_business_date = |c: &str| {
+            c.ends_with("_on")
+                || c.ends_with("_date")
+                || c == "month"
+                || c.ends_with("_month")
+                || c == "valid_from"
+                || c == "planned_start"
+                || c == "planned_end"
+        };
+        let mut checked = 0;
+        for (table, column) in columns.iter().filter(|(_, c)| is_business_date(c)) {
+            for kind in ["insert", "update"] {
+                let sql: Option<String> = sqlx::query_scalar(
+                    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+                )
+                .bind(format!("{table}_dates_{kind}"))
+                .fetch_optional(pool)
+                .await
+                .unwrap();
+                let sql = sql.unwrap_or_else(|| panic!("{table}: no {kind} trigger"));
+                assert!(
+                    sql.contains(&format!("NEW.{column} ")),
+                    "{table}.{column} is not checked by the {kind} trigger"
+                );
+                if kind == "update" {
+                    assert!(sql.contains(column.as_str()), "{table}.{column}");
+                }
+            }
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 33,
+            "date and month columns found: update the count"
+        );
+    }
+
+    /// Review §8-16 (M-1): a date must be a real calendar date written
+    /// YYYY-MM-DD and a month YYYY-MM, on insert and on update; NULL stays
+    /// allowed where the column allows it.
+    #[tokio::test]
+    async fn malformed_dates_and_months_are_refused_by_the_database() {
+        let db = migrate_memory().await.unwrap();
+        let pool = db.as_sqlite().expect("sqlite handle");
+        for sql in [
+            "INSERT INTO users (username, password_hash, display_name, role) \
+             VALUES ('u', 'unused', '架空', 'admin')",
+            "INSERT INTO customers (name) VALUES ('架空顧客')",
+        ] {
+            sqlx::query(sql).execute(pool).await.unwrap();
+        }
+        let project = |code: &str, start: &str| {
+            format!(
+                "INSERT INTO projects (code, name, customer_id, manager_user_id, status, planned_start) \
+                 VALUES ('{code}', '架空案件', 1, 1, 'lead', {start})"
+            )
+        };
+        for bad in [
+            "'2026-6-1'",
+            "'2026-02-30'",
+            "'2026-04-31'",
+            "'2026-13-01'",
+            "'2026/06/01'",
+            "'2026-06-01 '",
+            "''",
+        ] {
+            assert!(
+                refused(pool, &project("P-BAD", bad)).await,
+                "planned_start {bad}"
+            );
+        }
+        assert!(!refused(pool, &project("P-1", "'2026-06-01'")).await);
+        assert!(!refused(pool, &project("P-2", "NULL")).await);
+        assert!(
+            refused(
+                pool,
+                "UPDATE projects SET planned_end = '2026-6-30' WHERE id = 1"
+            )
+            .await
+        );
+        assert!(
+            !refused(
+                pool,
+                "UPDATE projects SET planned_end = '2026-06-30' WHERE id = 1"
+            )
+            .await
+        );
+
+        // A row stored before 0027 keeps its malformed date: an update that
+        // does not change it (even one naming the column) still works.
+        sqlx::query("DROP TRIGGER projects_dates_insert")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(!refused(pool, &project("P-OLD", "'2026-6-1'")).await);
+        assert!(
+            !refused(
+                pool,
+                "UPDATE projects SET name = '改名', planned_start = planned_start WHERE code = 'P-OLD'"
+            )
+            .await
+        );
+        assert!(
+            refused(
+                pool,
+                "UPDATE projects SET planned_start = '2026-7-1' WHERE code = 'P-OLD'"
+            )
+            .await
+        );
+
+        for bad in [
+            "'2026-6'",
+            "'2026-13'",
+            "'2026-00'",
+            "'2026/06'",
+            "'2026-06-01'",
+        ] {
+            assert!(
+                refused(
+                    pool,
+                    &format!("INSERT INTO closing_periods (month, status) VALUES ({bad}, 'open')")
+                )
+                .await,
+                "month {bad}"
+            );
+        }
+        assert!(
+            !refused(
+                pool,
+                "INSERT INTO closing_periods (month, status) VALUES ('2026-06', 'open')"
+            )
+            .await
+        );
+        assert!(refused(pool, "UPDATE closing_periods SET month = '2026-1x'").await);
+        assert!(!refused(pool, "UPDATE closing_periods SET status = 'closed'").await);
+    }
+
+    /// Review §8-16 (M-5): one revenue plan line per project and month, and
+    /// one undecided-timing line at most (a trigger, so that duplicates
+    /// already stored do not make the migration fail).
+    #[tokio::test]
+    async fn revenue_plan_allows_one_line_per_project_and_month() {
+        let db = migrate_memory().await.unwrap();
+        let pool = db.as_sqlite().expect("sqlite handle");
+        for sql in [
+            "INSERT INTO users (username, password_hash, display_name, role) \
+             VALUES ('u', 'unused', '架空', 'admin')",
+            "INSERT INTO customers (name) VALUES ('架空顧客')",
+            "INSERT INTO projects (code, name, customer_id, manager_user_id, status) \
+             VALUES ('P-1', '架空案件', 1, 1, 'ordered')",
+            "INSERT INTO projects (code, name, customer_id, manager_user_id, status) \
+             VALUES ('P-2', '架空案件2', 1, 1, 'ordered')",
+            "INSERT INTO revenue_plan (project_id, month, amount) VALUES (1, '2026-06', 100)",
+            "INSERT INTO revenue_plan (project_id, month, amount) VALUES (1, NULL, 100)",
+        ] {
+            sqlx::query(sql).execute(pool).await.unwrap();
+        }
+        let insert = |project: i64, month: &str| {
+            format!("INSERT INTO revenue_plan (project_id, month, amount) VALUES ({project}, {month}, 50)")
+        };
+        assert!(refused(pool, &insert(1, "'2026-06'")).await);
+        assert!(refused(pool, &insert(1, "NULL")).await);
+        assert!(!refused(pool, &insert(1, "'2026-07'")).await);
+        assert!(!refused(pool, &insert(2, "'2026-06'")).await);
+        assert!(!refused(pool, &insert(2, "NULL")).await);
+        assert!(
+            refused(
+                pool,
+                "UPDATE revenue_plan SET month = '2026-06' WHERE month = '2026-07'"
+            )
+            .await
+        );
+        assert!(
+            !refused(
+                pool,
+                "UPDATE revenue_plan SET amount = 70 WHERE month = '2026-07'"
+            )
+            .await
+        );
+
+        // Duplicates stored before 0027 do not stop the migration; their
+        // other columns stay writable.
+        sqlx::query("DROP TRIGGER revenue_plan_month_insert")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(!refused(pool, &insert(2, "'2026-06'")).await);
+        assert!(
+            !refused(
+                pool,
+                "UPDATE revenue_plan SET amount = 0, month = month WHERE project_id = 2"
+            )
+            .await
+        );
+    }
 }
