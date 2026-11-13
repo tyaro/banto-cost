@@ -467,6 +467,28 @@ mod tests {
             .await
         );
 
+        // A row stored before 0027 keeps its malformed date: an update that
+        // does not change it (even one naming the column) still works.
+        sqlx::query("DROP TRIGGER projects_dates_insert")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(!refused(pool, &project("P-OLD", "'2026-6-1'")).await);
+        assert!(
+            !refused(
+                pool,
+                "UPDATE projects SET name = '改名', planned_start = planned_start WHERE code = 'P-OLD'"
+            )
+            .await
+        );
+        assert!(
+            refused(
+                pool,
+                "UPDATE projects SET planned_start = '2026-7-1' WHERE code = 'P-OLD'"
+            )
+            .await
+        );
+
         for bad in [
             "'2026-6'",
             "'2026-13'",

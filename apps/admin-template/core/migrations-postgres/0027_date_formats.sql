@@ -7,115 +7,127 @@
 -- parse them first; these checks stop the other ways in (hand-written SQL,
 -- a future import from the company spreadsheets).
 --
--- Each table gets one CHECK constraint, added NOT VALID so that, as in the
--- SQLite twin (which uses triggers), rows already stored are not re-checked.
--- The pattern checks the shape and the month and day ranges (01-12, 01-31);
--- unlike the SQLite twin it does not reject a day past the month's end such
--- as '2026-02-30' (Postgres is not used yet, 2026-11-13). Timestamps (*_at)
--- are not business dates and are not checked.
+-- Each table gets one BEFORE INSERT OR UPDATE OF <columns> trigger running
+-- banto_cost_check_dates(), which requires the value to round-trip through
+-- to_date() (a real calendar date in the canonical form; a month is checked
+-- as its first day), as the SQLite twin does with date(). Rows already
+-- stored are not re-checked, and an update checks only the columns whose
+-- value it changes. Timestamps (*_at) are not business dates and are not
+-- checked.
 --
 -- revenue_plan and pipeline_revenue_plan hold one line per month (month
 -- NULL = timing undecided, one such line at most); the services already
 -- refuse duplicates (duplicate_plan_month), the indexes make it a rule.
 
-ALTER TABLE projects ADD CONSTRAINT projects_dates_format CHECK (
-    planned_start ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-    AND planned_end ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+-- TG_ARGV holds (kind, column) pairs, kind 'date' or 'month'. On UPDATE a
+-- column whose value did not change is not checked, so a row stored before
+-- this migration can still have its other columns updated.
+CREATE OR REPLACE FUNCTION banto_cost_check_dates() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    new_row jsonb := to_jsonb(NEW);
+    old_row jsonb;
+    i integer := 0;
+    kind text;
+    col text;
+    v text;
+    d date;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        old_row := to_jsonb(OLD);
+    END IF;
+    WHILE i < TG_NARGS LOOP
+        kind := TG_ARGV[i];
+        col := TG_ARGV[i + 1];
+        i := i + 2;
+        v := new_row ->> col;
+        CONTINUE WHEN v IS NULL;
+        CONTINUE WHEN TG_OP = 'UPDATE' AND v IS NOT DISTINCT FROM old_row ->> col;
+        IF kind = 'month' THEN
+            v := v || '-01';
+        END IF;
+        d := NULL;
+        IF v ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN
+            BEGIN
+                d := to_date(v, 'YYYY-MM-DD');
+            EXCEPTION WHEN others THEN
+                d := NULL;
+            END;
+        END IF;
+        IF d IS NULL OR to_char(d, 'YYYY-MM-DD') <> v THEN
+            RAISE EXCEPTION '%: dates must be YYYY-MM-DD and months YYYY-MM (%)', TG_TABLE_NAME, col
+                USING ERRCODE = 'check_violation';
+        END IF;
+    END LOOP;
+    RETURN NEW;
+END;
+$$;
 
-ALTER TABLE pipeline_versions ADD CONSTRAINT pipeline_versions_dates_format CHECK (
-    expected_order_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-    AND expected_start_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-    AND expected_end_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-    AND confirmed_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER projects_dates BEFORE INSERT OR UPDATE OF planned_start, planned_end ON projects
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'planned_start', 'date', 'planned_end');
 
-ALTER TABLE pipeline_revenue_plan ADD CONSTRAINT pipeline_revenue_plan_dates_format CHECK (
-    month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-) NOT VALID;
+CREATE TRIGGER pipeline_versions_dates BEFORE INSERT OR UPDATE OF expected_order_month, expected_start_month, expected_end_month, confirmed_on ON pipeline_versions
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'expected_order_month', 'month', 'expected_start_month', 'month', 'expected_end_month', 'date', 'confirmed_on');
 
-ALTER TABLE order_conversions ADD CONSTRAINT order_conversions_dates_format CHECK (
-    converted_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-    AND cancelled_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER pipeline_revenue_plan_dates BEFORE INSERT OR UPDATE OF month ON pipeline_revenue_plan
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'month');
 
-ALTER TABLE order_conversion_corrections ADD CONSTRAINT order_conversion_corrections_dates_format CHECK (
-    old_converted_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-    AND new_converted_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-    AND corrected_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER order_conversions_dates BEFORE INSERT OR UPDATE OF converted_on, cancelled_on ON order_conversions
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'converted_on', 'date', 'cancelled_on');
 
-ALTER TABLE order_changes ADD CONSTRAINT order_changes_dates_format CHECK (
-    plan_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-) NOT VALID;
+CREATE TRIGGER order_conversion_corrections_dates BEFORE INSERT OR UPDATE OF old_converted_on, new_converted_on, corrected_on ON order_conversion_corrections
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'old_converted_on', 'date', 'new_converted_on', 'date', 'corrected_on');
 
-ALTER TABLE revenue_plan ADD CONSTRAINT revenue_plan_dates_format CHECK (
-    month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-) NOT VALID;
+CREATE TRIGGER order_changes_dates BEFORE INSERT OR UPDATE OF plan_month ON order_changes
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'plan_month');
 
-ALTER TABLE revenue_recognitions ADD CONSTRAINT revenue_recognitions_dates_format CHECK (
-    recognized_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER revenue_plan_dates BEFORE INSERT OR UPDATE OF month ON revenue_plan
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'month');
 
-ALTER TABLE outlook_snapshot_rows ADD CONSTRAINT outlook_snapshot_rows_dates_format CHECK (
-    month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-) NOT VALID;
+CREATE TRIGGER revenue_recognitions_dates BEFORE INSERT OR UPDATE OF recognized_on ON revenue_recognitions
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'recognized_on');
 
-ALTER TABLE calc_values ADD CONSTRAINT calc_values_dates_format CHECK (
-    valid_from ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER outlook_snapshot_rows_dates BEFORE INSERT OR UPDATE OF month ON outlook_snapshot_rows
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'month');
 
-ALTER TABLE time_entries ADD CONSTRAINT time_entries_dates_format CHECK (
-    work_date ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER calc_values_dates BEFORE INSERT OR UPDATE OF valid_from ON calc_values
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'valid_from');
 
-ALTER TABLE budget_versions ADD CONSTRAINT budget_versions_dates_format CHECK (
-    created_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER time_entries_dates BEFORE INSERT OR UPDATE OF work_date ON time_entries
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'work_date');
 
-ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_dates_format CHECK (
-    ordered_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER budget_versions_dates BEFORE INSERT OR UPDATE OF created_on ON budget_versions
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'created_on');
 
-ALTER TABLE direct_costs ADD CONSTRAINT direct_costs_dates_format CHECK (
-    booked_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER purchase_orders_dates BEFORE INSERT OR UPDATE OF ordered_on ON purchase_orders
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'ordered_on');
 
-ALTER TABLE forecast_versions ADD CONSTRAINT forecast_versions_dates_format CHECK (
-    base_date ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-    AND planned_end ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER direct_costs_dates BEFORE INSERT OR UPDATE OF booked_on ON direct_costs
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'booked_on');
 
-ALTER TABLE project_closeouts ADD CONSTRAINT project_closeouts_dates_format CHECK (
-    settled_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER forecast_versions_dates BEFORE INSERT OR UPDATE OF base_date, planned_end ON forecast_versions
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'base_date', 'date', 'planned_end');
 
-ALTER TABLE closeout_reopenings ADD CONSTRAINT closeout_reopenings_dates_format CHECK (
-    reopened_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER project_closeouts_dates BEFORE INSERT OR UPDATE OF settled_on ON project_closeouts
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'settled_on');
 
-ALTER TABLE closing_periods ADD CONSTRAINT closing_periods_dates_format CHECK (
-    month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-) NOT VALID;
+CREATE TRIGGER closeout_reopenings_dates BEFORE INSERT OR UPDATE OF reopened_on ON closeout_reopenings
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('date', 'reopened_on');
 
-ALTER TABLE closing_events ADD CONSTRAINT closing_events_dates_format CHECK (
-    month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-) NOT VALID;
+CREATE TRIGGER closing_periods_dates BEFORE INSERT OR UPDATE OF month ON closing_periods
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'month');
 
-ALTER TABLE fixed_cost_contracts ADD CONSTRAINT fixed_cost_contracts_dates_format CHECK (
-    from_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-    AND to_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-) NOT VALID;
+CREATE TRIGGER closing_events_dates BEFORE INSERT OR UPDATE OF month ON closing_events
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'month');
 
-ALTER TABLE fixed_cost_postings ADD CONSTRAINT fixed_cost_postings_dates_format CHECK (
-    month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-    AND booked_on ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-) NOT VALID;
+CREATE TRIGGER fixed_cost_contracts_dates BEFORE INSERT OR UPDATE OF from_month, to_month ON fixed_cost_contracts
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'from_month', 'month', 'to_month');
 
-ALTER TABLE recurring_revenues ADD CONSTRAINT recurring_revenues_dates_format CHECK (
-    from_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-    AND to_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
-) NOT VALID;
+CREATE TRIGGER fixed_cost_postings_dates BEFORE INSERT OR UPDATE OF month, booked_on ON fixed_cost_postings
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'month', 'date', 'booked_on');
+
+CREATE TRIGGER recurring_revenues_dates BEFORE INSERT OR UPDATE OF from_month, to_month ON recurring_revenues
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'from_month', 'month', 'to_month');
 
 CREATE UNIQUE INDEX revenue_plan_month ON revenue_plan (project_id, COALESCE(month, ''));
 
