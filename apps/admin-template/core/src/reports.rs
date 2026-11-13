@@ -743,10 +743,13 @@ mod tests {
             // The close totals every project: take out the other project's
             // May hours.
             let other_labor = if line.month == "2027-05" { 9_999 } else { 0 };
-            assert_eq!(m.total.labor_cost - other_labor, line.amounts.labor);
-            assert_eq!(m.total.labor_missing, line.amounts.labor_missing);
-            assert_eq!(m.total.direct_cost, line.amounts.direct);
-            assert_eq!(m.total.revenue, line.amounts.revenue);
+            assert_eq!(
+                m.total.unwrap().labor_cost - other_labor,
+                line.amounts.labor
+            );
+            assert_eq!(m.total.unwrap().labor_missing, line.amounts.labor_missing);
+            assert_eq!(m.total.unwrap().direct_cost, line.amounts.direct);
+            assert_eq!(m.total.unwrap().revenue, line.amounts.revenue);
         }
     }
 

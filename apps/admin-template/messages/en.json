@@ -1726,5 +1726,6 @@
   "ledger.column.refId": "original record",
   "ledger.column.adjustmentKind": "adjustment kind",
   "ledger.column.costType": "cost type",
-  "ledger.column.bookedOn": "booked date"
+  "ledger.column.bookedOn": "booked date",
+  "closing.totalUnavailable": "The month's figures cannot be totalled while direct-cost records in the ledger need review. They appear once the records under \"Direct-cost ledger to review\" on the overall list are fixed (as does the comparison with the close)."
 }

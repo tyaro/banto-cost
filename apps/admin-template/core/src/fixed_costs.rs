@@ -810,8 +810,8 @@ mod tests {
             .get("2026-11")
             .await
             .unwrap();
-        assert_eq!(closing.total.labor_cost, 450_000);
-        assert_eq!(closing.total.direct_cost, 0);
+        assert_eq!(closing.total.unwrap().labor_cost, 450_000);
+        assert_eq!(closing.total.unwrap().direct_cost, 0);
     }
 
     #[tokio::test]

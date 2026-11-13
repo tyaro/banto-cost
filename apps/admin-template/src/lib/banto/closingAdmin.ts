@@ -67,7 +67,8 @@ export interface MonthClosing {
 	ledgerReviewEntries: number;
 	canClose: boolean;
 	warnings: { code: WarningCode; count: number }[];
-	total: Figures;
+	/** `null` while a direct-cost record waits for review (T39): not totalled. */
+	total: Figures | null;
 	history: ClosingEvent[];
 	comparison: Comparison | null;
 }

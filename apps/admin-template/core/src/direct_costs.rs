@@ -3030,6 +3030,8 @@ pub(crate) mod tests {
         let month = closing.get("2026-11").await.unwrap();
         assert_eq!(month.ledger_review_entries, 1);
         assert!(!month.can_close);
+        // Its figures would be short: they are not shown as settled.
+        assert_eq!(month.total, None);
         let err = closing
             .close(
                 "2026-11",

@@ -211,9 +211,13 @@ pub struct MonthClosing {
     /// Unapproved records and records to review block the close.
     pub can_close: bool,
     pub warnings: Vec<WarningView>,
-    /// The month's figures now (all projects).
-    pub total: FiguresView,
+    /// The month's figures now (all projects). `None` while a direct-cost
+    /// record waits for review (T39): the ledger leaves it out, so the
+    /// figures would be short, and they are not shown as settled.
+    pub total: Option<FiguresView>,
     pub history: Vec<ClosingEvent>,
+    /// The latest close against now; `None` without a close, or while a
+    /// record waits for review (the current side would be short, T39).
     pub comparison: Option<Comparison>,
 }
 
@@ -503,8 +507,10 @@ impl ClosingService {
                 })
         };
         let history = self.history(&key).await?;
+        let settled = state.ledger_review_entries == 0;
         let comparison = match history.iter().find(|e| e.action == "close") {
             None => None,
+            Some(_) if !settled => None,
             Some(e) => {
                 let at = self.snapshot(e.id).await?;
                 let labels = self.project_labels().await?;
@@ -552,7 +558,7 @@ impl ClosingService {
                     count: w.count(),
                 })
                 .collect(),
-            total: total(&current).into(),
+            total: settled.then(|| total(&current).into()),
             history,
             comparison,
         })
@@ -787,7 +793,7 @@ mod tests {
             .unwrap();
         assert_eq!(closed.status, "closed");
         assert_eq!(closed.history[0].action, "close");
-        assert_eq!(closed.total.labor_cost, 3_000);
+        assert_eq!(closed.total.unwrap().labor_cost, 3_000);
         let err = time.create(1, hours("2026-10-07", p)).await.unwrap_err();
         assert_eq!(fields(err)[0].0, "workDate");
         assert!(
@@ -950,7 +956,7 @@ mod tests {
             .close("2026-10", CloseInput { row_version: 1 }, Some(1))
             .await
             .unwrap();
-        assert_eq!(closed.total.direct_cost, 300_000);
+        assert_eq!(closed.total.unwrap().direct_cost, 300_000);
 
         // The invoice (320,000) is booked in November (翌月調整): October
         // keeps the provisional, November carries only the difference.
@@ -967,9 +973,12 @@ mod tests {
         )
         .await;
         let oct = svc.get("2026-10").await.unwrap();
-        assert_eq!(oct.total.direct_cost, 300_000);
+        assert_eq!(oct.total.unwrap().direct_cost, 300_000);
         assert!(oct.comparison.unwrap().changed.is_empty());
-        assert_eq!(svc.get("2026-11").await.unwrap().total.direct_cost, 20_000);
+        assert_eq!(
+            svc.get("2026-11").await.unwrap().total.unwrap().direct_cost,
+            20_000
+        );
     }
 
     #[tokio::test]

@@ -1726,5 +1726,6 @@
   "ledger.column.refId": "元の明細",
   "ledger.column.adjustmentKind": "調整の種類",
   "ledger.column.costType": "費目",
-  "ledger.column.bookedOn": "管理計上日"
+  "ledger.column.bookedOn": "管理計上日",
+  "closing.totalUnavailable": "直接費の台帳に要確認の明細があるため、この月の数値は集計できません。全体一覧の「直接費の台帳の要確認」を直すと表示されます（締め時点との比較も同じ）。"
 }

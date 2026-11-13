@@ -204,26 +204,32 @@
 				{/if}
 
 				<h3>{m['closing.totalTitle']()}</h3>
-				<div class="table-wrap">
-					<table>
-						<thead>
-							<tr>
-								<th scope="col" class="num">{m['closing.colLabor']()}</th>
-								<th scope="col" class="num">{m['closing.colLaborMissing']()}</th>
-								<th scope="col" class="num">{m['closing.colDirect']()}</th>
-								<th scope="col" class="num">{m['closing.colRevenue']()}</th>
-							</tr>
-						</thead>
-						<tbody>
-							<tr>
-								<td class="num">{formatYen(view.total.laborCost)}</td>
-								<td class="num">{view.total.laborMissing}</td>
-								<td class="num">{formatYen(view.total.directCost)}</td>
-								<td class="num">{formatYen(view.total.revenue)}</td>
-							</tr>
-						</tbody>
-					</table>
-				</div>
+				{#if view.total === null}
+					<p class="alert" role="alert" data-testid="closing-total-unavailable">
+						{m['closing.totalUnavailable']()}
+					</p>
+				{:else}
+					<div class="table-wrap">
+						<table>
+							<thead>
+								<tr>
+									<th scope="col" class="num">{m['closing.colLabor']()}</th>
+									<th scope="col" class="num">{m['closing.colLaborMissing']()}</th>
+									<th scope="col" class="num">{m['closing.colDirect']()}</th>
+									<th scope="col" class="num">{m['closing.colRevenue']()}</th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr>
+									<td class="num">{formatYen(view.total.laborCost)}</td>
+									<td class="num">{view.total.laborMissing}</td>
+									<td class="num">{formatYen(view.total.directCost)}</td>
+									<td class="num">{formatYen(view.total.revenue)}</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+				{/if}
 
 				{#if canWrite}
 					{#if view.status === 'closed'}

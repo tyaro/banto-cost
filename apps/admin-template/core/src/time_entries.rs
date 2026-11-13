@@ -2321,7 +2321,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            closed.total.labor_missing, 0,
+            closed.total.unwrap().labor_missing,
+            0,
             "the replaced entry left October"
         );
     }
