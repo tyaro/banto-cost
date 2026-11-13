@@ -42,11 +42,13 @@
 
 	interface Props {
 		projectId: number;
+		/** The project code, shown in confirmation dialogs. */
+		code: string;
 		canWrite: boolean;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, canWrite, onPendingChange }: Props = $props();
+	let { projectId, code, canWrite, onPendingChange }: Props = $props();
 
 	interface LineRow {
 		phaseId: string;
@@ -223,6 +225,10 @@
 		const ok = await confirmAction({
 			title: m['budget.approveConfirmTitle'](),
 			body: m['budget.approveConfirm'](),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{ label: m['budget.colTotal'](), value: formatYen(d.total) }
+			],
 			undo: m['budget.approveUndo'](),
 			confirmLabel: m['budget.approve']()
 		});

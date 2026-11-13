@@ -51,11 +51,13 @@
 
 	interface Props {
 		projectId: number;
+		/** The project code, shown in confirmation dialogs. */
+		code: string;
 		canWrite: boolean;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, canWrite, onPendingChange }: Props = $props();
+	let { projectId, code, canWrite, onPendingChange }: Props = $props();
 
 	interface InputRow {
 		phaseId: string;
@@ -234,6 +236,12 @@
 		const ok = await confirmAction({
 			title: m['forecast.adoptConfirmTitle'](),
 			body: m['forecast.adoptConfirm'](),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{ label: m['forecast.fieldBaseDate'](), value: d.baseDate },
+				{ label: m['forecast.costTotal'](), value: formatYen(d.costTotal) },
+				{ label: m['forecast.profit'](), value: formatSignedYen(d.profit) }
+			],
 			undo: m['forecast.adoptUndo'](),
 			confirmLabel: m['forecast.adopt']()
 		});

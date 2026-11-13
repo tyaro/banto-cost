@@ -41,13 +41,15 @@
 
 	interface Props {
 		projectId: number;
+		/** The project code, shown in confirmation dialogs. */
+		code: string;
 		canWrite: boolean;
 		/** The project's status changed (settled): the page reloads it. */
 		onProjectChanged?: () => void;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, canWrite, onProjectChanged, onPendingChange }: Props = $props();
+	let { projectId, code, canWrite, onProjectChanged, onPendingChange }: Props = $props();
 
 	const available = isPipelineAvailable();
 	let check = $state<CloseoutCheck | null>(null);
@@ -152,6 +154,15 @@
 		const ok = await confirmAction({
 			title: m['closeout.settleConfirmTitle'](),
 			body: m['closeout.settleConfirm'](),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{
+					label: m['closeout.colWaivers'](),
+					value: m['confirm.countValue']({
+						count: c.blockers.filter((b) => b.waivable).length
+					})
+				}
+			],
 			undo: m['closeout.settleUndo'](),
 			confirmLabel: m['closeout.settle']()
 		});
@@ -205,7 +216,10 @@
 		const ok = await confirmAction({
 			title: m['closeout.reopenConfirmTitle'](),
 			body: m['closeout.reopenConfirm'](),
-			details: [{ label: m['confirm.reason'](), value: reason }],
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{ label: m['confirm.reason'](), value: reason }
+			],
 			undo: m['closeout.reopenUndo'](),
 			confirmLabel: m['closeout.reopen'](),
 			danger: true

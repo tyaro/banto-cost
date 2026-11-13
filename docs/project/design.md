@@ -174,7 +174,7 @@ revenue_recognitions(id, project_id, recognized_on, amount, basis,
 - 取り消せる条件（`cost_domain::order::check_conversion_cancel`）：案件の状態が「受注」（進行中・作業完了・精算完了でない）、全部受注、転換前の状態が受注前の有効な状態か保留。かつ、その案件に受注変更・売上計上（取消済みを含む。消し込みの履歴が売上予定を参照するため）・予算版・工数・直接費（発注・配分を含む）・完了見込版・月額固定（取り決め・計上）・定期売上の取り決めがない。満たさない理由は `OrderSummary.cancelBlockers` に符号で返し、画面は取消欄にその一覧を出す。
 - 一部受注は取り消さない（2026-11-13 判断）。残りの範囲の案件が別にあり、元の案件を受注前へ戻すと、元の採用版（全体の見込額）と残りの案件の見込が重なって未受注の集計が二重になるため。必要になったら、残りの案件の扱いを決めてから足す。
 - 取消（`OrdersService::cancel_conversion`、`POST /api/projects/{id}/order/conversion/cancel`・Tauri `order_conversion_cancel`、`EditOrder`）：案件の状態を転換前に戻し、転換が作った売上予定（`revenue_plan`、計上がないので消し込みもない）を削除し、`order_conversions` の行に取消日（業務日付）・理由・実施者・時刻を記録する。予定開始日・完了日・注文番号は入力のまま残す。案件見込の版は転換で書き換えていないので、採用版がふたたび未受注の集計に入る（T23 の逆）。
-- 同時更新：案件の `row_version` と `revenue_version` の両方で比較更新する。案件の行を書いたあと、同じトランザクションで記録の有無を数え直す（SQLite ではその書き込みでデータベースの書き込み錠を取るので、検査のあとに記録が割り込まない。T13）。
+- 同時更新：案件の `row_version` と `revenue_version` の両方で比較更新する。案件の行を書いたあと、同じトランザクションで記録の有無を数え直す（SQLite ではその書き込みでデータベースの書き込み錠を取るので、検査のあとに記録が割り込まない。T13）。Postgres（READ COMMITTED）では、工数・直接費などを書く側が案件の行を錠で押さえないので、取消の検査と同時に別のトランザクションが記録を足すと両方が通りうる。利用者1人・SQLite の運用（2026-11-06 決定、レビュー §8「Postgres 側の作り込みはやらない」）なので対策していない。2人目や Postgres で使う前に、記録を書く操作と取消が同じ案件単位の錠（案件の行の `FOR SHARE`／`FOR UPDATE` など）を取るようにする（PR #46 のレビュー指摘）。
 - マイグレーション `0025_order_conversion_cancel.sql`：`order_conversions` に `cancelled_on`・`cancel_reason`・`cancelled_by`・`cancelled_at`（取消の4列はそろって空かそろって入る CHECK）を足し、`project_id` の一意制約を「取り消していない行」の部分一意索引（`order_conversions_active`）に変えた。取り消した案件はもう一度受注転換できる。SQLite は列内の UNIQUE を外せないので表を作り直す（参照する表はない）。
 - 監査：`cancel_conversion`（`orders`）に取り消した転換の ID・受注転換額・戻した状態を記録する。理由は記録しない（精算完了の取消と同じ）。
 
