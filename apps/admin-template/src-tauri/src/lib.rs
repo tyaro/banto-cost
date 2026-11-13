@@ -26,8 +26,7 @@ mod keyring_store;
 use admin_template_core::assets::FrontendAssets;
 use admin_template_core::audit::{AuditEntry, AuditLogList, AuditLogService};
 use admin_template_core::authz::{
-    approval_projects, cost_approval_projects, Actor, Allowed, AuthzService, Capability,
-    MemberKind, Operation, Policy, ProjectMember, Subject,
+    Actor, AuthzService, Capability, MemberKind, Operation, Policy, ProjectMember,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
 use admin_template_core::budgets::{
@@ -39,15 +38,11 @@ use admin_template_core::calc_basis::{
 };
 use admin_template_core::closeouts::RESOURCE as CLOSEOUT_RESOURCE;
 use admin_template_core::closing::RESOURCE as CLOSING_RESOURCE;
-use admin_template_core::cost_access::{
-    approve_ops as cost_approve_ops, entry_ops as cost_entry_ops, order_create_op,
-    own_ops as cost_own_ops,
-};
 use admin_template_core::customers::{Customer, CustomerInput, CustomersService};
 use admin_template_core::db::init_db;
 use admin_template_core::direct_costs::{
     DirectCost, DirectCostInput, DirectCostSaved, DirectCostsService, OrderRevisionInput,
-    ProjectCosts, PurchaseOrderInput, PurchaseOrderSaved, PurchaseOrderView, ORDER_RESOURCE,
+    ProjectCosts, PurchaseOrderInput, PurchaseOrderSaved, PurchaseOrderView,
     RESOURCE as COST_RESOURCE,
 };
 use admin_template_core::events::event_channel;
@@ -77,9 +72,6 @@ use admin_template_core::sole_user::{grant_initial_capabilities, sole_account};
 use admin_template_core::system_info::SystemInfoService;
 #[cfg(feature = "system-metrics")]
 use admin_template_core::system_metrics::SystemMetricsSampler;
-use admin_template_core::time_access::{
-    approve_op, enter_op as enter_time_op, shown, shown_own, shown_pair, shown_saved,
-};
 use admin_template_core::time_entries::{
     CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntriesService,
     TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
@@ -3359,65 +3351,9 @@ async fn project_members_remove_body(
 // list scopes. The `admin` role passes only the master / basic-information
 // checks, never one that shows amounts.
 
-/// Decide `op` for the caller (recording a denial). `identity` is the one the
-/// role floor returned.
-async fn business_guard(
-    state: &AppState,
-    identity: &UserIdentity,
-    op: Operation,
-    resource: &str,
-) -> Result<(Subject, Option<i64>), BantoError> {
-    let (subject, user_id, _) =
-        business_guard_with(state, identity, op, Policy::default(), resource).await?;
-    Ok((subject, user_id))
-}
-
-/// As [`business_guard`] with an explicit policy, also returning the decision.
-async fn business_guard_with(
-    state: &AppState,
-    identity: &UserIdentity,
-    op: Operation,
-    policy: Policy,
-    resource: &str,
-) -> Result<(Subject, Option<i64>, Allowed), BantoError> {
-    let session = current_session(state)
-        .await?
-        .ok_or(BantoError::Unauthorized)?;
-    let user_id = session_user_id(&session);
-    let (subject, allowed) = state
-        .authz
-        .authorize_audited(
-            &state.audit,
-            Actor {
-                user_id,
-                username: &identity.username,
-                role: identity.role.as_str(),
-            },
-            op,
-            policy,
-            resource,
-            "tauri",
-        )
-        .await?;
-    Ok((subject, user_id, allowed))
-}
-
-/// As [`business_guard`], but the `admin` role passes without a capability.
-async fn business_guard_or_admin(
-    state: &AppState,
-    identity: &UserIdentity,
-    op: Operation,
-    resource: &str,
-) -> Result<(), BantoError> {
-    if !identity.role.is_admin() {
-        business_guard(state, identity, op, resource).await?;
-    }
-    Ok(())
-}
-
 /// The caller of an authorized operation (`admin_template_core::ops`,
 /// review §8-13) from the Tauri path: the session's user and the identity
-/// the role floor returned, as [`business_guard`] decides for.
+/// the role floor returned. Every business command decides through it.
 async fn tauri_gate<'a>(
     state: &'a AppState,
     identity: &'a UserIdentity,
@@ -3435,13 +3371,6 @@ async fn tauri_gate<'a>(
             origin: "tauri",
         },
     })
-}
-
-async fn caller_subject(state: &AppState) -> Result<Subject, BantoError> {
-    let session = current_session(state)
-        .await?
-        .ok_or(BantoError::Unauthorized)?;
-    state.authz.subject(session_user_id(&session)).await
 }
 
 // --- banto-cost P3a: customers, projects, pipeline -------------------------
@@ -3926,10 +3855,9 @@ async fn project_calc_basis_add_body(
 //
 // Tauri twins of `/api/phases*`, `/api/common-activities*`,
 // `/api/time-entries*` and `/api/projects/{id}/time-summary`
-// (`admin_template_core::rest::time`): the same role floors, the same
-// `Operation`s through `authorize_audited`, the same audit actions and
-// detail (`TimeEntry::audit_detail`, no rate), and the same masking
-// (`time_access::shown`).
+// (`admin_template_core::rest::time`): the same role floors here, then the
+// same authorized operation (`admin_template_core::ops::work_masters` /
+// `ops::time`: decision, masking, audit).
 
 const TIME_RESOURCE: &str = "time_entries";
 
@@ -3939,8 +3867,8 @@ async fn masters_list(
     identity: &UserIdentity,
     kind: MasterKind,
 ) -> Result<Vec<WorkMaster>, BantoError> {
-    business_guard_or_admin(state, identity, Operation::ViewMasters, kind.resource()).await?;
-    state.work_masters.list(kind).await
+    let gate = tauri_gate(state, identity).await?;
+    ops::work_masters::list(&gate, &state.work_masters, kind).await
 }
 
 /// `EditMasters` (or the `admin` role), then create (`id: None`) or update.
@@ -3951,21 +3879,8 @@ async fn masters_write(
     id: Option<i64>,
     values: WorkMasterInput,
 ) -> Result<WorkMaster, BantoError> {
-    business_guard_or_admin(state, actor, Operation::EditMasters, kind.resource()).await?;
-    let (row, action) = match id {
-        None => (state.work_masters.create(kind, values).await?, "create"),
-        Some(id) => (state.work_masters.update(kind, id, values).await?, "update"),
-    };
-    record_ok(
-        &state.audit,
-        actor,
-        action,
-        kind.resource(),
-        Some(&row.id.to_string()),
-        Some(serde_json::json!({ "name": row.name, "active": row.active })),
-    )
-    .await;
-    Ok(row)
+    let gate = tauri_gate(state, actor).await?;
+    ops::work_masters::write(&gate, &state.work_masters, kind, id, values).await
 }
 
 #[tauri::command]
@@ -4018,31 +3933,6 @@ async fn common_activities_update(
     masters_write(&state, &actor, MasterKind::Activities, Some(id), values).await
 }
 
-/// Authorize `op` for an entry operation; the caller must have a user row.
-async fn time_guard(
-    state: &AppState,
-    identity: &UserIdentity,
-    op: Operation,
-) -> Result<(Subject, i64), BantoError> {
-    let (subject, user_id) = business_guard(state, identity, op, TIME_RESOURCE).await?;
-    Ok((subject, user_id.ok_or(BantoError::Forbidden)?))
-}
-
-/// The caller's own entry; someone else's reads as not found (as on REST).
-async fn own_time_entry(state: &AppState, id: i64) -> Result<TimeEntry, BantoError> {
-    let session = current_session(state)
-        .await?
-        .ok_or(BantoError::Unauthorized)?;
-    let entry = state.time_entries.get(id).await?;
-    if Some(entry.user_id) != session_user_id(&session) {
-        return Err(BantoError::NotFound {
-            resource: TIME_RESOURCE.into(),
-            id: id.to_string(),
-        });
-    }
-    Ok(entry)
-}
-
 #[tauri::command]
 async fn time_entries_list(
     state: State<'_, AppState>,
@@ -4058,9 +3948,8 @@ async fn time_entries_list_body(
     to: String,
 ) -> Result<Vec<TimeEntry>, BantoError> {
     let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
-    let (subject, user_id) = time_guard(state, &identity, Operation::EnterCommonTime).await?;
-    let rows = state.time_entries.list_own(user_id, &from, &to).await?;
-    Ok(rows.into_iter().map(|e| shown_own(&subject, e)).collect())
+    let gate = tauri_gate(state, &identity).await?;
+    ops::time::list_own(&gate, &state.time_entries, &from, &to).await
 }
 
 #[tauri::command]
@@ -4076,20 +3965,8 @@ async fn time_entries_create_body(
     values: TimeEntryInput,
 ) -> Result<TimeEntrySaved, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (subject, user_id) = time_guard(state, &actor, enter_time_op(values.project_id)).await?;
-    let saved = state.time_entries.create(user_id, values).await?;
-    if !saved.replayed {
-        record_ok(
-            &state.audit,
-            &actor,
-            "create",
-            TIME_RESOURCE,
-            Some(&saved.entry.id.to_string()),
-            Some(saved.entry.audit_detail()),
-        )
-        .await;
-    }
-    Ok(shown_saved(&subject, saved))
+    let gate = tauri_gate(state, &actor).await?;
+    ops::time::create(&gate, &state.time_entries, values).await
 }
 
 #[tauri::command]
@@ -4107,19 +3984,8 @@ async fn time_entries_update_body(
     values: TimeEntryInput,
 ) -> Result<TimeEntrySaved, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    own_time_entry(state, id).await?;
-    let (subject, user_id) = time_guard(state, &actor, enter_time_op(values.project_id)).await?;
-    let saved = state.time_entries.update(user_id, id, values).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        TIME_RESOURCE,
-        Some(&id.to_string()),
-        Some(saved.entry.audit_detail()),
-    )
-    .await;
-    Ok(shown_saved(&subject, saved))
+    let gate = tauri_gate(state, &actor).await?;
+    ops::time::update(&gate, &state.time_entries, id, values).await
 }
 
 #[tauri::command]
@@ -4137,19 +4003,8 @@ async fn time_entries_delete_body(
     row_version: i64,
 ) -> Result<(), BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let entry = own_time_entry(state, id).await?;
-    let (_, user_id) = time_guard(state, &actor, enter_time_op(entry.project_id)).await?;
-    state.time_entries.delete(user_id, id, row_version).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "delete",
-        TIME_RESOURCE,
-        Some(&id.to_string()),
-        Some(entry.audit_detail()),
-    )
-    .await;
-    Ok(())
+    let gate = tauri_gate(state, &actor).await?;
+    ops::time::delete(&gate, &state.time_entries, id, row_version).await
 }
 
 #[tauri::command]
@@ -4167,22 +4022,8 @@ async fn time_entries_submit_body(
     values: VersionInput,
 ) -> Result<TimeEntry, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let entry = own_time_entry(state, id).await?;
-    let (subject, user_id) = time_guard(state, &actor, enter_time_op(entry.project_id)).await?;
-    let entry = state
-        .time_entries
-        .submit(user_id, id, values.row_version)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "submit",
-        TIME_RESOURCE,
-        Some(&id.to_string()),
-        Some(entry.audit_detail()),
-    )
-    .await;
-    Ok(shown(&subject, entry))
+    let gate = tauri_gate(state, &actor).await?;
+    ops::time::submit(&gate, &state.time_entries, id, values).await
 }
 
 #[tauri::command]
@@ -4191,12 +4032,9 @@ async fn time_entries_approvals(state: State<'_, AppState>) -> Result<Vec<TimeEn
 }
 
 async fn time_entries_approvals_body(state: &AppState) -> Result<Vec<TimeEntry>, BantoError> {
-    require_role(state, Role::Viewer, TIME_RESOURCE).await?;
-    let subject = caller_subject(state).await?;
-    let scope = approval_projects(&subject);
-    let common = subject.is_company_member() && subject.has(Capability::FinanceClose);
-    let rows = state.time_entries.approvals(&scope, common).await?;
-    Ok(rows.into_iter().map(|e| shown(&subject, e)).collect())
+    let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
+    let gate = tauri_gate(state, &identity).await?;
+    ops::time::approvals(&gate, &state.time_entries).await
 }
 
 #[tauri::command]
@@ -4214,29 +4052,8 @@ async fn time_entries_decide_body(
     values: DecisionInput,
 ) -> Result<TimeEntry, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let entry = state.time_entries.get(id).await?;
-    let (subject, user_id, allowed) = business_guard_with(
-        state,
-        &actor,
-        approve_op(&entry),
-        admin_template_core::approval::APPROVAL_POLICY,
-        TIME_RESOURCE,
-    )
-    .await?;
-    let approve = values.approve;
-    let entry = state.time_entries.decide(&entry, values, user_id).await?;
-    let mut detail = entry.audit_detail();
-    detail["selfApproval"] = serde_json::json!(allowed.self_approval_exception);
-    record_ok(
-        &state.audit,
-        &actor,
-        if approve { "approve" } else { "return" },
-        TIME_RESOURCE,
-        Some(&id.to_string()),
-        Some(detail),
-    )
-    .await;
-    Ok(shown(&subject, entry))
+    let gate = tauri_gate(state, &actor).await?;
+    ops::time::decide(&gate, &state.time_entries, id, values).await
 }
 
 /// Tauri twin of `POST /api/time-entries/{id}/correct` (P6b-2, T11).
@@ -4255,23 +4072,8 @@ async fn time_entries_correct_body(
     values: CorrectionInput,
 ) -> Result<TimeEntrySaved, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    own_time_entry(state, id).await?;
-    let (subject, user_id) =
-        time_guard(state, &actor, enter_time_op(values.entry.project_id)).await?;
-    let saved = state.time_entries.correct(user_id, id, values).await?;
-    if !saved.replayed {
-        // The reason is free text: kept on the row, not in the audit log.
-        record_ok(
-            &state.audit,
-            &actor,
-            "correct",
-            TIME_RESOURCE,
-            Some(&saved.entry.id.to_string()),
-            Some(saved.entry.audit_detail()),
-        )
-        .await;
-    }
-    Ok(shown_saved(&subject, saved))
+    let gate = tauri_gate(state, &actor).await?;
+    ops::time::correct(&gate, &state.time_entries, id, values).await
 }
 
 /// Tauri twin of `GET /api/time-entries/{id}/corrections`.
@@ -4288,10 +4090,8 @@ async fn time_entries_corrections_body(
     id: i64,
 ) -> Result<Vec<TimeEntry>, BantoError> {
     let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
-    own_time_entry(state, id).await?;
-    let (subject, user_id) = time_guard(state, &identity, Operation::EnterCommonTime).await?;
-    let rows = state.time_entries.corrections_of(user_id, id).await?;
-    Ok(rows.into_iter().map(|e| shown(&subject, e)).collect())
+    let gate = tauri_gate(state, &identity).await?;
+    ops::time::corrections_of(&gate, &state.time_entries, id).await
 }
 
 /// Tauri twin of `GET /api/time-entries/corrections`: accounting's queue.
@@ -4305,13 +4105,9 @@ async fn time_entries_pending_corrections(
 async fn time_entries_pending_corrections_body(
     state: &AppState,
 ) -> Result<Vec<CorrectionPair>, BantoError> {
-    require_role(state, Role::Viewer, TIME_RESOURCE).await?;
-    let subject = caller_subject(state).await?;
-    if !(subject.is_company_member() && subject.has(Capability::FinanceClose)) {
-        return Ok(Vec::new());
-    }
-    let rows = state.time_entries.pending_corrections().await?;
-    Ok(rows.into_iter().map(|p| shown_pair(&subject, p)).collect())
+    let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
+    let gate = tauri_gate(state, &identity).await?;
+    ops::time::pending_corrections(&gate, &state.time_entries).await
 }
 
 #[tauri::command]
@@ -4327,14 +4123,8 @@ async fn project_time_summary_body(
     project_id: i64,
 ) -> Result<ProjectTimeSummary, BantoError> {
     let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        TIME_RESOURCE,
-    )
-    .await?;
-    state.time_entries.project_summary(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::time::project_summary(&gate, &state.time_entries, project_id).await
 }
 
 // --- banto-cost P4c: budget versions -----------------------------------------
@@ -4967,52 +4757,8 @@ async fn business_calendar_get_body(
 // --- banto-cost P4d: vendors, direct costs and purchase orders ---------------
 // Twins of `/api/vendors/*`, `/api/direct-costs/*`, `/api/purchase-orders/*`
 // and `/api/projects/{id}/costs` (`admin_template_core::rest::costs`): the
-// same role floors, the same `Operation`s from `cost_access` through
-// `authorize_audited` (`EnterCost`, `ApproveCost` with `APPROVAL_POLICY`,
-// `EditPurchaseOrder`, `ViewProjectAmounts`), the same audit actions and
-// detail (`DirectCost::audit_detail`, `PurchaseOrderView::audit_detail`, no
-// amounts).
-
-/// Authorize every op (each denial is recorded); the subject, the caller's
-/// user row, and whether a self-approval exception was used.
-async fn cost_guard_all(
-    state: &AppState,
-    identity: &UserIdentity,
-    ops: &[Operation],
-    policy: Policy,
-    resource: &str,
-) -> Result<(Subject, Option<i64>, bool), BantoError> {
-    let mut out = None;
-    let mut exception = false;
-    for op in ops {
-        let (subject, user_id, allowed) =
-            business_guard_with(state, identity, *op, policy, resource).await?;
-        exception |= allowed.self_approval_exception;
-        out = Some((subject, user_id));
-    }
-    let (subject, user_id) = out.ok_or(BantoError::Forbidden)?;
-    Ok((subject, user_id, exception))
-}
-
-async fn cost_caller(state: &AppState) -> Result<i64, BantoError> {
-    let session = current_session(state)
-        .await?
-        .ok_or(BantoError::Unauthorized)?;
-    session_user_id(&session).ok_or(BantoError::Forbidden)
-}
-
-/// The caller's own record; someone else's reads as not found (as on REST).
-async fn own_direct_cost(state: &AppState, id: i64) -> Result<(DirectCost, i64), BantoError> {
-    let user_id = cost_caller(state).await?;
-    let cost = state.direct_costs.get(id).await?;
-    if cost.user_id != user_id {
-        return Err(BantoError::NotFound {
-            resource: COST_RESOURCE.into(),
-            id: id.to_string(),
-        });
-    }
-    Ok((cost, user_id))
-}
+// same role floors here, then the same authorized operation
+// (`admin_template_core::ops::costs`, vendors `ops::work_masters`).
 
 #[tauri::command]
 async fn vendors_list(state: State<'_, AppState>) -> Result<Vec<WorkMaster>, BantoError> {
@@ -5054,10 +4800,8 @@ async fn direct_costs_list_body(
     to: String,
 ) -> Result<Vec<DirectCost>, BantoError> {
     let identity = require_role(state, Role::Viewer, COST_RESOURCE).await?;
-    let (_, user_id) =
-        business_guard(state, &identity, Operation::ViewMasters, COST_RESOURCE).await?;
-    let user_id = user_id.ok_or(BantoError::Forbidden)?;
-    state.direct_costs.list_own(user_id, &from, &to).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::costs::list_own(&gate, &state.direct_costs, &from, &to).await
 }
 
 #[tauri::command]
@@ -5073,22 +4817,8 @@ async fn direct_costs_create_body(
     values: DirectCostInput,
 ) -> Result<DirectCostSaved, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let user_id = cost_caller(state).await?;
-    let ops = cost_entry_ops(&state.direct_costs, &values, None, user_id).await?;
-    cost_guard_all(state, &actor, &ops, Policy::default(), COST_RESOURCE).await?;
-    let saved = state.direct_costs.create(user_id, values).await?;
-    if !saved.replayed {
-        record_ok(
-            &state.audit,
-            &actor,
-            "create",
-            COST_RESOURCE,
-            Some(&saved.cost.id.to_string()),
-            Some(saved.cost.audit_detail()),
-        )
-        .await;
-    }
-    Ok(saved)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::costs::create(&gate, &state.direct_costs, values).await
 }
 
 #[tauri::command]
@@ -5106,20 +4836,8 @@ async fn direct_costs_update_body(
     values: DirectCostInput,
 ) -> Result<DirectCostSaved, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (kept, user_id) = own_direct_cost(state, id).await?;
-    let ops = cost_entry_ops(&state.direct_costs, &values, Some(&kept), user_id).await?;
-    cost_guard_all(state, &actor, &ops, Policy::default(), COST_RESOURCE).await?;
-    let saved = state.direct_costs.update(user_id, id, values).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        COST_RESOURCE,
-        Some(&id.to_string()),
-        Some(saved.cost.audit_detail()),
-    )
-    .await;
-    Ok(saved)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::costs::update(&gate, &state.direct_costs, id, values).await
 }
 
 #[tauri::command]
@@ -5137,26 +4855,8 @@ async fn direct_costs_delete_body(
     row_version: i64,
 ) -> Result<(), BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (cost, user_id) = own_direct_cost(state, id).await?;
-    cost_guard_all(
-        state,
-        &actor,
-        &cost_own_ops(&cost),
-        Policy::default(),
-        COST_RESOURCE,
-    )
-    .await?;
-    state.direct_costs.delete(user_id, id, row_version).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "delete",
-        COST_RESOURCE,
-        Some(&id.to_string()),
-        Some(cost.audit_detail()),
-    )
-    .await;
-    Ok(())
+    let gate = tauri_gate(state, &actor).await?;
+    ops::costs::delete(&gate, &state.direct_costs, id, row_version).await
 }
 
 #[tauri::command]
@@ -5174,29 +4874,8 @@ async fn direct_costs_submit_body(
     values: VersionInput,
 ) -> Result<DirectCost, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (cost, user_id) = own_direct_cost(state, id).await?;
-    cost_guard_all(
-        state,
-        &actor,
-        &cost_own_ops(&cost),
-        Policy::default(),
-        COST_RESOURCE,
-    )
-    .await?;
-    let cost = state
-        .direct_costs
-        .submit(user_id, id, values.row_version)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "submit",
-        COST_RESOURCE,
-        Some(&id.to_string()),
-        Some(cost.audit_detail()),
-    )
-    .await;
-    Ok(cost)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::costs::submit(&gate, &state.direct_costs, id, values).await
 }
 
 #[tauri::command]
@@ -5205,10 +4884,9 @@ async fn direct_costs_approvals(state: State<'_, AppState>) -> Result<Vec<Direct
 }
 
 async fn direct_costs_approvals_body(state: &AppState) -> Result<Vec<DirectCost>, BantoError> {
-    require_role(state, Role::Viewer, COST_RESOURCE).await?;
-    let subject = caller_subject(state).await?;
-    let scope = cost_approval_projects(&subject);
-    state.direct_costs.approvals(&scope).await
+    let identity = require_role(state, Role::Viewer, COST_RESOURCE).await?;
+    let gate = tauri_gate(state, &identity).await?;
+    ops::costs::approvals(&gate, &state.direct_costs).await
 }
 
 #[tauri::command]
@@ -5226,29 +4904,8 @@ async fn direct_costs_decide_body(
     values: DecisionInput,
 ) -> Result<DirectCost, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let cost = state.direct_costs.get(id).await?;
-    let (_, user_id, exception) = cost_guard_all(
-        state,
-        &actor,
-        &cost_approve_ops(&cost),
-        admin_template_core::approval::APPROVAL_POLICY,
-        COST_RESOURCE,
-    )
-    .await?;
-    let approve = values.approve;
-    let cost = state.direct_costs.decide(&cost, values, user_id).await?;
-    let mut detail = cost.audit_detail();
-    detail["selfApproval"] = serde_json::json!(exception);
-    record_ok(
-        &state.audit,
-        &actor,
-        if approve { "approve" } else { "return" },
-        COST_RESOURCE,
-        Some(&id.to_string()),
-        Some(detail),
-    )
-    .await;
-    Ok(cost)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::costs::decide(&gate, &state.direct_costs, id, values).await
 }
 
 #[tauri::command]
@@ -5261,14 +4918,8 @@ async fn project_costs(
 
 async fn project_costs_body(state: &AppState, project_id: i64) -> Result<ProjectCosts, BantoError> {
     let identity = require_role(state, Role::Viewer, COST_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        COST_RESOURCE,
-    )
-    .await?;
-    state.direct_costs.project_costs(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::costs::project_costs(&gate, &state.direct_costs, project_id).await
 }
 
 #[tauri::command]
@@ -5284,26 +4935,8 @@ async fn purchase_orders_create_body(
     values: PurchaseOrderInput,
 ) -> Result<PurchaseOrderSaved, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        order_create_op(values.project_id)?,
-        ORDER_RESOURCE,
-    )
-    .await?;
-    let saved = state.direct_costs.create_order(values, user_id).await?;
-    if !saved.replayed {
-        record_ok(
-            &state.audit,
-            &actor,
-            "create",
-            ORDER_RESOURCE,
-            Some(&saved.order.id.to_string()),
-            Some(saved.order.audit_detail()),
-        )
-        .await;
-    }
-    Ok(saved)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::costs::create_order(&gate, &state.direct_costs, values).await
 }
 
 #[tauri::command]
@@ -5321,27 +4954,8 @@ async fn purchase_orders_update_body(
     values: PurchaseOrderInput,
 ) -> Result<PurchaseOrderView, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let order = state.direct_costs.order(id).await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::EditPurchaseOrder {
-            project_id: order.project_id,
-        },
-        ORDER_RESOURCE,
-    )
-    .await?;
-    let saved = state.direct_costs.update_order(id, values, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        ORDER_RESOURCE,
-        Some(&id.to_string()),
-        Some(saved.audit_detail()),
-    )
-    .await;
-    Ok(saved)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::costs::update_order(&gate, &state.direct_costs, id, values).await
 }
 
 #[tauri::command]
@@ -5359,32 +4973,8 @@ async fn purchase_orders_revise_body(
     values: OrderRevisionInput,
 ) -> Result<PurchaseOrderView, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let order = state.direct_costs.order(id).await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::EditPurchaseOrder {
-            project_id: order.project_id,
-        },
-        ORDER_RESOURCE,
-    )
-    .await?;
-    let action = if values.kind == "cancel" {
-        "cancel"
-    } else {
-        "revise"
-    };
-    let saved = state.direct_costs.revise_order(id, values, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        action,
-        ORDER_RESOURCE,
-        Some(&id.to_string()),
-        Some(saved.audit_detail()),
-    )
-    .await;
-    Ok(saved)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::costs::revise_order(&gate, &state.direct_costs, id, values).await
 }
 
 /// `admin`-only (spec M10): the user-management screen's account list.

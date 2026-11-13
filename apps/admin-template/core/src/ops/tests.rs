@@ -9,13 +9,15 @@ use banto_core::{BantoError, ListParams};
 use banto_storage::Db;
 
 use super::{
-    budgets, calc_basis, closeouts, closing, fixed_costs, forecasts, orders, pipeline, projects,
-    recurring_revenue, reports, Caller, Gate,
+    budgets, calc_basis, closeouts, closing, costs, fixed_costs, forecasts, orders, pipeline,
+    projects, recurring_revenue, reports, time, work_masters, Caller, Gate,
 };
 use crate::budgets::BudgetsService;
 use crate::calc_basis::tests::value as calc_value;
 use crate::calc_basis::CalcBasisService;
 use crate::customers::{CustomerInput, CustomersService};
+use crate::direct_costs::tests::cost;
+use crate::direct_costs::{DirectCostsService, OrderRevisionInput, PurchaseOrderInput};
 use crate::forecasts::ForecastsService;
 use crate::orders::tests::{conversion, line, ordered_project, pipeline_project, row_version};
 use crate::orders::OrdersService;
@@ -23,7 +25,9 @@ use crate::pipeline::tests::version as pipeline_version;
 use crate::pipeline::PipelineService;
 use crate::projects::tests::{fixture, input as project_input};
 use crate::projects::ProjectsService;
+use crate::time_entries::{DecisionInput, TimeEntriesService, TimeEntryInput, VersionInput};
 use crate::users::UsersService;
+use crate::work_masters::{MasterKind, WorkMasterInput, WorkMastersService};
 
 const ADMIN: i64 = 1;
 const PM: i64 = 2;
@@ -40,6 +44,9 @@ struct Env {
     calc_basis: CalcBasisService,
     orders: OrdersService,
     users: UsersService,
+    time_entries: TimeEntriesService,
+    direct_costs: DirectCostsService,
+    work_masters: WorkMastersService,
 }
 
 impl Env {
@@ -56,6 +63,9 @@ impl Env {
             calc_basis: CalcBasisService::new(db.clone()),
             orders: OrdersService::new(db.clone()),
             users: UsersService::new(db.clone()),
+            time_entries: TimeEntriesService::new(db.clone()),
+            direct_costs: DirectCostsService::new(db.clone()),
+            work_masters: WorkMastersService::new(db.clone()),
             db,
         }
     }
@@ -821,5 +831,287 @@ async fn t23_t24_orders_are_the_owners_recognition_accountings_and_audited_witho
     }
     let denied: Vec<_> = rows.iter().filter(|r| r.action == "denied").collect();
     assert_eq!(denied.len(), 3);
+    assert!(denied.iter().all(|r| r.origin == "tauri"));
+}
+
+fn decision(row_version: i64) -> DecisionInput {
+    DecisionInput {
+        row_version,
+        approve: true,
+        reason: None,
+    }
+}
+
+#[tokio::test]
+async fn t08_time_entries_are_the_callers_own_rates_masked_and_audited_without_them() {
+    let env = Env::new().await;
+    let project = env
+        .projects
+        .create(project_input("P-X06"), Some(ADMIN))
+        .await
+        .unwrap()
+        .id;
+    env.calc_basis
+        .add(
+            None,
+            calc_value("emp_rate", "2026-06-01", Some(5_432), "架空の単価"),
+            Some(ADMIN),
+        )
+        .await
+        .unwrap();
+    let hours = |minutes| TimeEntryInput {
+        work_date: "2026-11-02".into(),
+        project_id: Some(project),
+        phase_id: Some(1),
+        minutes,
+        description: Some("架空の作業".into()),
+        ..Default::default()
+    };
+
+    // The manager enters hours with time.entry only.
+    let pm = env.gate(PM);
+    assert!(forbidden(
+        time::create(&pm, &env.time_entries, hours(60)).await
+    ));
+    env.grant(PM, &[Capability::TimeEntry, Capability::ProjectManage])
+        .await;
+    let saved = time::create(&pm, &env.time_entries, hours(60))
+        .await
+        .unwrap();
+    let id = saved.entry.id;
+    let mut change = hours(90);
+    change.row_version = Some(saved.entry.row_version);
+    let updated = time::update(&pm, &env.time_entries, id, change)
+        .await
+        .unwrap();
+
+    // Someone else's entry reads as not found, before any decision.
+    let admin = env.gate(ADMIN);
+    let mut other = hours(30);
+    other.row_version = Some(updated.entry.row_version);
+    assert!(matches!(
+        time::update(&admin, &env.time_entries, id, other).await,
+        Err(BantoError::NotFound { .. })
+    ));
+
+    // Submitted and approved by the manager: self-approval is allowed and
+    // audited; without finance.rate the rate and cost stay hidden.
+    let submitted = time::submit(
+        &pm,
+        &env.time_entries,
+        id,
+        VersionInput {
+            row_version: updated.entry.row_version,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        time::approvals(&pm, &env.time_entries).await.unwrap().len(),
+        1
+    );
+    let approved = time::decide(&pm, &env.time_entries, id, decision(submitted.row_version))
+        .await
+        .unwrap();
+    assert_eq!(approved.status, "approved");
+    assert_eq!((approved.applied_rate, approved.labor_cost), (None, None));
+    assert!(time::pending_corrections(&pm, &env.time_entries)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // The project's summary is the amounts' (amount.view).
+    assert!(forbidden(
+        time::project_summary(&pm, &env.time_entries, project).await
+    ));
+    env.grant(
+        PM,
+        &[
+            Capability::TimeEntry,
+            Capability::ProjectManage,
+            Capability::AmountView,
+            Capability::FinanceRate,
+        ],
+    )
+    .await;
+    assert_eq!(
+        time::project_summary(&pm, &env.time_entries, project)
+            .await
+            .unwrap()
+            .total
+            .labor_cost,
+        8_148
+    );
+    let own = time::list_own(&pm, &env.time_entries, "2026-11-01", "2026-11-30")
+        .await
+        .unwrap();
+    assert_eq!(own[0].labor_cost, Some(8_148));
+
+    let rows = env.audit_rows().await;
+    let writes: Vec<_> = rows.iter().filter(|r| r.result == "ok").collect();
+    assert_eq!(
+        writes
+            .iter()
+            .map(|r| (r.action.as_str(), r.resource.as_str(), r.origin.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("create", "time_entries", "tauri"),
+            ("update", "time_entries", "tauri"),
+            ("submit", "time_entries", "tauri"),
+            ("approve", "time_entries", "tauri"),
+        ]
+    );
+    assert!(writes[3]
+        .detail
+        .as_deref()
+        .unwrap()
+        .contains("\"selfApproval\":true"));
+    for row in &writes {
+        let detail = row.detail.as_deref().unwrap();
+        assert!(!detail.contains("5432") && !detail.contains("8148"));
+    }
+    let denied: Vec<_> = rows.iter().filter(|r| r.action == "denied").collect();
+    assert_eq!(denied.len(), 2);
+    assert!(denied
+        .iter()
+        .all(|r| r.origin == "tauri" && r.resource == "time_entries"));
+}
+
+#[tokio::test]
+async fn t10_t14_direct_costs_need_the_project_and_approving_them_its_amounts() {
+    let env = Env::new().await;
+    let project = crate::budgets::tests::ordered_project(&env.db, "P-X07").await;
+
+    // Vendors are a master: the admin role maintains them without a
+    // capability; the manager needs masters.edit.
+    let admin = env.gate(ADMIN);
+    let pm = env.gate(PM);
+    let vendor = || WorkMasterInput {
+        name: "架空外注".into(),
+        sort_order: 0,
+        active: true,
+        row_version: None,
+    };
+    work_masters::write(
+        &admin,
+        &env.work_masters,
+        MasterKind::Vendors,
+        None,
+        vendor(),
+    )
+    .await
+    .unwrap();
+    assert!(forbidden(
+        work_masters::write(&pm, &env.work_masters, MasterKind::Vendors, None, vendor()).await
+    ));
+
+    // The manager enters a cost on the project (project.manage) and
+    // submits it; someone else's record reads as not found.
+    env.grant(PM, &[Capability::ProjectManage]).await;
+    let saved = costs::create(&pm, &env.direct_costs, cost(project, "material", 123_456))
+        .await
+        .unwrap();
+    let id = saved.cost.id;
+    assert!(matches!(
+        costs::delete(&admin, &env.direct_costs, id, saved.cost.row_version).await,
+        Err(BantoError::NotFound { .. })
+    ));
+    let submitted = costs::submit(
+        &pm,
+        &env.direct_costs,
+        id,
+        VersionInput {
+            row_version: saved.cost.row_version,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Approving needs amount.view as well; then self-approval is allowed.
+    assert!(forbidden(
+        costs::decide(&pm, &env.direct_costs, id, decision(submitted.row_version)).await
+    ));
+    env.grant(PM, &[Capability::ProjectManage, Capability::AmountView])
+        .await;
+    assert_eq!(
+        costs::approvals(&pm, &env.direct_costs)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let approved = costs::decide(&pm, &env.direct_costs, id, decision(submitted.row_version))
+        .await
+        .unwrap();
+    assert_eq!(approved.status, "approved");
+
+    // Orders are the manager's on their project.
+    let order = costs::create_order(
+        &pm,
+        &env.direct_costs,
+        PurchaseOrderInput {
+            project_id: Some(project),
+            cost_type: Some("outsource".into()),
+            ordered_on: "2026-11-01".into(),
+            amount: Some(654_321),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .order;
+    let cancelled = costs::revise_order(
+        &pm,
+        &env.direct_costs,
+        order.id,
+        OrderRevisionInput {
+            kind: "cancel".into(),
+            amount: 54_321,
+            reason: Some("架空の取消理由".into()),
+            row_version: order.row_version,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(cancelled.remaining, 600_000);
+    assert_eq!(
+        costs::project_costs(&pm, &env.direct_costs, project)
+            .await
+            .unwrap()
+            .orders
+            .len(),
+        1
+    );
+
+    // Writes are audited once each with the caller's origin, never with an
+    // amount or a reason.
+    let rows = env.audit_rows().await;
+    let writes: Vec<_> = rows.iter().filter(|r| r.result == "ok").collect();
+    assert_eq!(
+        writes
+            .iter()
+            .map(|r| (r.action.as_str(), r.resource.as_str(), r.origin.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("create", "vendors", "tauri"),
+            ("create", "direct_costs", "tauri"),
+            ("submit", "direct_costs", "tauri"),
+            ("approve", "direct_costs", "tauri"),
+            ("create", "purchase_orders", "tauri"),
+            ("cancel", "purchase_orders", "tauri"),
+        ]
+    );
+    assert!(writes[3]
+        .detail
+        .as_deref()
+        .unwrap()
+        .contains("\"selfApproval\":true"));
+    for row in &writes {
+        let detail = row.detail.as_deref().unwrap();
+        assert!(!detail.contains("123456") && !detail.contains("654321"));
+        assert!(!detail.contains("架空の取消理由"));
+    }
+    let denied: Vec<_> = rows.iter().filter(|r| r.action == "denied").collect();
+    assert_eq!(denied.len(), 2);
     assert!(denied.iter().all(|r| r.origin == "tauri"));
 }

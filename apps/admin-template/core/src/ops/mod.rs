@@ -20,12 +20,15 @@
 //! areas with the fewest operations, as the review proposed - then 予算
 //! ([`budgets`]), 完了見込と全体一覧 ([`forecasts`]) and 帳票 ([`reports`]),
 //! then 顧客・案件 ([`projects`]), 見込 ([`pipeline`]) and 計算基準
-//! ([`calc_basis`]), then 受注・売上・月次見通し ([`orders`]).
+//! ([`calc_basis`]), then 受注・売上・月次見通し ([`orders`]), then 工数
+//! ([`time`]), 直接費・発注 ([`costs`]) and their masters
+//! ([`work_masters`]) - every business route and command.
 
 pub mod budgets;
 pub mod calc_basis;
 pub mod closeouts;
 pub mod closing;
+pub mod costs;
 pub mod fixed_costs;
 pub mod forecasts;
 pub mod orders;
@@ -33,6 +36,8 @@ pub mod pipeline;
 pub mod projects;
 pub mod recurring_revenue;
 pub mod reports;
+pub mod time;
+pub mod work_masters;
 
 use banto_admin_services::audit::{AuditEntry, AuditLogService};
 use std::str::FromStr;
@@ -130,8 +135,39 @@ impl Gate<'_> {
         Ok(())
     }
 
+    /// Decide every op under `policy` (each denial is audited; the first
+    /// stops), returning the subject and whether any decision used the
+    /// self-approval exception. An empty list is refused.
+    pub async fn check_all(
+        &self,
+        ops: &[Operation],
+        policy: Policy,
+        resource: &str,
+    ) -> Result<(Subject, bool), BantoError> {
+        let mut subject = None;
+        let mut exception = false;
+        for op in ops {
+            let (s, allowed) = self.check_with(*op, policy, resource).await?;
+            exception |= allowed.self_approval_exception;
+            subject = Some(s);
+        }
+        Ok((subject.ok_or(BantoError::Forbidden)?, exception))
+    }
+
     pub fn user_id(&self) -> Option<i64> {
         self.caller.user_id
+    }
+
+    /// The caller's user row, refusing a session without one (time entries
+    /// and direct costs belong to a person).
+    pub fn person(&self) -> Result<i64, BantoError> {
+        self.caller.user_id.ok_or(BantoError::Forbidden)
+    }
+
+    /// The caller's subject, without deciding anything (lists narrowed by a
+    /// scope, masking).
+    pub async fn subject(&self) -> Result<Subject, BantoError> {
+        self.authz.subject(self.caller.user_id).await
     }
 
     /// Whether the caller holds the `admin` role.

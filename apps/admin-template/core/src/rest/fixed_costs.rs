@@ -87,7 +87,7 @@ pub(super) fn fixed_costs_read_router(
     Router::new()
         .route("/api/fixed-costs/contracts", get(contracts_list))
         .route("/api/fixed-costs/months/{month}", get(month_get))
-        .with_state(super::projects::state(services, audit, auth.clone()))
+        .with_state(super::projects::state(services, audit))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -108,11 +108,7 @@ pub(super) fn fixed_costs_write_router(
             "/api/fixed-costs/postings/{id}/cancel",
             post(posting_cancel),
         )
-        .with_state(super::projects::state(
-            services,
-            audit.clone(),
-            auth.clone(),
-        ))
+        .with_state(super::projects::state(services, audit.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {
                 auth: auth.clone(),

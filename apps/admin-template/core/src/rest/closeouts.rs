@@ -60,7 +60,7 @@ pub(super) fn closeout_read_router(
 ) -> Router {
     Router::new()
         .route("/api/projects/{id}/closeout", get(closeout_get))
-        .with_state(super::projects::state(services, audit, auth.clone()))
+        .with_state(super::projects::state(services, audit))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -73,11 +73,7 @@ pub(super) fn closeout_write_router(
     Router::new()
         .route("/api/projects/{id}/closeout", post(closeout_settle))
         .route("/api/projects/{id}/closeout/reopen", post(closeout_reopen))
-        .with_state(super::projects::state(
-            services,
-            audit.clone(),
-            auth.clone(),
-        ))
+        .with_state(super::projects::state(services, audit.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {
                 auth: auth.clone(),
