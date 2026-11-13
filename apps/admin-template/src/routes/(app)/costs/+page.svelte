@@ -230,12 +230,29 @@
 		if (acting || pendingApprove.length === 0) return;
 		// Act on the records the dialog counted, not a list reloaded while it was open.
 		const rows = pendingApprove;
+		const excluded = pendingSubmit.length - rows.length;
+		// Each record that becomes an actual (PR #62 review): date, target, type, amount.
+		const details = [
+			{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: rows.length }) },
+			{
+				label: m['costs.colAmount'](),
+				value: formatSignedYen(rows.reduce((sum, c) => sum + signedAmount(c), 0))
+			},
+			...rows.map((c) => ({
+				label: `${c.bookedOn} #${c.id}`,
+				value: `${targetLabel(c)} / ${costTypeLabel(c.costType)} / ${formatSignedYen(signedAmount(c))}`
+			}))
+		];
+		if (excluded > 0) {
+			details.push({
+				label: m['approvals.excludedLabel'](),
+				value: m['costs.submitApproveExcluded']({ count: excluded })
+			});
+		}
 		const ok = await confirmAction({
 			title: m['costs.submitApproveConfirmTitle'](),
 			body: m['costs.submitApproveAllConfirm']({ count: rows.length }),
-			details: [
-				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: rows.length }) }
-			],
+			details,
 			undo: m['costs.approveUndo'](),
 			confirmLabel: m['costs.submitApproveAll']({ count: rows.length })
 		});
