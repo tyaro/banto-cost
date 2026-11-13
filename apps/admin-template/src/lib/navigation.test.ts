@@ -226,6 +226,14 @@ describe('navSections with capabilities', () => {
 		).toEqual(paths(navItems.filter((item) => item.publicViewer)));
 	});
 
+	it('with no capability at all, an editor sees only the dashboard and the settings; an admin keeps the masters', () => {
+		const none = new Set<Capability>();
+		expect(main(none)).toEqual(['/dashboard', '/settings']);
+		expect(
+			paths(navSections({ publicViewer: false, role: 'admin', capabilities: none }).main)
+		).toEqual(['/dashboard', '/projects', '/customers', '/work-masters', '/settings']);
+	});
+
 	it('meetsCapabilityRule: all and any', () => {
 		const held = new Set<Capability>(['amount.view', 'finance.rate']);
 		expect(meetsCapabilityRule(undefined, held)).toBe(true);
@@ -234,5 +242,8 @@ describe('navSections with capabilities', () => {
 		expect(meetsCapabilityRule({ all: ['amount.view', 'finance.close'] }, held)).toBe(false);
 		expect(meetsCapabilityRule({ any: ['finance.close', 'finance.rate'] }, held)).toBe(true);
 		expect(meetsCapabilityRule({ all: ['amount.view'], any: ['report.all'] }, held)).toBe(false);
+		expect(meetsCapabilityRule({ memberOrAdmin: true }, held)).toBe(true);
+		expect(meetsCapabilityRule({ memberOrAdmin: true }, new Set())).toBe(false);
+		expect(meetsCapabilityRule({ memberOrAdmin: true }, new Set(), true)).toBe(true);
 	});
 });

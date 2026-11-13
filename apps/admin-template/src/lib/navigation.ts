@@ -125,14 +125,25 @@ export interface NavItem {
 export interface CapabilityRule {
 	all?: readonly Capability[];
 	any?: readonly Capability[];
+	/**
+	 * A company member: any capability at all, or the `admin` role (the
+	 * masters and the project list, read through `ViewMasters` /
+	 * `check_or_admin` and `visible_scope`; PR #60 review).
+	 */
+	memberOrAdmin?: true;
 }
 
-/** Does `held` satisfy `rule`? `held === null` (grants unknown) satisfies everything. */
+/**
+ * Does `held` satisfy `rule`? `held === null` (grants unknown) satisfies
+ * everything. `admin` is the `admin` role (only `memberOrAdmin` reads it).
+ */
 export function meetsCapabilityRule(
 	rule: CapabilityRule | undefined,
-	held: ReadonlySet<Capability> | null | undefined
+	held: ReadonlySet<Capability> | null | undefined,
+	admin = false
 ): boolean {
 	if (!rule || !held) return true;
+	if (rule.memberOrAdmin && !admin && held.size === 0) return false;
 	if (rule.all && !rule.all.every((cap) => held.has(cap))) return false;
 	if (rule.any && !rule.any.some((cap) => held.has(cap))) return false;
 	return true;
@@ -163,6 +174,7 @@ const allNavItems: NavItem[] = [
 		labelKey: 'nav.projects',
 		icon: 'projects',
 		group: 'nav.groupProjects',
+		capabilities: { memberOrAdmin: true },
 		badgeResource: 'projects',
 		pageTitleResource: 'projects',
 		pageTitles: {
@@ -175,6 +187,7 @@ const allNavItems: NavItem[] = [
 		labelKey: 'nav.customers',
 		icon: 'customers',
 		group: 'nav.groupProjects',
+		capabilities: { memberOrAdmin: true },
 		badgeResource: 'customers',
 		pageTitleResource: 'customers',
 		pageTitles: {
@@ -245,7 +258,8 @@ const allNavItems: NavItem[] = [
 		path: '/work-masters',
 		labelKey: 'nav.workMasters',
 		icon: 'work-masters',
-		group: 'nav.groupBasis'
+		group: 'nav.groupBasis',
+		capabilities: { memberOrAdmin: true }
 	},
 	{ path: '/ui-demo', labelKey: 'nav.uiDemo', icon: 'ui-demo', demoOnly: true },
 	{ path: '/users', labelKey: 'nav.users', icon: 'users', adminOnly: true },
@@ -294,7 +308,9 @@ export function navSections(session: {
 		main: session.publicViewer
 			? publicNavItems()
 			: navItems.filter(
-					(item) => !item.adminOnly && meetsCapabilityRule(item.capabilities, session.capabilities)
+					(item) =>
+						!item.adminOnly &&
+						meetsCapabilityRule(item.capabilities, session.capabilities, isAdmin(session.role))
 				),
 		admin:
 			!session.publicViewer && isAdmin(session.role)
