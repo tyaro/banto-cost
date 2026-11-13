@@ -34,8 +34,9 @@ use tokio::sync::broadcast;
 use banto_core::{BantoError, FieldError};
 use banto_storage::{Db, Dialect};
 use cost_domain::order::{
-    check_conversion, ChangeStatus, ConversionInput as DomainConversion, ConversionIssue,
-    ConversionScope, OrderBook, OrderChange as DomainChange,
+    check_conversion, check_conversion_cancel, ChangeStatus, ConversionCancelFacts,
+    ConversionCancelIssue, ConversionInput as DomainConversion, ConversionIssue, ConversionScope,
+    OrderBook, OrderChange as DomainChange,
 };
 use cost_domain::pipeline::RevenuePlanLine;
 use cost_domain::project::{
@@ -175,6 +176,23 @@ pub struct OrderConversion {
     pub created_at: String,
 }
 
+/// A cancelled conversion (受注転換の取消, T40), kept as history.
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelledConversion {
+    pub id: i64,
+    pub previous_status: String,
+    pub converted_on: String,
+    pub confirmed_amount: i64,
+    pub basis: String,
+    pub created_by_name: Option<String>,
+    /// The business date of the cancellation.
+    pub cancelled_on: String,
+    pub cancel_reason: String,
+    pub cancelled_by_name: Option<String>,
+    pub cancelled_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderChangeRow {
@@ -253,6 +271,12 @@ pub struct OrderSummary {
     pub recognitions: Vec<RecognitionRow>,
     /// `cost_domain::revenue::RevenueIssue` codes (empty when consistent).
     pub issues: Vec<String>,
+    /// Why the current conversion cannot be cancelled
+    /// (`cost_domain::order::ConversionCancelIssue` codes); empty when it can,
+    /// or when there is no conversion (T40).
+    pub cancel_blockers: Vec<String>,
+    /// Cancelled conversions, newest first (history).
+    pub cancelled_conversions: Vec<CancelledConversion>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -337,6 +361,17 @@ pub struct RecognitionInput {
     pub clears: Option<Vec<ClearingInput>>,
 }
 
+/// 受注転換の取消 (T40).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionCancelInput {
+    /// The project's `rowVersion` the screen was loaded with (T13).
+    #[serde(default)]
+    pub row_version: Option<i64>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelInput {
@@ -368,6 +403,62 @@ struct State {
     recognitions: Vec<RecognitionRow>,
     /// (recognition id, plan id, amount), cancelled recognitions included.
     clearings: Vec<(i64, i64, i64)>,
+    cancel_blockers: Vec<ConversionCancelIssue>,
+    cancelled_conversions: Vec<CancelledConversion>,
+}
+
+/// Counts of the records that block a conversion cancellation (T40):
+/// order changes, recognitions, budgets, time entries, direct costs
+/// (purchase orders, costs, allocations), forecasts, fixed costs (contracts,
+/// postings), recurring revenue.
+#[derive(Default, sqlx::FromRow)]
+struct RecordCounts(i64, i64, i64, i64, i64, i64, i64, i64);
+
+fn cancel_issues(
+    status: ProjectStatus,
+    conversion: &OrderConversion,
+    records: RecordCounts,
+) -> Vec<ConversionCancelIssue> {
+    check_conversion_cancel(&ConversionCancelFacts {
+        status: Some(status),
+        previous: ProjectStatus::parse(&conversion.previous_status),
+        scope: ConversionScope::parse(&conversion.scope),
+        has_order_changes: records.0 > 0,
+        has_recognitions: records.1 > 0,
+        has_budgets: records.2 > 0,
+        has_time_entries: records.3 > 0,
+        has_direct_costs: records.4 > 0,
+        has_forecasts: records.5 > 0,
+        has_fixed_costs: records.6 > 0,
+        has_recurring_revenue: records.7 > 0,
+    })
+}
+
+/// The screen's words for a reason a conversion cannot be cancelled.
+fn cancel_issue_label(issue: ConversionCancelIssue) -> &'static str {
+    match issue {
+        ConversionCancelIssue::NotOrdered => "進行中・作業完了・精算完了の案件",
+        ConversionCancelIssue::PreviousUnknown => "転換前の状態が読めない",
+        ConversionCancelIssue::Partial => "一部受注（残りの範囲の案件がある）",
+        ConversionCancelIssue::OrderChanges => "受注変更",
+        ConversionCancelIssue::Recognitions => "売上計上（取消済みを含む）",
+        ConversionCancelIssue::Budgets => "予算",
+        ConversionCancelIssue::TimeEntries => "工数",
+        ConversionCancelIssue::DirectCosts => "直接費・発注",
+        ConversionCancelIssue::Forecasts => "完了見込",
+        ConversionCancelIssue::FixedCosts => "月額固定",
+        ConversionCancelIssue::RecurringRevenue => "定期売上",
+    }
+}
+
+fn cancel_refused(issues: &[ConversionCancelIssue]) -> BantoError {
+    let labels: Vec<&str> = issues.iter().map(|i| cancel_issue_label(*i)).collect();
+    BantoError::Validation {
+        field_errors: vec![field_error(
+            "status",
+            format!("受注転換を取り消せません（{}）", labels.join("・")),
+        )],
+    }
 }
 
 fn ym(month: &Option<String>) -> Option<YearMonth> {
@@ -512,8 +603,26 @@ impl State {
             issues: revenue
                 .map(|r| r.check().iter().map(issue_code).collect())
                 .unwrap_or_default(),
+            cancel_blockers: self
+                .cancel_blockers
+                .iter()
+                .map(|i| i.code().to_string())
+                .collect(),
+            cancelled_conversions: self.cancelled_conversions,
         }
     }
+}
+
+/// The audit detail of a conversion cancellation (REST and Tauri): the
+/// cancelled conversion, its amount and the status the project went back to.
+/// Never the reason.
+pub fn conversion_cancel_audit_detail(summary: &OrderSummary) -> serde_json::Value {
+    let cancelled = summary.cancelled_conversions.first();
+    serde_json::json!({
+        "conversionId": cancelled.map(|c| c.id),
+        "confirmedAmount": cancelled.map(|c| c.confirmed_amount),
+        "status": summary.status,
+    })
 }
 
 pub(crate) fn issue_code(issue: &RevenueIssue) -> String {
@@ -818,7 +927,17 @@ impl OrdersService {
              u.display_name AS created_by_name, c.created_at FROM order_conversions c \
              LEFT JOIN pipeline_versions v ON v.id = c.source_pipeline_version_id \
              LEFT JOIN projects rp ON rp.id = c.remainder_project_id \
-             LEFT JOIN users u ON u.id = c.created_by WHERE c.project_id = ?",
+             LEFT JOIN users u ON u.id = c.created_by \
+             WHERE c.project_id = ? AND c.cancelled_at IS NULL",
+        );
+        let cancelled_sql = self.sql(
+            "SELECT c.id, c.previous_status, c.converted_on, c.confirmed_amount, c.basis, \
+             u.display_name AS created_by_name, c.cancelled_on, c.cancel_reason, \
+             cu.display_name AS cancelled_by_name, c.cancelled_at FROM order_conversions c \
+             LEFT JOIN users u ON u.id = c.created_by \
+             LEFT JOIN users cu ON cu.id = c.cancelled_by \
+             WHERE c.project_id = ? AND c.cancelled_at IS NOT NULL \
+             ORDER BY c.cancelled_at DESC, c.id DESC",
         );
         let changes_sql = self.sql(
             "SELECT c.id, c.change_no, c.delta_amount, c.plan_month, c.status, c.basis, \
@@ -845,13 +964,25 @@ impl OrdersService {
              JOIN revenue_recognitions r ON r.id = c.recognition_id WHERE r.project_id = ? \
              ORDER BY c.recognition_id, c.plan_id",
         );
-        let (conversion, changes, plans, recognitions, clearings) = on_pool!(&self.db, pool => (
+        let records_sql = self.records_sql();
+        let (conversion, changes, plans, recognitions, clearings, cancelled_conversions) = on_pool!(&self.db, pool => (
             fetch_optional!(pool, conversion_sql, project_id)?,
             fetch_all!(pool, changes_sql, project_id)?,
             fetch_all!(pool, plans_sql, project_id)?,
             fetch_all!(pool, recognitions_sql, project_id)?,
             fetch_all!(pool, clearings_sql, project_id)?,
+            fetch_all!(pool, cancelled_sql, project_id)?,
         ));
+        let cancel_blockers = match &conversion {
+            Some(c) => {
+                let records: Option<RecordCounts> = on_pool!(&self.db, pool =>
+                    fetch_optional!(pool, records_sql, project_id, project_id, project_id,
+                        project_id, project_id, project_id, project_id, project_id,
+                        project_id, project_id, project_id))?;
+                cancel_issues(status, c, records.unwrap_or_default())
+            }
+            None => Vec::new(),
+        };
         Ok(State {
             project_id,
             project,
@@ -861,7 +992,28 @@ impl OrdersService {
             plans,
             recognitions,
             clearings,
+            cancel_blockers,
+            cancelled_conversions,
         })
+    }
+
+    /// How many records of each kind that block a conversion cancellation the
+    /// project has (T40). Binds the project id 11 times.
+    fn records_sql(&self) -> String {
+        self.sql(
+            "SELECT \
+             (SELECT COUNT(*) FROM order_changes WHERE project_id = ?), \
+             (SELECT COUNT(*) FROM revenue_recognitions WHERE project_id = ?), \
+             (SELECT COUNT(*) FROM budget_versions WHERE project_id = ?), \
+             (SELECT COUNT(*) FROM time_entries WHERE project_id = ?), \
+             (SELECT COUNT(*) FROM purchase_orders WHERE project_id = ?) \
+             + (SELECT COUNT(*) FROM direct_costs WHERE project_id = ?) \
+             + (SELECT COUNT(*) FROM cost_allocations WHERE project_id = ?), \
+             (SELECT COUNT(*) FROM forecast_versions WHERE project_id = ?), \
+             (SELECT COUNT(*) FROM fixed_cost_contracts WHERE project_id = ?) \
+             + (SELECT COUNT(*) FROM fixed_cost_postings WHERE project_id = ?), \
+             (SELECT COUNT(*) FROM recurring_revenues WHERE project_id = ?)",
+        )
     }
 
     /// The order and revenue of a project (pre-order projects return an
@@ -1136,6 +1288,92 @@ impl OrdersService {
             for (month, amount) in &plan_rows {
                 execute!(&mut *tx, insert_plan, project_id, month, *amount)?;
             }
+        });
+        self.notify_changed();
+        self.summary(project_id).await
+    }
+
+    /// Cancel the project's conversion (受注転換の取消, T40, review U-3): only a
+    /// whole-scope order on which nothing has been recorded yet
+    /// (`cost_domain::order::check_conversion_cancel`). The project goes back to
+    /// its status before the conversion, the unrecognized revenue plan the
+    /// conversion made is removed, and the conversion row stays as history with
+    /// the business date, the reason and who. Planned dates and the order
+    /// number stay as entered. The pipeline versions were never rewritten, so
+    /// the project's adopted version counts in the pipeline again.
+    ///
+    /// The records are counted again inside the transaction after the project
+    /// row is written (on SQLite that write takes the database's write lock,
+    /// so a record written after the check cannot slip in, T13).
+    pub async fn cancel_conversion(
+        &self,
+        project_id: i64,
+        input: ConversionCancelInput,
+        actor_user_id: Option<i64>,
+    ) -> Result<OrderSummary, BantoError> {
+        let state = self.state(project_id).await?;
+        let Some(conversion) = state.conversion.as_ref() else {
+            return Err(BantoError::Validation {
+                field_errors: vec![field_error("status", "受注転換していない案件です")],
+            });
+        };
+        let Some(row_version) = input.row_version else {
+            return Err(BantoError::Validation {
+                field_errors: vec![field_error("rowVersion", "版番号がありません")],
+            });
+        };
+        if !state.cancel_blockers.is_empty() {
+            return Err(cancel_refused(&state.cancel_blockers));
+        }
+        let mut errors = Vec::new();
+        let reason = text(
+            "reason",
+            &input.reason,
+            Some("取消の理由を入力してください"),
+            &mut errors,
+        );
+        validation(errors)?;
+        let previous = ProjectStatus::parse(&conversion.previous_status)
+            .and_then(|p| state.status.unconverted_to(p))
+            .ok_or_else(|| cancel_refused(&[ConversionCancelIssue::PreviousUnknown]))?;
+        let conversion_id = conversion.id;
+        let cancelled_on = crate::business_date::today().to_string();
+        let update_project = self.sql(&format!(
+            "UPDATE projects SET status = ?, row_version = row_version + 1, \
+             revenue_version = revenue_version + 1, updated_at = {} \
+             WHERE id = ? AND row_version = ? AND revenue_version = ? AND status = 'ordered'",
+            self.now()
+        ));
+        let records_sql = self.records_sql();
+        let cancel = self.sql(&format!(
+            "UPDATE order_conversions SET cancelled_on = ?, cancel_reason = ?, \
+             cancelled_by = ?, cancelled_at = {} WHERE id = ? AND cancelled_at IS NULL",
+            self.now()
+        ));
+        let delete_plan = self.sql("DELETE FROM revenue_plan WHERE project_id = ?");
+        let revenue_version = state.project.revenue_version;
+        in_tx!(&self.db, tx => {
+            let affected = execute!(&mut *tx, update_project, previous.as_str(), project_id,
+                row_version, revenue_version)?;
+            if affected == 0 {
+                return Err(stale_version_error());
+            }
+            let records: Option<RecordCounts> = fetch_optional!(&mut *tx, records_sql,
+                project_id, project_id, project_id, project_id, project_id, project_id,
+                project_id, project_id, project_id, project_id, project_id)?;
+            let issues = cancel_issues(
+                ProjectStatus::Ordered,
+                conversion,
+                records.unwrap_or_default(),
+            );
+            if !issues.is_empty() {
+                return Err(cancel_refused(&issues));
+            }
+            if execute!(&mut *tx, cancel, &cancelled_on, &reason, actor_user_id,
+                conversion_id)? == 0 {
+                return Err(stale_version_error());
+            }
+            execute!(&mut *tx, delete_plan, project_id)?;
         });
         self.notify_changed();
         self.summary(project_id).await
@@ -1727,6 +1965,174 @@ pub(crate) mod tests {
                 .map(|m| (m.user_id, m.kind))
                 .collect::<Vec<_>>(),
             vec![(1, MemberKind::Sales), (2, MemberKind::Manager)]
+        );
+    }
+
+    fn cancel_input(row_version: i64, reason: Option<&str>) -> ConversionCancelInput {
+        ConversionCancelInput {
+            row_version: Some(row_version),
+            reason: reason.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn t40_conversion_cancel_returns_the_project_to_the_pipeline_and_allows_reconverting() {
+        let db = fixture().await;
+        let a = pipeline_project(&db, "P-001", 3_000_000, 60, "2026-12").await;
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let svc = OrdersService::new(db.clone()).with_events(tx);
+        let rv = row_version(&db, a).await;
+        let s = svc
+            .convert(
+                a,
+                conversion(rv, 2_800_000, vec![line(Some("2026-12"), 2_800_000)]),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        assert!(s.cancel_blockers.is_empty(), "{:?}", s.cancel_blockers);
+        while rx.try_recv().is_ok() {}
+        let rv = row_version(&db, a).await;
+        // The reason is required; a stale row version is refused. Neither notifies.
+        assert_eq!(
+            field_of(
+                svc.cancel_conversion(a, cancel_input(rv, Some("  ")), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            vec!["reason"]
+        );
+        assert_eq!(
+            field_of(
+                svc.cancel_conversion(a, cancel_input(rv - 1, Some("案件の取り違え")), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            vec!["rowVersion"]
+        );
+        assert!(rx.try_recv().is_err());
+        let s = svc
+            .cancel_conversion(a, cancel_input(rv, Some("案件の取り違え")), Some(2))
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().expect("the cancellation notifies once"),
+            ServerEvent::ResourceChanged { .. }
+        ));
+        assert_eq!(s.status, "lead", "back to the status before the conversion");
+        assert!(s.conversion.is_none());
+        assert_eq!(s.confirmed_amount, None);
+        assert!(s.plan.is_empty(), "the unrecognized plan is removed");
+        assert_eq!(s.cancelled_conversions.len(), 1);
+        let h = &s.cancelled_conversions[0];
+        assert_eq!(
+            (
+                h.confirmed_amount,
+                h.cancel_reason.as_str(),
+                h.previous_status.as_str()
+            ),
+            (2_800_000, "案件の取り違え", "lead")
+        );
+        assert_eq!(h.cancelled_on, crate::business_date::today().to_string());
+        // The adopted pipeline version counts again.
+        let pipeline = PipelineService::new(db.clone());
+        let o = pipeline.overview(&ProjectScope::All).await.unwrap();
+        assert_eq!((o.totals.total, o.totals.weighted), (3_000_000, 1_800_000));
+        // Cancelling again is refused; converting again works and keeps the history.
+        let rv = row_version(&db, a).await;
+        assert_eq!(
+            field_of(
+                svc.cancel_conversion(a, cancel_input(rv, Some("再度")), None)
+                    .await
+                    .unwrap_err()
+            ),
+            vec!["status"]
+        );
+        let s = svc
+            .convert(
+                a,
+                conversion(rv, 3_000_000, vec![line(Some("2026-12"), 3_000_000)]),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(s.confirmed_amount, Some(3_000_000));
+        assert_eq!(s.plan.len(), 1);
+        assert_eq!(s.cancelled_conversions.len(), 1);
+        assert!(s.issues.is_empty());
+    }
+
+    #[tokio::test]
+    async fn t40_conversion_cancel_is_refused_once_the_order_has_records() {
+        let db = fixture().await;
+        let a = ordered_project(&db, "P-001", vec![line(Some("2027-01"), 4_000_000)]).await;
+        let svc = OrdersService::new(db.clone());
+        svc.request_change(
+            a,
+            ChangeRequest {
+                delta_amount: 300_000,
+                plan_month: Some("2027-02".into()),
+                basis: Some("追加の画面改修".into()),
+            },
+            Some(1),
+        )
+        .await
+        .unwrap();
+        svc.recognize(
+            a,
+            RecognitionInput {
+                recognized_on: "2027-01-25".into(),
+                amount: 1_000_000,
+                basis: None,
+                clears: None,
+            },
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let s = svc.summary(a).await.unwrap();
+        assert_eq!(s.cancel_blockers, vec!["order_changes", "recognitions"]);
+        let rv = row_version(&db, a).await;
+        let err = svc
+            .cancel_conversion(a, cancel_input(rv, Some("取り違え")), Some(1))
+            .await
+            .unwrap_err();
+        match err {
+            BantoError::Validation { field_errors } => {
+                assert_eq!(field_errors[0].field, "status");
+                assert!(field_errors[0].message.contains("受注変更"));
+            }
+            other => panic!("validation expected, got {other:?}"),
+        }
+        assert_eq!(svc.summary(a).await.unwrap().status, "ordered");
+
+        // A partial order is not cancelled (the remainder project overlaps).
+        let b = pipeline_project(&db, "P-002", 5_000_000, 50, "2027-01").await;
+        let rv = row_version(&db, b).await;
+        let mut req = conversion(rv, 3_000_000, vec![line(Some("2027-01"), 3_000_000)]);
+        req.scope = "partial".into();
+        req.remainder = Some(RemainderInput {
+            code: "P-002-2".into(),
+            name: "二期".into(),
+            version: version(2_000_000, 50, "2027-03"),
+        });
+        let s = svc.convert(b, req, Some(1)).await.unwrap();
+        assert_eq!(s.cancel_blockers, vec!["partial"]);
+
+        // Once the project is in progress, the conversion stays.
+        let c = ordered_project(&db, "P-003", vec![line(None, 1_000)]).await;
+        let mut progress = project_input("P-003");
+        progress.status = "in_progress".into();
+        progress.planned_start = Some("2026-12-01".into());
+        progress.planned_end = Some("2027-03-31".into());
+        progress.row_version = Some(row_version(&db, c).await);
+        ProjectsService::new(db.clone())
+            .update(c, progress)
+            .await
+            .unwrap();
+        assert_eq!(
+            svc.summary(c).await.unwrap().cancel_blockers,
+            vec!["not_ordered"]
         );
     }
 

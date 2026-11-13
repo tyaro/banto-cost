@@ -976,6 +976,70 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .update(agreement.id, longer, Some(manager))
             .await
             .expect("regenerate on Postgres");
+
+        // banto-cost P8f (T40): the record counts decode on Postgres, a
+        // project with records keeps its conversion, and the partial unique
+        // index lets a cancelled project be converted again.
+        let orders = OrdersService::new(db.clone());
+        assert_eq!(
+            orders.summary(monthly.id).await.unwrap().cancel_blockers,
+            vec!["recognitions", "recurring_revenue"]
+        );
+        let wrong = projects
+            .create(
+                ProjectInput {
+                    code: "P-PG-C".into(),
+                    name: "架空の取り違え".into(),
+                    customer_id: customer.id,
+                    manager_user_id: manager,
+                    status: "negotiating".into(),
+                    planned_start: None,
+                    planned_end: None,
+                    order_no: None,
+                    department: None,
+                    note: None,
+                    row_version: None,
+                },
+                None,
+            )
+            .await
+            .expect("project to cancel on Postgres");
+        let convert_wrong = |row_version: i64| -> ConversionRequest {
+            serde_json::from_value(serde_json::json!({
+                "rowVersion": row_version,
+                "convertedOn": "2026-06-01",
+                "confirmedAmount": 500_000,
+                "basis": "注文書",
+                "plannedStart": "2026-06-01",
+                "plannedEnd": "2026-09-30",
+                "revenuePlan": [{ "amount": 500_000 }],
+                "scope": "whole"
+            }))
+            .unwrap()
+        };
+        let rv = projects.get(wrong.id).await.unwrap().row_version;
+        let s = orders
+            .convert(wrong.id, convert_wrong(rv), Some(manager))
+            .await
+            .expect("convert to cancel on Postgres");
+        assert!(s.cancel_blockers.is_empty(), "{:?}", s.cancel_blockers);
+        let rv = projects.get(wrong.id).await.unwrap().row_version;
+        let cancel: admin_template_core::orders::ConversionCancelInput =
+            serde_json::from_value(serde_json::json!({ "rowVersion": rv, "reason": "取り違え" }))
+                .unwrap();
+        let s = orders
+            .cancel_conversion(wrong.id, cancel, Some(manager))
+            .await
+            .expect("cancel the conversion on Postgres");
+        assert_eq!(s.status, "negotiating");
+        assert_eq!(s.cancelled_conversions.len(), 1);
+        let rv = projects.get(wrong.id).await.unwrap().row_version;
+        let s = orders
+            .convert(wrong.id, convert_wrong(rv), Some(manager))
+            .await
+            .expect("convert again on Postgres");
+        assert_eq!(s.confirmed_amount, Some(500_000));
+
         let month = closing.get("2026-11").await.unwrap();
         assert!(month
             .warnings
