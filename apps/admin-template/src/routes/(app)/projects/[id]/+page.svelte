@@ -193,14 +193,18 @@
 	/**
 	 * Read what the person may do here. Until it answers, no action is
 	 * offered; past `PROJECT_ACTIONS_WAIT_MS` the buttons follow the role
-	 * floor, and a late answer still replaces that. A failure forgets the
-	 * previous answer (the members may have changed it, PR #61 review): the
-	 * role floor again, and the server still refuses what it must. An answer
+	 * floor, and a late answer still replaces that. The previous answer is
+	 * forgotten when a read starts (the members may have changed it, PR #61
+	 * review), so a failure also leaves the role floor; the server still
+	 * refuses what it must. An answer
 	 * to an older read is dropped.
 	 */
 	async function loadActions() {
 		if (!idValid || !isPipelineAvailable()) return;
 		const token = ++actionsToken;
+		// The previous answer may be out of date (the members changed): never
+		// fall back to it past the wait (PR #61 review).
+		actions = null;
 		actionsPending = true;
 		const timer = setTimeout(() => {
 			if (token === actionsToken) actionsPending = false;
@@ -272,8 +276,9 @@
 			// changed, and the sections follow the status (review D-2).
 			await loadForm();
 			membersKey++;
-			// The manager may have changed with the basic information.
-			void loadActions();
+			// The manager may have changed with the basic information: the
+			// page's actions and the nav's memberships too (PR #61 review).
+			membersChanged();
 		} else {
 			store.setServerErrors(result.fieldErrors);
 			formErrors = unmatchedFieldErrors(
