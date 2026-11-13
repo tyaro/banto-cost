@@ -15,6 +15,7 @@
 	import { resolve } from '$app/paths';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import {
 		closeMonth,
 		getClosingMonth,
@@ -86,10 +87,20 @@
 
 	async function close() {
 		if (!view || busy) return;
-		if (!window.confirm(m['closing.closeConfirm']({ month: view.month }))) return;
+		// The write uses what the dialog showed: a month loaded while it is open
+		// is not closed without its own confirmation.
+		const { month: shownMonth, rowVersion } = view;
+		const ok = await confirmAction({
+			title: m['closing.closeConfirmTitle'](),
+			body: m['closing.closeConfirm']({ month: shownMonth }),
+			details: [{ label: m['confirm.month'](), value: shownMonth }],
+			undo: m['closing.closeUndo'](),
+			confirmLabel: m['closing.close']()
+		});
+		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
-			view = await closeMonth(view.month, view.rowVersion);
+			view = await closeMonth(shownMonth, rowVersion);
 			notify('success', m['closing.closed']({ month: view.month }));
 			months = await listClosingMonths().catch(() => months);
 		} catch (err) {
@@ -101,10 +112,23 @@
 
 	async function reopen() {
 		if (!view || busy || reason.trim() === '') return;
-		if (!window.confirm(m['closing.reopenConfirm']({ month: view.month }))) return;
+		const { month: shownMonth, rowVersion } = view;
+		const why = reason.trim();
+		const ok = await confirmAction({
+			title: m['closing.reopenConfirmTitle'](),
+			body: m['closing.reopenConfirm']({ month: shownMonth }),
+			details: [
+				{ label: m['confirm.month'](), value: shownMonth },
+				{ label: m['confirm.reason'](), value: why }
+			],
+			undo: m['closing.reopenUndo'](),
+			confirmLabel: m['closing.reopen'](),
+			danger: true
+		});
+		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
-			view = await reopenMonth(view.month, view.rowVersion, reason.trim());
+			view = await reopenMonth(shownMonth, rowVersion, why);
 			notify('success', m['closing.reopened']({ month: view.month }));
 			reason = '';
 			months = await listClosingMonths().catch(() => months);

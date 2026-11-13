@@ -16,6 +16,7 @@
 	import { resolve } from '$app/paths';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import {
 		cancelFixedCostPosting,
 		currentMonth,
@@ -188,11 +189,30 @@
 
 	async function post() {
 		if (!view || busy) return;
-		if (!window.confirm(m['fixedCosts.postConfirm']({ month: view.month, count: view.dueCount })))
-			return;
+		// Post the month the dialog showed, not one loaded while it was open.
+		const { month: shownMonth, dueCount } = view;
+		const ok = await confirmAction({
+			title: m['fixedCosts.postConfirmTitle'](),
+			body: m['fixedCosts.postConfirm']({ month: shownMonth, count: dueCount }),
+			details: [
+				{ label: m['confirm.month'](), value: shownMonth },
+				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: dueCount }) }
+			],
+			undo: m['fixedCosts.postUndo'](),
+			confirmLabel: m['fixedCosts.post']({ count: dueCount })
+		});
+		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
-			const result = await postFixedCostMonth(view.month);
+			// Items added elsewhere while the dialog was open are not posted
+			// unconfirmed: read the month again and ask again if it changed.
+			const fresh = await getFixedCostMonth(shownMonth);
+			if (fresh.dueCount !== dueCount) {
+				view = fresh;
+				notify('error', m['confirm.changed']());
+				return;
+			}
+			const result = await postFixedCostMonth(shownMonth);
 			view = result.view;
 			notify('success', m['fixedCosts.posted']({ month: view.month, count: result.posted }));
 			contracts = await listFixedCostContracts().catch(() => contracts);

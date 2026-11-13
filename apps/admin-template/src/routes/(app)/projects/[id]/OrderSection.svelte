@@ -20,7 +20,9 @@
 	import { isProviderError, notify, type FieldError } from '@banto/admin-core';
 	import { StatusBadge, LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import {
+		cancelOrderConversion,
 		cancelRecognition,
 		decideOrderChange,
 		getOrder,
@@ -33,6 +35,7 @@
 	} from '#lib/banto/ordersAdmin.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import {
+		cancelBlockerLabel,
 		changeStatusLabel,
 		formatSignedYen,
 		formatYen,
@@ -87,6 +90,10 @@
 	let changeBasis = $state('');
 	let changeErrors = $state<Record<string, string>>({});
 
+	// 受注転換の取消 (T40)
+	let cancelReason = $state('');
+	let cancelReasonMissing = $state(false);
+
 	// 売上計上
 	let recognizedOn = $state('');
 	let recognitionAmount = $state('');
@@ -98,7 +105,8 @@
 			changeDelta !== '' ||
 			changeBasis !== '' ||
 			recognitionAmount !== '' ||
-			recognitionBasis !== ''
+			recognitionBasis !== '' ||
+			cancelReason !== ''
 	);
 	$effect(() => {
 		onPendingChange?.({
@@ -223,7 +231,18 @@
 	async function decide(change: OrderChangeRow, approve: boolean) {
 		let note: string | null = null;
 		if (approve) {
-			if (!window.confirm(m['orders.approveConfirm']({ no: change.changeNo }))) return;
+			const ok = await confirmAction({
+				title: m['orders.approveConfirmTitle'](),
+				body: m['orders.approveConfirm']({ no: change.changeNo }),
+				details: [
+					{ label: m['confirm.project'](), value: code },
+					{ label: m['orders.fieldDelta'](), value: formatSignedYen(change.deltaAmount) },
+					{ label: m['pipeline.planMonth'](), value: monthLabel(change.planMonth) }
+				],
+				undo: m['orders.approveUndo'](),
+				confirmLabel: m['orders.approve']()
+			});
+			if (!ok) return;
 		} else {
 			note = window.prompt(m['orders.rejectPrompt']({ no: change.changeNo }));
 			if (note === null) return;
@@ -268,6 +287,52 @@
 		);
 	}
 
+	/** 受注転換の取消 (T40): back to the status before the conversion, with a reason. */
+	async function cancelConversion() {
+		const conversion = summary?.conversion;
+		if (!summary || !conversion || busy) return;
+		const reason = cancelReason.trim();
+		// The version the dialog's conversion was read with: a project reloaded
+		// while the dialog is open (another conversion) is refused as stale.
+		const version = rowVersion;
+		cancelReasonMissing = reason === '';
+		if (cancelReasonMissing) return;
+		const ok = await confirmAction({
+			title: m['orders.cancelConversionTitle'](),
+			body: m['orders.cancelConversionConfirm']({
+				status: statusLabel(conversion.previousStatus)
+			}),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{ label: m['orders.fieldConvertedOn'](), value: conversion.convertedOn },
+				{ label: m['orders.convertedAmount'](), value: formatYen(conversion.confirmedAmount) },
+				...(conversion.remainderCode !== null
+					? [
+							{
+								label: m['orders.cancelConversionRemainder'](),
+								value: m['orders.cancelConversionRemainderValue']({
+									code: conversion.remainderCode
+								})
+							}
+						]
+					: []),
+				{ label: m['confirm.reason'](), value: reason }
+			],
+			undo: m['orders.cancelConversionUndo'](),
+			confirmLabel: m['orders.cancelConversionSubmit'](),
+			danger: true
+		});
+		if (!ok) return;
+		const done = await write(
+			() => cancelOrderConversion(projectId, { rowVersion: version, reason }),
+			m['orders.conversionCancelled']()
+		);
+		if (done) {
+			cancelReason = '';
+			onProjectChanged();
+		}
+	}
+
 	function monthLabel(month: string | null): string {
 		return month ?? m['pipeline.timeUndecided']();
 	}
@@ -306,11 +371,17 @@
 					{rowVersion}
 					{code}
 					onConverted={() => {
+						// The form is unmounted before its effect reports the end of
+						// the save, so its last report (busy) would stay behind.
+						conversionPending = { dirty: false, busy: false };
 						converting = false;
 						onProjectChanged();
 						void reload();
 					}}
-					onCancel={() => (converting = false)}
+					onCancel={() => {
+						conversionPending = { dirty: false, busy: false };
+						converting = false;
+					}}
 					onPendingChange={(pending) => (conversionPending = pending)}
 				/>
 			{:else}
@@ -388,6 +459,48 @@
 					<dd>{conversion.basis}</dd>
 				</div>
 			</dl>
+
+			{#if canWrite}
+				<details class="cancel-conversion">
+					<summary>{m['orders.cancelConversionTitle']()}</summary>
+					<p class="note">{m['orders.cancelConversionDesc']()}</p>
+					{#if summary.cancelBlockers.length > 0}
+						<p class="note">{m['orders.cancelBlocked']()}</p>
+						<ul class="blockers">
+							{#each summary.cancelBlockers as blocker (blocker)}
+								<li>{cancelBlockerLabel(blocker)}</li>
+							{/each}
+						</ul>
+					{:else}
+						<form
+							class="inline-form"
+							novalidate
+							onsubmit={(event) => {
+								event.preventDefault();
+								void cancelConversion();
+							}}
+						>
+							<label class="field grow">
+								<span>{m['orders.cancelConversionReason']()}</span>
+								<input
+									class="banto-input"
+									type="text"
+									maxlength="1000"
+									placeholder={m['orders.cancelConversionReasonPlaceholder']()}
+									bind:value={cancelReason}
+									disabled={busy}
+								/>
+								{#if cancelReasonMissing}<span class="error"
+										>{m['orders.cancelConversionReasonRequired']()}</span
+									>{/if}
+							</label>
+							<button type="submit" class="banto-btn banto-btn--danger" disabled={busy}>
+								{m['orders.cancelConversionSubmit']()}
+							</button>
+						</form>
+					{/if}
+				</details>
+			{/if}
 
 			<h3>{m['orders.orderedPlanTitle']()}</h3>
 			{#if replanning}
@@ -688,6 +801,42 @@
 				</form>
 			{/if}
 		{/if}
+
+		{#if summary.cancelledConversions.length > 0}
+			<h3>{m['orders.cancelledConversionsTitle']()}</h3>
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th scope="col">{m['orders.fieldConvertedOn']()}</th>
+							<th scope="col" class="num">{m['orders.convertedAmount']()}</th>
+							<th scope="col">{m['orders.previousStatus']()}</th>
+							<th scope="col">{m['orders.colCancelledOn']()}</th>
+							<th scope="col">{m['orders.colCancelReason']()}</th>
+							<th scope="col">{m['orders.colCancelledBy']()}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each summary.cancelledConversions as row (row.id)}
+							<tr>
+								<td>{row.convertedOn}</td>
+								<td class="num">{formatYen(row.confirmedAmount)}</td>
+								<td>
+									{statusLabel(row.previousStatus)}
+									{#if row.remainderProjectId !== null}
+										/ {m['orders.cancelConversionRemainder']()}
+										<a href={resolve(`projects/${row.remainderProjectId}`)}>{row.remainderCode}</a>
+									{/if}
+								</td>
+								<td>{row.cancelledOn}</td>
+								<td>{row.cancelReason}</td>
+								<td>{row.cancelledByName ?? ''}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
 	{/if}
 </section>
 
@@ -779,6 +928,26 @@
 
 	.table-wrap {
 		overflow-x: auto;
+	}
+
+	.cancel-conversion {
+		display: flex;
+		flex-direction: column;
+		gap: var(--banto-space-2);
+		padding: var(--banto-space-2) var(--banto-space-3);
+		border: var(--banto-border-width) solid var(--banto-border);
+		border-radius: var(--banto-radius-md);
+	}
+
+	.cancel-conversion summary {
+		cursor: pointer;
+		font-size: var(--banto-font-size-sm);
+	}
+
+	.blockers {
+		margin: 0;
+		padding-left: var(--banto-space-5);
+		font-size: var(--banto-font-size-sm);
 	}
 
 	table {

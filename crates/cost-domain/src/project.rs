@@ -78,6 +78,19 @@ impl ProjectStatus {
         (self == Self::Settled).then_some(Self::WorkDone)
     }
 
+    /// 受注転換を取り消したときに戻す状態。受注の案件だけが取り消せ、転換前の状態
+    /// （受注前で有効な状態か保留）へ戻す（T40）。それ以外は `None`。
+    pub fn unconverted_to(self, previous: ProjectStatus) -> Option<Self> {
+        (self == Self::Ordered && previous.convertible()).then_some(previous)
+    }
+
+    /// 一部受注の受注転換を取り消したとき、残りの範囲の案件を移す状態（T40）。受注前で
+    /// 有効な状態と保留は中止にする。失注・中止はそのまま（`None`）。受注済みの側の
+    /// 案件は取消の検査で止めるので、ここでも `None`。
+    pub fn remainder_closed_to(self) -> Option<Self> {
+        self.convertible().then_some(Self::Cancelled)
+    }
+
     /// 案件の編集画面から直接選べる状態か。受注済みの側へは受注転換（P3b）で、
     /// 精算完了へは精算完了の検査（T17）で移すため、ここでは選ばせない。
     pub fn settable_directly(self) -> bool {

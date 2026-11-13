@@ -25,6 +25,7 @@
 	import { isProviderError, notify, type FieldError } from '@banto/admin-core';
 	import { LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { formatYen, isForbiddenError, statusLabel } from '#lib/banto/costFormat.js';
 	import { minutesToHours } from '#lib/banto/budgetFormat.js';
@@ -40,13 +41,15 @@
 
 	interface Props {
 		projectId: number;
+		/** The project code, shown in confirmation dialogs. */
+		code: string;
 		canWrite: boolean;
 		/** The project's status changed (settled): the page reloads it. */
 		onProjectChanged?: () => void;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, canWrite, onProjectChanged, onPendingChange }: Props = $props();
+	let { projectId, code, canWrite, onProjectChanged, onPendingChange }: Props = $props();
 
 	const available = isPipelineAvailable();
 	let check = $state<CloseoutCheck | null>(null);
@@ -140,7 +143,7 @@
 		errors = fieldErrors.map((e) => e.message);
 	}
 
-	function settle() {
+	async function settle() {
 		const c = check;
 		if (!c || busy || blocked) return;
 		const empty = new Set(
@@ -148,7 +151,22 @@
 		);
 		missing = empty;
 		if (empty.size > 0) return;
-		if (!window.confirm(m['closeout.settleConfirm']())) return;
+		const ok = await confirmAction({
+			title: m['closeout.settleConfirmTitle'](),
+			body: m['closeout.settleConfirm'](),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{
+					label: m['closeout.colWaivers'](),
+					value: m['confirm.countValue']({
+						count: c.blockers.filter((b) => b.waivable).length
+					})
+				}
+			],
+			undo: m['closeout.settleUndo'](),
+			confirmLabel: m['closeout.settle']()
+		});
+		if (!ok || busy) return;
 		busy = true;
 		errors = [];
 		void (async () => {
@@ -189,13 +207,24 @@
 		}
 	}
 
-	function reopen() {
+	async function reopen() {
 		const c = check;
 		if (!c || busy) return;
 		const reason = reopenReason.trim();
 		reopenMissing = reason === '';
 		if (reopenMissing) return;
-		if (!window.confirm(m['closeout.reopenConfirm']())) return;
+		const ok = await confirmAction({
+			title: m['closeout.reopenConfirmTitle'](),
+			body: m['closeout.reopenConfirm'](),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{ label: m['confirm.reason'](), value: reason }
+			],
+			undo: m['closeout.reopenUndo'](),
+			confirmLabel: m['closeout.reopen'](),
+			danger: true
+		});
+		if (!ok || busy) return;
 		busy = true;
 		errors = [];
 		void (async () => {

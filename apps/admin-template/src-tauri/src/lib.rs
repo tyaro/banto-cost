@@ -60,8 +60,9 @@ use admin_template_core::forecasts::{
 };
 use admin_template_core::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use admin_template_core::orders::{
-    CancelInput, ChangeDecision, ChangeRequest, ConversionRequest, OrderSummary, OrdersService,
-    RecognitionInput, ReplanInput,
+    conversion_cancel_audit_detail, CancelInput, ChangeDecision, ChangeRequest,
+    ConversionCancelInput, ConversionRequest, OrderSummary, OrdersService, RecognitionInput,
+    ReplanInput,
 };
 use admin_template_core::pipeline::{
     PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
@@ -3760,6 +3761,40 @@ async fn order_convert_body(
     Ok(summary)
 }
 
+/// 受注転換の取消 (T40): the twin of `POST /api/projects/{id}/order/conversion/cancel`.
+#[tauri::command]
+async fn order_conversion_cancel(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: ConversionCancelInput,
+) -> Result<OrderSummary, BantoError> {
+    order_conversion_cancel_body(&state, project_id, values).await
+}
+
+async fn order_conversion_cancel_body(
+    state: &AppState,
+    project_id: i64,
+    values: ConversionCancelInput,
+) -> Result<OrderSummary, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) =
+        business_guard(state, &actor, Operation::EditOrder { project_id }, "orders").await?;
+    let summary = state
+        .orders
+        .cancel_conversion(project_id, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "cancel_conversion",
+        "orders",
+        Some(&project_id.to_string()),
+        Some(conversion_cancel_audit_detail(&summary)),
+    )
+    .await;
+    Ok(summary)
+}
+
 #[tauri::command]
 async fn order_change_create(
     state: State<'_, AppState>,
@@ -7051,6 +7086,7 @@ pub fn run() {
             pipeline_overview,
             order_get,
             order_convert,
+            order_conversion_cancel,
             order_change_create,
             order_change_decide,
             revenue_plan_replace,

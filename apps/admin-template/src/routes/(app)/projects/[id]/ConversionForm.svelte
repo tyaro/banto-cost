@@ -11,9 +11,10 @@
 	 */
 	import { isProviderError, notify, type FieldError } from '@banto/admin-core';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import { convertOrder, type ConversionRequest } from '#lib/banto/ordersAdmin.js';
 	import { VERSION_STAGES, type VersionStage } from '#lib/banto/pipelineAdmin.js';
-	import { stageLabel, todayIso } from '#lib/banto/costFormat.js';
+	import { formatYen, stageLabel, todayIso } from '#lib/banto/costFormat.js';
 	import PlanLinesEditor, {
 		newPlanLine,
 		parsePlanLines,
@@ -164,7 +165,22 @@
 		if (saving) return;
 		const input = build();
 		if (!input) return;
-		if (!window.confirm(m['orders.convertConfirm']({ code }))) return;
+		const ok = await confirmAction({
+			title: m['orders.convertConfirmTitle'](),
+			body: m['orders.convertConfirm'](),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{ label: m['orders.fieldConvertedOn'](), value: input.convertedOn },
+				{ label: m['orders.confirmedAmount'](), value: formatYen(input.confirmedAmount) },
+				{
+					label: m['orders.fieldScope'](),
+					value: input.scope === 'partial' ? m['orders.scopePartial']() : m['orders.scopeWhole']()
+				}
+			],
+			undo: m['orders.convertUndo'](),
+			confirmLabel: m['orders.convertSubmit']()
+		});
+		if (!ok) return;
 		saving = true;
 		try {
 			await convertOrder(projectId, input);

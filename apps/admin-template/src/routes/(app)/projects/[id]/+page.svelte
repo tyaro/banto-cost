@@ -324,6 +324,7 @@
 		/>
 		<BudgetSection
 			projectId={parsedId}
+			code={projectCode}
 			{canWrite}
 			onPendingChange={(pending) => {
 				budgetDirty = pending.dirty;
@@ -333,6 +334,7 @@
 		{#if ordered}
 			<ForecastSection
 				projectId={parsedId}
+				code={projectCode}
 				{canWrite}
 				onPendingChange={(pending) => {
 					forecastDirty = pending.dirty;
@@ -344,6 +346,7 @@
 			{#key sectionStatus}
 				<CloseoutSection
 					projectId={parsedId}
+					code={projectCode}
 					{canWrite}
 					onProjectChanged={() => void loadForm()}
 					onPendingChange={(pending) => {

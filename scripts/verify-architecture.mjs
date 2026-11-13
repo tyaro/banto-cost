@@ -441,6 +441,11 @@ const isAllowedPackageImport = (spec) =>
 		// banto-cost P3b: 受注・売上・見通しの書き込みも editor 床＋authorize_audited。
 		{ tauri: 'order_convert', rest: 'POST /api/projects/{id}/order/convert', role: 'Editor' },
 		{
+			tauri: 'order_conversion_cancel',
+			rest: 'POST /api/projects/{id}/order/conversion/cancel',
+			role: 'Editor'
+		},
+		{
 			tauri: 'order_change_create',
 			rest: 'POST /api/projects/{id}/order/changes',
 			role: 'Editor'

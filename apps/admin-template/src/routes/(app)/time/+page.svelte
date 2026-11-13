@@ -24,6 +24,7 @@
 	import { getDataProvider, isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState, StatusBadge } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
 	import type { Project } from '#lib/banto/resources/projects.js';
@@ -45,6 +46,7 @@
 		formatMinutes,
 		mondayOf,
 		reworkLabel,
+		timeEntryDetails,
 		timeStatusLabel,
 		timeStatusVariant,
 		warningText,
@@ -269,10 +271,18 @@
 	async function submitApproveOne(entry: TimeEntry) {
 		if (acting) return;
 		// A warning, not a stop (as on /approvals): a missing rate can be right.
-		const question = entry.rateMissing
-			? m['approvals.rateMissingConfirm']()
-			: m['time.submitApproveConfirm']();
-		if (!window.confirm(question)) return;
+		const ok = await confirmAction({
+			title: entry.rateMissing
+				? m['approvals.rateMissingConfirmTitle']()
+				: m['time.submitApproveConfirmTitle'](),
+			body: entry.rateMissing
+				? m['approvals.rateMissingConfirm']()
+				: m['time.submitApproveConfirm'](),
+			details: timeEntryDetails(entry),
+			undo: m['approvals.approveUndo'](),
+			confirmLabel: m['time.submitApprove']()
+		});
+		if (!ok || acting) return;
 		acting = true;
 		try {
 			const result = await runEach([entry], submitAndApprove);
@@ -285,14 +295,31 @@
 
 	async function submitApproveWeek() {
 		if (acting || pendingApprove.length === 0) return;
-		let question: string = m['time.submitApproveWeekConfirm']({ count: pendingApprove.length });
+		// Act on the entries the dialog counted, not a list reloaded while it was open.
+		const rows = pendingApprove;
+		const details = [
+			{
+				label: m['confirm.count'](),
+				value: m['confirm.countValue']({ count: rows.length })
+			}
+		];
 		if (approveExcluded > 0) {
-			question += '\n' + m['time.submitApproveExcluded']({ count: approveExcluded });
+			details.push({
+				label: m['approvals.excludedLabel'](),
+				value: m['time.submitApproveExcluded']({ count: approveExcluded })
+			});
 		}
-		if (!window.confirm(question)) return;
+		const ok = await confirmAction({
+			title: m['time.submitApproveConfirmTitle'](),
+			body: m['time.submitApproveWeekConfirm']({ count: rows.length }),
+			details,
+			undo: m['approvals.approveUndo'](),
+			confirmLabel: m['time.submitApproveWeek']({ count: rows.length })
+		});
+		if (!ok || acting) return;
 		acting = true;
 		try {
-			const result = await runEach(pendingApprove, submitAndApprove);
+			const result = await runEach(rows, submitAndApprove);
 			reportApproved(result.done, result.failed, result.firstError);
 		} finally {
 			acting = false;

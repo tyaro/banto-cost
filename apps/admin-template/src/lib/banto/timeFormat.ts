@@ -130,3 +130,27 @@ export function warningText(w: TimeWarning): string {
 		standard: formatMinutes(w.standard)
 	});
 }
+
+/**
+ * What a confirmation dialog shows to identify one time entry (review §8-8,
+ * PR #46): who, the work date, the project or common activity, and the hours.
+ */
+export function timeEntryDetails(e: {
+	userName: string;
+	workDate: string;
+	projectCode: string | null;
+	projectName: string | null;
+	activityName: string | null;
+	minutes: number;
+}): { label: string; value: string }[] {
+	const target =
+		e.projectCode !== null
+			? `${e.projectCode} ${e.projectName ?? ''}`.trim()
+			: (e.activityName ?? '');
+	return [
+		{ label: m['approvals.colPerson'](), value: e.userName },
+		{ label: m['time.colDate'](), value: e.workDate },
+		{ label: m['time.colTarget'](), value: target },
+		{ label: m['time.colMinutes'](), value: formatMinutes(e.minutes) }
+	];
+}

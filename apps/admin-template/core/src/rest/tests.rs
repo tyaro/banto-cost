@@ -3700,6 +3700,107 @@ async fn rest_pipeline_draft_then_adopt() {
 }
 
 #[tokio::test]
+async fn t40_t12_rest_conversion_cancel_needs_edit_order_and_a_reason() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["pipeline.edit", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", 1),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": project["rowVersion"],
+                "convertedOn": "2026-11-20",
+                "confirmedAmount": 2_800_000,
+                "basis": "注文書受領",
+                "plannedStart": "2026-12-01",
+                "plannedEnd": "2027-03-31",
+                "revenuePlan": [{ "month": "2026-12", "amount": 2_800_000 }],
+                "scope": "whole"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let summary = body_json(response).await;
+    assert_eq!(summary["cancelBlockers"], json!([]));
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}"), &editor))
+        .await
+        .unwrap();
+    let row_version = body_json(response).await["rowVersion"].clone();
+    let url = format!("/api/projects/{id}/order/conversion/cancel");
+
+    // A viewer (below the editor floor) is refused.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &url,
+            &viewer,
+            json!({ "rowVersion": row_version, "reason": "取り違え" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // The reason is required.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &url,
+            &editor,
+            json!({ "rowVersion": row_version, "reason": "" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &url,
+            &editor,
+            json!({ "rowVersion": row_version, "reason": "案件の取り違え" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let summary = body_json(response).await;
+    assert_eq!(summary["status"], "negotiating");
+    assert!(summary["conversion"].is_null());
+    assert_eq!(
+        summary["cancelledConversions"][0]["cancelReason"],
+        "案件の取り違え"
+    );
+
+    // Audited with the conversion and its amount, never the reason.
+    let rows = audit.list(ListParams::default()).await.unwrap().rows;
+    let row = rows
+        .iter()
+        .find(|r| r.action == "cancel_conversion")
+        .expect("cancellation audited");
+    let detail = row.detail.as_deref().unwrap();
+    assert!(detail.contains("\"confirmedAmount\":2800000"), "{detail}");
+    assert!(!detail.contains("取り違え"), "{detail}");
+}
+
+#[tokio::test]
 async fn t23_t26_t27_rest_order_revenue_and_outlook() {
     let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
     grant(

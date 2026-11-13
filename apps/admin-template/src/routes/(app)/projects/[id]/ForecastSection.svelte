@@ -21,6 +21,7 @@
 	import { isProviderError, notify, type FieldError } from '@banto/admin-core';
 	import { LoadingState, StatusBadge } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import {
 		formatPct,
@@ -50,11 +51,13 @@
 
 	interface Props {
 		projectId: number;
+		/** The project code, shown in confirmation dialogs. */
+		code: string;
 		canWrite: boolean;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, canWrite, onPendingChange }: Props = $props();
+	let { projectId, code, canWrite, onPendingChange }: Props = $props();
 
 	interface InputRow {
 		phaseId: string;
@@ -227,10 +230,22 @@
 		});
 	}
 
-	function adopt() {
+	async function adopt() {
 		const d = draft;
 		if (!d || dirty) return;
-		if (!window.confirm(m['forecast.adoptConfirm']())) return;
+		const ok = await confirmAction({
+			title: m['forecast.adoptConfirmTitle'](),
+			body: m['forecast.adoptConfirm'](),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{ label: m['forecast.fieldBaseDate'](), value: d.baseDate },
+				{ label: m['forecast.costTotal'](), value: formatYen(d.costTotal) },
+				{ label: m['forecast.profit'](), value: formatSignedYen(d.profit) }
+			],
+			undo: m['forecast.adoptUndo'](),
+			confirmLabel: m['forecast.adopt']()
+		});
+		if (!ok) return;
 		void run(async () => {
 			const v = await adoptForecastDraft(d.id, d.rowVersion);
 			notify('success', m['forecast.adopted']({ version: forecastVersionLabel(v.versionNo) }));

@@ -10,6 +10,7 @@
 	 */
 	import { isProviderError, notify } from '@banto/admin-core';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import { isForbiddenError } from '#lib/banto/costFormat.js';
 	import {
 		decideEntry,
@@ -17,7 +18,7 @@
 		type CorrectionPair,
 		type TimeEntry
 	} from '#lib/banto/timeAdmin.js';
-	import { dayLabel, formatMinutes, reworkLabel } from '#lib/banto/timeFormat.js';
+	import { dayLabel, formatMinutes, reworkLabel, timeEntryDetails } from '#lib/banto/timeFormat.js';
 
 	interface Props {
 		canWrite: boolean;
@@ -65,7 +66,17 @@
 	async function approve(c: TimeEntry) {
 		if (busy) return;
 		// A warning, not a stop (review U-1), as for a first approval.
-		if (c.rateMissing && !window.confirm(m['approvals.rateMissingConfirm']())) return;
+		if (
+			c.rateMissing &&
+			!(await confirmAction({
+				title: m['approvals.rateMissingConfirmTitle'](),
+				body: m['approvals.rateMissingConfirm'](),
+				details: timeEntryDetails(c),
+				undo: m['approvals.approveUndo'](),
+				confirmLabel: m['approvals.approve']()
+			}))
+		)
+			return;
 		busy = true;
 		try {
 			const result = await decideEntry(c.id, { rowVersion: c.rowVersion, approve: true });

@@ -21,7 +21,7 @@
 //! | pipeline version create/adopt | `EditPipeline` |
 //! | pipeline overview | scope `amount_projects` |
 //! | order get | `ViewProjectAmounts` |
-//! | order convert / change request / revenue plan | `EditOrder` |
+//! | order convert / conversion cancel / change request / revenue plan | `EditOrder` |
 //! | order change decide | `ViewProjectAmounts` + `Approve` (self-approval allowed, audited) |
 //! | revenue recognition create/cancel | `FinanceClose` + `ViewProjectAmounts` |
 //! | outlook / snapshot view | scope `amount_projects` |
@@ -61,8 +61,9 @@ use crate::customers::{Customer, CustomerInput, CustomersService};
 use crate::direct_costs::DirectCostsService;
 use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use crate::orders::{
-    CancelInput, ChangeDecision, ChangeRequest, ConversionRequest, OrderSummary, OrdersService,
-    RecognitionInput, ReplanInput,
+    conversion_cancel_audit_detail, CancelInput, ChangeDecision, ChangeRequest,
+    ConversionCancelInput, ConversionRequest, OrderSummary, OrdersService, RecognitionInput,
+    ReplanInput,
 };
 use crate::pipeline::{PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput};
 use crate::projects::{Project, ProjectInput, ProjectsService};
@@ -444,6 +445,32 @@ async fn order_convert(
             "scope": summary.conversion.as_ref().map(|c| c.scope.clone()),
             "remainderProjectId": summary.conversion.as_ref().and_then(|c| c.remainder_project_id),
         })),
+    )
+    .await;
+    Ok(Json(summary))
+}
+
+/// 受注転換の取消 (T40): the audit detail names the cancelled conversion and
+/// its amount, not the reason.
+async fn order_conversion_cancel(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<ConversionCancelInput>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    let (_, user_id) = state
+        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
+        .await?;
+    let summary = state.orders.cancel_conversion(id, input, user_id).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "cancel_conversion",
+        "orders",
+        Some(&id.to_string()),
+        Some(conversion_cancel_audit_detail(&summary)),
     )
     .await;
     Ok(Json(summary))
@@ -906,6 +933,10 @@ pub(super) fn business_write_router(
             post(pipeline_versions_adopt),
         )
         .route("/api/projects/{id}/order/convert", post(order_convert))
+        .route(
+            "/api/projects/{id}/order/conversion/cancel",
+            post(order_conversion_cancel),
+        )
         .route(
             "/api/projects/{id}/order/changes",
             post(order_change_create),

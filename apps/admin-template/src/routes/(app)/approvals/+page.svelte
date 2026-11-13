@@ -22,10 +22,11 @@
 	import { isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { isForbiddenError } from '#lib/banto/costFormat.js';
 	import { decideEntry, listApprovals, type TimeEntry } from '#lib/banto/timeAdmin.js';
-	import { dayLabel, formatMinutes, reworkLabel } from '#lib/banto/timeFormat.js';
+	import { dayLabel, formatMinutes, reworkLabel, timeEntryDetails } from '#lib/banto/timeFormat.js';
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
@@ -89,7 +90,17 @@
 		if (busy) return;
 		// A warning, not a stop: a missing rate can be right (e.g. a person
 		// paid by a monthly fixed cost), so the approver decides.
-		if (entry.rateMissing && !window.confirm(m['approvals.rateMissingConfirm']())) return;
+		if (
+			entry.rateMissing &&
+			!(await confirmAction({
+				title: m['approvals.rateMissingConfirmTitle'](),
+				body: m['approvals.rateMissingConfirm'](),
+				details: timeEntryDetails(entry),
+				undo: m['approvals.approveUndo'](),
+				confirmLabel: m['approvals.approve']()
+			}))
+		)
+			return;
 		busy = true;
 		try {
 			const result = await decideEntry(entry.id, { rowVersion: entry.rowVersion, approve: true });
@@ -107,14 +118,28 @@
 
 	async function approveAll() {
 		if (busy || returning !== null || approvable.length === 0) return;
-		let question: string = m['approvals.approveAllConfirm']({ count: approvable.length });
+		// Approve the rows the dialog counted, not a list reloaded while it was open.
+		const rows = approvable;
+		const details = [
+			{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: rows.length }) }
+		];
 		if (rateMissingCount > 0) {
-			question += '\n' + m['approvals.approveAllExcluded']({ count: rateMissingCount });
+			details.push({
+				label: m['approvals.excludedLabel'](),
+				value: m['approvals.approveAllExcluded']({ count: rateMissingCount })
+			});
 		}
-		if (!window.confirm(question)) return;
+		const ok = await confirmAction({
+			title: m['approvals.approveAllConfirmTitle'](),
+			body: m['approvals.approveAllConfirm']({ count: rows.length }),
+			details,
+			undo: m['approvals.approveUndo'](),
+			confirmLabel: m['approvals.approveAll']({ count: rows.length })
+		});
+		if (!ok || busy) return;
 		busy = true;
 		try {
-			const result = await runEach(approvable, (e) =>
+			const result = await runEach(rows, (e) =>
 				decideEntry(e.id, { rowVersion: e.rowVersion, approve: true })
 			);
 			if (result.done > 0) notify('success', m['approvals.approvedCount']({ count: result.done }));

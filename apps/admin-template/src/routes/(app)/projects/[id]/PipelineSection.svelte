@@ -17,6 +17,7 @@
 	import { Plus, Trash2 } from '@lucide/svelte';
 	import { StatusBadge, LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import {
 		adoptPipelineVersion,
 		createPipelineVersion,
@@ -259,7 +260,21 @@
 
 	async function adopt(version: PipelineVersion) {
 		if (!canWrite || adoptingId !== null) return;
-		if (!window.confirm(m['pipeline.adoptConfirm']({ no: version.versionNo }))) return;
+		const ok = await confirmAction({
+			title: m['pipeline.adoptConfirmTitle'](),
+			body: m['pipeline.adoptConfirm']({ no: version.versionNo }),
+			details: [
+				{
+					label: m['pipeline.versionNo']({ no: version.versionNo }),
+					value: stageLabel(version.stage)
+				},
+				{ label: m['pipeline.fieldExpectedAmount'](), value: formatYen(version.expectedAmount) },
+				{ label: m['pipeline.fieldProbability'](), value: formatPct(version.probabilityPct) }
+			],
+			undo: m['pipeline.adoptUndo'](),
+			confirmLabel: m['pipeline.adopt']()
+		});
+		if (!ok) return;
 		adoptingId = version.id;
 		try {
 			await adoptPipelineVersion(projectId, version.id);

@@ -13,7 +13,8 @@ import {
 	timeStatusLabel,
 	toMinutes,
 	weekDates,
-	warningText
+	warningText,
+	timeEntryDetails
 } from './timeFormat';
 
 describe('timeFormat', () => {
@@ -55,5 +56,35 @@ describe('timeFormat', () => {
 		expect(timeStatusLabel('x')).toBe('x');
 		expect(reworkLabel(null)).toBe(m['time.rework.none']());
 		expect(warningText({ code: 'day_standard', total: 240, standard: 480 })).toContain('4:00');
+	});
+});
+
+describe('timeEntryDetails', () => {
+	const entry = {
+		userName: '架空 太郎',
+		workDate: '2026-11-10',
+		projectCode: 'J-9001',
+		projectName: '架空の制御盤更新',
+		activityName: null,
+		minutes: 450
+	};
+
+	it('names the person, the date, the project and the hours', () => {
+		expect(timeEntryDetails(entry).map((d) => d.value)).toEqual([
+			'架空 太郎',
+			'2026-11-10',
+			'J-9001 架空の制御盤更新',
+			'7:30'
+		]);
+	});
+
+	it('shows the common activity when there is no project', () => {
+		const values = timeEntryDetails({
+			...entry,
+			projectCode: null,
+			projectName: null,
+			activityName: '社内会議'
+		}).map((d) => d.value);
+		expect(values[2]).toBe('社内会議');
 	});
 });
