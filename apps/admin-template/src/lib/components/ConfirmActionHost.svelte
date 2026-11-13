@@ -3,8 +3,11 @@
 	 * The one dialog behind `confirmAction` (`#lib/banto/confirmAction.svelte.ts`,
 	 * review D-5 / §8-8), on `@banto/ui`'s `Modal`. Mounted once by the `(app)`
 	 * layout. Shows what the operation acts on and whether it can be undone;
-	 * Esc / scrim / × answer "no".
+	 * Esc / scrim / × answer "no". So does leaving the page (browser Back, a
+	 * link): the question belongs to the page that asked it, and its action
+	 * must not run after that page is gone (PR #46 review).
 	 */
+	import { beforeNavigate } from '$app/navigation';
 	import { Modal } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
 	import { confirmState } from '#lib/banto/confirmAction.svelte.js';
@@ -13,6 +16,7 @@
 	const request = $derived(confirmState.request);
 
 	$effect(() => confirmState.attach());
+	beforeNavigate(() => confirmState.answer(false));
 </script>
 
 <Modal
