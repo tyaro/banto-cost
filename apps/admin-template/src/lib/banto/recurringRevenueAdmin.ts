@@ -140,3 +140,18 @@ export function monthsBetween(from: string, to: string): number | null {
 	const n = (Number(b[1]) - Number(a[1])) * 12 + (Number(b[2]) - Number(a[2])) + 1;
 	return n >= 1 ? n : null;
 }
+
+/**
+ * What a 計上 of the month recognizes, as one comparable string: each due
+ * agreement's ID, project, open amount and version. The screen reads the
+ * month again after the confirmation and recognizes only when this (and the
+ * recognition date) is unchanged, so an agreement added or edited while the
+ * dialog was open is not recognized unconfirmed.
+ */
+export function dueLinesKey(view: Pick<RecurringMonth, 'lines'>): string {
+	return view.lines
+		.filter((line) => line.state === 'due')
+		.map(({ agreement: a, open }) => [a.id, a.projectId, open, a.rowVersion].join(':'))
+		.sort()
+		.join('|');
+}

@@ -20,6 +20,7 @@
 	import {
 		cancelFixedCostPosting,
 		currentMonth,
+		dueLinesKey,
 		getFixedCostMonth,
 		listFixedCostContracts,
 		postFixedCostMonth,
@@ -191,6 +192,7 @@
 		if (!view || busy) return;
 		// Post the month the dialog showed, not one loaded while it was open.
 		const { month: shownMonth, dueCount } = view;
+		const shownLines = dueLinesKey(view);
 		const ok = await confirmAction({
 			title: m['fixedCosts.postConfirmTitle'](),
 			body: m['fixedCosts.postConfirm']({ month: shownMonth, count: dueCount }),
@@ -204,10 +206,11 @@
 		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
-			// Items added elsewhere while the dialog was open are not posted
-			// unconfirmed: read the month again and ask again if it changed.
+			// Items added or changed elsewhere while the dialog was open are not
+			// posted unconfirmed: read the month again and ask again if the due
+			// contracts (IDs, amounts) changed.
 			const fresh = await getFixedCostMonth(shownMonth);
-			if (fresh.dueCount !== dueCount) {
+			if (fresh.dueCount !== dueCount || dueLinesKey(fresh) !== shownLines) {
 				view = fresh;
 				notify('error', m['confirm.changed']());
 				return;
