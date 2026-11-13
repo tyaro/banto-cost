@@ -78,6 +78,8 @@
 		type Source
 	} from '#lib/banto/dashboardSummary.js';
 	import { myCapabilities } from '#lib/banto/myAuthz.svelte.js';
+	import { navSections } from '#lib/navigation.js';
+	import { sessionStore } from '#lib/session.svelte.js';
 	import { NAV_ICONS } from '#lib/components/navIcons.js';
 	import { PANEL_DEFS } from '#lib/banto/panels.js';
 	import { getUiSettings, isTauri } from '#lib/banto/setup.js';
@@ -417,6 +419,18 @@
 			note: () => m['dashboard.linkCustomers']()
 		}
 	] as const;
+
+	/** The links the sidebar would list too (§8-15: the person's capabilities, display only). */
+	const shownLinks = $derived.by(() => {
+		const listed = new Set<string>(
+			navSections({
+				publicViewer: sessionStore.publicViewer,
+				role: sessionStore.role,
+				capabilities: myCapabilities()
+			}).main.map((item) => item.path)
+		);
+		return links.filter((link) => listed.has(link.path));
+	});
 
 	// --- メモ workspace ---------------------------------------------------------
 
@@ -767,7 +781,7 @@
 	<section aria-labelledby="dashboard-links">
 		<h2 id="dashboard-links" class="section-heading">{m['dashboard.linksHeading']()}</h2>
 		<ul class="link-grid">
-			{#each links as link (link.path)}
+			{#each shownLinks as link (link.path)}
 				<li>
 					<a class="link-card" href={resolveAppPath(link.path)}>
 						<span class="stat-icon" aria-hidden="true"><link.icon size={18} /></span>
