@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { attentionProjectIds, currentAndNextMonth, outlookMonthTotal } from './dashboardSummary';
+import {
+	alertCount,
+	attentionProjectIds,
+	currentAndNextMonth,
+	outlookMonthTotal,
+	previousMonth
+} from './dashboardSummary';
 import type { OverviewRow, PipelineOverview } from './pipelineAdmin';
 import type { OutlookFigures, OutlookView } from './ordersAdmin';
 
@@ -120,5 +126,29 @@ describe('attentionProjectIds', () => {
 		expect(
 			attentionProjectIds(null, outlook({ excluded: [{ projectId: 8, code: 'P-8', name: 'x' }] }))
 		).toEqual([8]);
+	});
+});
+
+describe('alertCount', () => {
+	const totals = {
+		alertCounts: [
+			{ alert: 'forecast_loss', count: 2 },
+			{ alert: 'low_margin', count: 1 }
+		]
+	};
+	it('reads the projects the overall list counted for the alert', () => {
+		expect(alertCount(totals, 'forecast_loss')).toBe(2);
+	});
+	it('is 0 for an alert no visible project has', () => {
+		expect(alertCount(totals, 'forecast_over_budget')).toBe(0);
+	});
+});
+
+describe('previousMonth', () => {
+	it('steps back one month', () => {
+		expect(previousMonth('2026-11')).toBe('2026-10');
+	});
+	it('crosses the year start', () => {
+		expect(previousMonth('2027-01')).toBe('2026-12');
 	});
 });

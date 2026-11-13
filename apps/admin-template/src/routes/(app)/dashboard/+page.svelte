@@ -13,9 +13,21 @@
 	 * instead of 0円 (unset is never 0, banto-cost CLAUDE.md). Demo mode has no
 	 * aggregates (pipelineAdmin.ts), so the tiles say so.
 	 *
+	 * Then 確認すること (review U-4, P8g): what to act on today, each tile a link
+	 * to the screen that fixes it -
+	 * - 赤字見込み / 予算超過見込み / 見込更新要: projects with that alert in the
+	 *   overall list (`/api/portfolio` totals, amount-visible rows only), and a
+	 *   notice when the direct-cost ledger leaves projects 集計できない (T39).
+	 * - 承認待ち: submitted time entries, direct costs and corrections the
+	 *   caller may approve (the three lists of /approvals).
+	 * - 月額固定 / 定期売上の未計上: this month's unposted / unrecognized
+	 *   contracts, with last month's in the note (`dueCount`).
+	 * Each source loads on its own, so one the caller may not read only marks
+	 * its tiles 権限がありません.
+	 *
 	 * Below: links to each business screen, and the メモ workspace.
 	 */
-	import { resolveAppPath } from '#lib/appPath.js';
+	import { resolveAppPath, type AppPath } from '#lib/appPath.js';
 	import type { Component } from 'svelte';
 	import {
 		DockHost,
@@ -28,10 +40,15 @@
 	import {
 		CalendarClock,
 		CalendarDays,
+		CircleAlert,
+		ClipboardCheck,
 		NotebookPen,
+		RefreshCw,
 		Percent,
+		TrendingDown,
 		TrendingUp,
-		TriangleAlert
+		TriangleAlert,
+		Wallet
 	} from '@lucide/svelte';
 	import * as m from '#lib/paraglide/messages.js';
 	import {
@@ -40,11 +57,18 @@
 		type PipelineOverview
 	} from '#lib/banto/pipelineAdmin.js';
 	import { getOutlook, type OutlookView } from '#lib/banto/ordersAdmin.js';
+	import { getPortfolio, type Portfolio } from '#lib/banto/forecastAdmin.js';
+	import { listApprovals, listPendingCorrections } from '#lib/banto/timeAdmin.js';
+	import { listCostApprovals } from '#lib/banto/costsAdmin.js';
+	import { getFixedCostMonth } from '#lib/banto/fixedCostsAdmin.js';
+	import { getRecurringMonth } from '#lib/banto/recurringRevenueAdmin.js';
 	import { formatYen, isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
 	import {
+		alertCount,
 		attentionProjectIds,
 		currentAndNextMonth,
-		outlookMonthTotal
+		outlookMonthTotal,
+		previousMonth
 	} from '#lib/banto/dashboardSummary.js';
 	import { NAV_ICONS } from '#lib/components/navIcons.js';
 	import { PANEL_DEFS } from '#lib/banto/panels.js';
@@ -80,7 +104,43 @@
 
 	let overview = $state<Source<PipelineOverview>>({ state: 'loading' });
 	let outlook = $state<Source<OutlookView>>({ state: 'loading' });
+
+	/** Unposted / unrecognized contracts of this month and the previous one. */
+	interface DueMonths {
+		current: number;
+		previous: number;
+	}
+
+	let portfolio = $state<Source<Portfolio>>({ state: 'loading' });
+	let approvals = $state<Source<number>>({ state: 'loading' });
+	let fixedDue = $state<Source<DueMonths>>({ state: 'loading' });
+	let recurringDue = $state<Source<DueMonths>>({ state: 'loading' });
 	let loadToken = 0;
+
+	function settled<T>(result: PromiseSettledResult<T>): Source<T> {
+		return result.status === 'fulfilled'
+			? { state: 'ok', value: result.value }
+			: { state: 'error', error: result.reason };
+	}
+
+	/** Both months of one due count; either failing fails the tile. */
+	async function dueMonths(
+		read: (month: string) => Promise<{ dueCount: number }>,
+		month: string
+	): Promise<DueMonths> {
+		const [current, previous] = await Promise.all([read(month), read(previousMonth(month))]);
+		return { current: current.dueCount, previous: previous.dueCount };
+	}
+
+	/** Every list /approvals shows: time entries, direct costs, corrections. */
+	async function approvalCount(): Promise<number> {
+		const [time, costs, corrections] = await Promise.all([
+			listApprovals(),
+			listCostApprovals(),
+			listPendingCorrections()
+		]);
+		return time.length + costs.length + corrections.length;
+	}
 
 	async function load(): Promise<void> {
 		if (!available) return;
@@ -88,20 +148,26 @@
 		const range = currentAndNextMonth(todayIso());
 		overview = { state: 'loading' };
 		outlook = { state: 'loading' };
-		const [o, l] = await Promise.allSettled([
+		portfolio = { state: 'loading' };
+		approvals = { state: 'loading' };
+		fixedDue = { state: 'loading' };
+		recurringDue = { state: 'loading' };
+		const [o, l, p, a, f, r] = await Promise.allSettled([
 			getPipelineOverview(),
-			getOutlook({ from: range.current, to: range.next })
+			getOutlook({ from: range.current, to: range.next }),
+			getPortfolio(),
+			approvalCount(),
+			dueMonths(getFixedCostMonth, range.current),
+			dueMonths(getRecurringMonth, range.current)
 		]);
 		if (token !== loadToken) return;
 		months = range;
-		overview =
-			o.status === 'fulfilled'
-				? { state: 'ok', value: o.value }
-				: { state: 'error', error: o.reason };
-		outlook =
-			l.status === 'fulfilled'
-				? { state: 'ok', value: l.value }
-				: { state: 'error', error: l.reason };
+		overview = settled(o);
+		outlook = settled(l);
+		portfolio = settled(p);
+		approvals = settled(a);
+		fixedDue = settled(f);
+		recurringDue = settled(r);
 	}
 
 	void load();
@@ -125,7 +191,9 @@
 	/** Counted only when both sources answered, so a forbidden half never reads as "0 projects". */
 	const attention = $derived(
 		overviewValue && outlookValue
-			? attentionProjectIds(overviewValue, outlookValue).length.toLocaleString()
+			? m['dashboard.countValue']({
+					count: attentionProjectIds(overviewValue, outlookValue).length.toLocaleString()
+				})
 			: overview.state === 'error'
 				? pending(overview)
 				: pending(outlook)
@@ -183,6 +251,93 @@
 			label: m['dashboard.attention'](),
 			value: attention,
 			note: m['dashboard.attentionNote']()
+		}
+	]);
+
+	/** A count of projects / records, or why it is not shown. */
+	function count<T>(source: Source<T>, pick: (value: T) => number): string {
+		return value(source, (v) => m['dashboard.countValue']({ count: pick(v).toLocaleString() }));
+	}
+
+	const portfolioValue = $derived(portfolio.state === 'ok' ? portfolio.value : null);
+
+	/** Projects the direct-cost ledger leaves 集計できない (T39), shown as a notice. */
+	const ledgerReview = $derived(
+		portfolioValue ? alertCount(portfolioValue.totals, 'ledger_review') : 0
+	);
+
+	interface CheckTile extends Tile {
+		path: AppPath;
+		/** Something to act on: the tile is emphasized. */
+		active: boolean;
+	}
+
+	function alertTile(id: string, icon: Component, alert: string, label: string): CheckTile {
+		const n = portfolioValue ? alertCount(portfolioValue.totals, alert) : 0;
+		return {
+			id,
+			icon,
+			label,
+			value: count(portfolio, (p) => alertCount(p.totals, alert)),
+			note: portfolioValue ? m['dashboard.alertNote']() : '',
+			path: '/projects',
+			active: n > 0
+		};
+	}
+
+	function dueNote(source: Source<DueMonths>): string {
+		return source.state === 'ok'
+			? m['dashboard.dueNote']({
+					month: months.current,
+					previous: previousMonth(months.current),
+					count: source.value.previous.toLocaleString()
+				})
+			: '';
+	}
+
+	const dueActive = (source: Source<DueMonths>) =>
+		source.state === 'ok' && source.value.current + source.value.previous > 0;
+
+	const checks = $derived<CheckTile[]>([
+		alertTile('forecast-loss', TrendingDown, 'forecast_loss', m['dashboard.forecastLoss']()),
+		alertTile(
+			'forecast-over-budget',
+			Wallet,
+			'forecast_over_budget',
+			m['dashboard.forecastOverBudget']()
+		),
+		alertTile(
+			'forecast-update-needed',
+			RefreshCw,
+			'forecast_update_needed',
+			m['dashboard.forecastUpdateNeeded']()
+		),
+		{
+			id: 'approvals',
+			icon: ClipboardCheck,
+			label: m['dashboard.approvals'](),
+			value: count(approvals, (n) => n),
+			note: approvals.state === 'ok' ? m['dashboard.approvalsNote']() : '',
+			path: '/approvals',
+			active: approvals.state === 'ok' && approvals.value > 0
+		},
+		{
+			id: 'fixed-costs-due',
+			icon: NAV_ICONS['fixed-costs'],
+			label: m['dashboard.fixedCostsDue'](),
+			value: count(fixedDue, (d) => d.current),
+			note: dueNote(fixedDue),
+			path: '/fixed-costs',
+			active: dueActive(fixedDue)
+		},
+		{
+			id: 'recurring-revenue-due',
+			icon: NAV_ICONS['recurring-revenue'],
+			label: m['dashboard.recurringRevenueDue'](),
+			value: count(recurringDue, (d) => d.current),
+			note: dueNote(recurringDue),
+			path: '/recurring-revenue',
+			active: dueActive(recurringDue)
 		}
 	]);
 
@@ -528,6 +683,37 @@
 		{/each}
 	</div>
 
+	<section aria-labelledby="dashboard-checks">
+		<h2 id="dashboard-checks" class="section-heading">{m['dashboard.checksHeading']()}</h2>
+		{#if ledgerReview > 0}
+			<p class="check-notice" role="status">
+				<CircleAlert size={16} aria-hidden="true" />
+				<a href={resolveAppPath('/projects')}
+					>{m['dashboard.ledgerReview']({ count: ledgerReview.toLocaleString() })}</a
+				>
+			</p>
+		{/if}
+		<ul class="stat-row check-row">
+			{#each checks as tile (tile.id)}
+				<li>
+					<a
+						class="stat-tile check-tile"
+						class:check-active={tile.active}
+						data-tile={tile.id}
+						href={resolveAppPath(tile.path)}
+					>
+						<span class="stat-icon" aria-hidden="true"><tile.icon size={18} /></span>
+						<span class="stat-body">
+							<span class="stat-label">{tile.label}</span>
+							<span class="stat-value">{tile.value}</span>
+							{#if tile.note}<span class="stat-note">{tile.note}</span>{/if}
+						</span>
+					</a>
+				</li>
+			{/each}
+		</ul>
+	</section>
+
 	<section aria-labelledby="dashboard-links">
 		<h2 id="dashboard-links" class="section-heading">{m['dashboard.linksHeading']()}</h2>
 		<ul class="link-grid">
@@ -678,6 +864,51 @@
 		color: var(--banto-text-muted);
 		font-size: var(--banto-font-size-xs);
 		text-wrap: pretty;
+	}
+
+	.check-row {
+		list-style: none;
+		margin: var(--banto-space-3) 0 0;
+		padding: 0;
+	}
+
+	.check-tile {
+		height: 100%;
+		box-sizing: border-box;
+		color: var(--banto-text);
+		text-decoration: none;
+	}
+
+	.check-tile:hover {
+		border-color: var(--banto-primary);
+	}
+
+	.check-tile:focus-visible {
+		outline: none;
+		box-shadow: var(--banto-focus-ring);
+	}
+
+	/* Something to act on: the warning tone on the border and icon only, the
+	   text keeps the regular colors (contrast, axe wcag2aa). */
+	.check-active {
+		border-color: var(--banto-warning);
+	}
+
+	.check-active .stat-icon {
+		background: var(--banto-warning-tint);
+		color: var(--banto-text);
+	}
+
+	.check-notice {
+		display: flex;
+		align-items: center;
+		gap: var(--banto-space-2);
+		margin: var(--banto-space-3) 0 0;
+		font-size: var(--banto-font-size-md);
+	}
+
+	.check-notice a {
+		color: var(--banto-text);
 	}
 
 	.section-heading {

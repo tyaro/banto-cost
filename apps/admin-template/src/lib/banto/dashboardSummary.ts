@@ -6,6 +6,7 @@
  */
 import type { PipelineOverview } from './pipelineAdmin';
 import type { OutlookView } from './ordersAdmin';
+import type { PortfolioTotals } from './forecastAdmin';
 
 /**
  * This month and next month (`YYYY-MM`) of a business date (`YYYY-MM-DD`),
@@ -47,4 +48,20 @@ export function attentionProjectIds(
 		for (const project of outlook.excluded) ids.add(project.projectId);
 	}
 	return [...ids].sort((a, b) => a - b);
+}
+
+/**
+ * Projects with one alert in the overall list's totals (`alertCounts`,
+ * amount-visible rows only). An alert the server did not count is 0 projects:
+ * the list judged every visible row, so a missing entry is not 未設定.
+ */
+export function alertCount(totals: Pick<PortfolioTotals, 'alertCounts'>, alert: string): number {
+	return totals.alertCounts.find((entry) => entry.alert === alert)?.count ?? 0;
+}
+
+/** The previous month (`YYYY-MM`) of a month, crossing the year start. */
+export function previousMonth(month: string): string {
+	const year = Number(month.slice(0, 4));
+	const value = Number(month.slice(5, 7));
+	return value === 1 ? `${year - 1}-12` : `${year}-${String(value - 1).padStart(2, '0')}`;
 }
