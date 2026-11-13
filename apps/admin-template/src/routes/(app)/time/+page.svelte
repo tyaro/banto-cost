@@ -46,6 +46,7 @@
 		formatMinutes,
 		mondayOf,
 		reworkLabel,
+		timeEntryDetails,
 		timeStatusLabel,
 		timeStatusVariant,
 		warningText,
@@ -277,7 +278,7 @@
 			body: entry.rateMissing
 				? m['approvals.rateMissingConfirm']()
 				: m['time.submitApproveConfirm'](),
-			details: [{ label: m['time.colDate'](), value: entry.workDate }],
+			details: timeEntryDetails(entry),
 			undo: m['approvals.approveUndo'](),
 			confirmLabel: m['time.submitApprove']()
 		});

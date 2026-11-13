@@ -18,7 +18,7 @@
 		type CorrectionPair,
 		type TimeEntry
 	} from '#lib/banto/timeAdmin.js';
-	import { dayLabel, formatMinutes, reworkLabel } from '#lib/banto/timeFormat.js';
+	import { dayLabel, formatMinutes, reworkLabel, timeEntryDetails } from '#lib/banto/timeFormat.js';
 
 	interface Props {
 		canWrite: boolean;
@@ -71,6 +71,7 @@
 			!(await confirmAction({
 				title: m['approvals.rateMissingConfirmTitle'](),
 				body: m['approvals.rateMissingConfirm'](),
+				details: timeEntryDetails(c),
 				undo: m['approvals.approveUndo'](),
 				confirmLabel: m['approvals.approve']()
 			}))

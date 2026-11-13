@@ -26,7 +26,7 @@
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { isForbiddenError } from '#lib/banto/costFormat.js';
 	import { decideEntry, listApprovals, type TimeEntry } from '#lib/banto/timeAdmin.js';
-	import { dayLabel, formatMinutes, reworkLabel } from '#lib/banto/timeFormat.js';
+	import { dayLabel, formatMinutes, reworkLabel, timeEntryDetails } from '#lib/banto/timeFormat.js';
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
@@ -95,6 +95,7 @@
 			!(await confirmAction({
 				title: m['approvals.rateMissingConfirmTitle'](),
 				body: m['approvals.rateMissingConfirm'](),
+				details: timeEntryDetails(entry),
 				undo: m['approvals.approveUndo'](),
 				confirmLabel: m['approvals.approve']()
 			}))
