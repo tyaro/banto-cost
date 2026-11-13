@@ -162,3 +162,22 @@ export function termLabel(c: Pick<FixedCostContract, 'fromMonth' | 'toMonth'>): 
 export function currentMonth(today: string): string {
 	return today.slice(0, 7);
 }
+
+/**
+ * What a 計上 of the month posts, as one comparable string: each due
+ * contract's ID, project, payee, amount and version. The screen reads the
+ * month again after the confirmation and posts only when this is unchanged,
+ * so a contract added, edited or swapped while the dialog was open is not
+ * posted unconfirmed (the count alone could stay the same).
+ */
+export function dueLinesKey(view: Pick<FixedCostMonth, 'lines'>): string {
+	return view.lines
+		.filter((line) => line.state === 'due')
+		.map(({ contract: c }) =>
+			[c.id, c.projectId, c.payeeKind, c.userId, c.vendorId, c.monthlyAmount, c.rowVersion].join(
+				':'
+			)
+		)
+		.sort()
+		.join('|');
+}

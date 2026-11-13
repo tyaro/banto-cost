@@ -60,9 +60,9 @@ use admin_template_core::forecasts::{
 };
 use admin_template_core::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use admin_template_core::orders::{
-    conversion_cancel_audit_detail, CancelInput, ChangeDecision, ChangeRequest,
-    ConversionCancelInput, ConversionRequest, OrderSummary, OrdersService, RecognitionInput,
-    ReplanInput,
+    conversion_cancel_audit_detail, conversion_correction_audit_detail, CancelInput,
+    ChangeDecision, ChangeRequest, ConversionCancelInput, ConversionCorrectionInput,
+    ConversionRequest, OrderSummary, OrdersService, RecognitionInput, ReplanInput,
 };
 use admin_template_core::pipeline::{
     PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
@@ -3779,9 +3779,22 @@ async fn order_conversion_cancel_body(
     let actor = require_role(state, Role::Editor, "business").await?;
     let (_, user_id) =
         business_guard(state, &actor, Operation::EditOrder { project_id }, "orders").await?;
+    // A partial order's remainder is set to 中止: editing it is checked too.
+    let remainder = state.orders.conversion_remainder(project_id).await?;
+    if let Some(remainder_id) = remainder {
+        business_guard(
+            state,
+            &actor,
+            Operation::EditProject {
+                project_id: remainder_id,
+            },
+            "projects",
+        )
+        .await?;
+    }
     let summary = state
         .orders
-        .cancel_conversion(project_id, values, user_id)
+        .cancel_conversion(project_id, values, user_id, remainder)
         .await?;
     record_ok(
         &state.audit,
@@ -3790,6 +3803,40 @@ async fn order_conversion_cancel_body(
         "orders",
         Some(&project_id.to_string()),
         Some(conversion_cancel_audit_detail(&summary)),
+    )
+    .await;
+    Ok(summary)
+}
+
+/// 受注日・根拠の訂正 (T41): the twin of `POST /api/projects/{id}/order/conversion/correct`.
+#[tauri::command]
+async fn order_conversion_correct(
+    state: State<'_, AppState>,
+    project_id: i64,
+    values: ConversionCorrectionInput,
+) -> Result<OrderSummary, BantoError> {
+    order_conversion_correct_body(&state, project_id, values).await
+}
+
+async fn order_conversion_correct_body(
+    state: &AppState,
+    project_id: i64,
+    values: ConversionCorrectionInput,
+) -> Result<OrderSummary, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let (_, user_id) =
+        business_guard(state, &actor, Operation::EditOrder { project_id }, "orders").await?;
+    let (summary, record) = state
+        .orders
+        .correct_conversion(project_id, values, user_id)
+        .await?;
+    record_ok(
+        &state.audit,
+        &actor,
+        "correct_conversion",
+        "orders",
+        Some(&project_id.to_string()),
+        Some(conversion_correction_audit_detail(&record)),
     )
     .await;
     Ok(summary)
@@ -7087,6 +7134,7 @@ pub fn run() {
             order_get,
             order_convert,
             order_conversion_cancel,
+            order_conversion_correct,
             order_change_create,
             order_change_decide,
             revenue_plan_replace,

@@ -34,9 +34,10 @@ use tokio::sync::broadcast;
 use banto_core::{BantoError, FieldError};
 use banto_storage::{Db, Dialect};
 use cost_domain::order::{
-    check_conversion, check_conversion_cancel, ChangeStatus, ConversionCancelFacts,
-    ConversionCancelIssue, ConversionInput as DomainConversion, ConversionIssue, ConversionScope,
-    OrderBook, OrderChange as DomainChange,
+    check_conversion, check_conversion_cancel, check_conversion_correction, ChangeStatus,
+    ConversionCancelFacts, ConversionCancelIssue, ConversionCorrection, ConversionCorrectionIssue,
+    ConversionInput as DomainConversion, ConversionIssue, ConversionScope, OrderBook,
+    OrderChange as DomainChange,
 };
 use cost_domain::pipeline::RevenuePlanLine;
 use cost_domain::project::{
@@ -174,6 +175,25 @@ pub struct OrderConversion {
     pub basis: String,
     pub created_by_name: Option<String>,
     pub created_at: String,
+    /// Corrections of the 受注日 / 根拠 (T41), newest first.
+    #[sqlx(skip)]
+    pub corrections: Vec<ConversionCorrectionRow>,
+}
+
+/// A correction of a conversion's 受注日 / 根拠 (T41), kept as history.
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionCorrectionRow {
+    pub id: i64,
+    pub old_converted_on: String,
+    pub new_converted_on: String,
+    pub old_basis: String,
+    pub new_basis: String,
+    pub reason: String,
+    /// The business date of the correction.
+    pub corrected_on: String,
+    pub corrected_by_name: Option<String>,
+    pub corrected_at: String,
 }
 
 /// A cancelled conversion (受注転換の取消, T40), kept as history.
@@ -373,6 +393,21 @@ pub struct ConversionCancelInput {
     /// The project's `rowVersion` the screen was loaded with (T13).
     #[serde(default)]
     pub row_version: Option<i64>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// 受注日・根拠の訂正 (T41): the corrected values (both, as the form shows
+/// them; at least one must differ from the current ones) and the reason.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionCorrectionInput {
+    /// The `revenueVersion` the screen was loaded with (T13).
+    #[serde(default)]
+    pub revenue_version: Option<i64>,
+    pub converted_on: String,
+    #[serde(default)]
+    pub basis: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -632,6 +667,32 @@ pub fn conversion_cancel_audit_detail(summary: &OrderSummary) -> serde_json::Val
         "confirmedAmount": cancelled.map(|c| c.confirmed_amount),
         "remainderProjectId": cancelled.and_then(|c| c.remainder_project_id),
         "status": summary.status,
+    })
+}
+
+/// The correction one `correct_conversion` call recorded (T41), as written
+/// in its transaction: the audit is built from this, not from the history
+/// read back afterwards, which may already hold a later correction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorrectionRecord {
+    pub conversion_id: i64,
+    pub correction_id: i64,
+    pub old_converted_on: String,
+    pub new_converted_on: String,
+    pub basis_changed: bool,
+}
+
+/// The audit detail of a 受注日・根拠の訂正 (REST and Tauri): the conversion,
+/// which values changed and the 受注日 before and after. Never the basis
+/// text or the reason.
+pub fn conversion_correction_audit_detail(record: &CorrectionRecord) -> serde_json::Value {
+    serde_json::json!({
+        "conversionId": record.conversion_id,
+        "correctionId": record.correction_id,
+        "convertedOnChanged": record.old_converted_on != record.new_converted_on,
+        "basisChanged": record.basis_changed,
+        "fromConvertedOn": record.old_converted_on,
+        "toConvertedOn": record.new_converted_on,
     })
 }
 
@@ -977,7 +1038,13 @@ impl OrdersService {
              ORDER BY c.recognition_id, c.plan_id",
         );
         let records_sql = self.records_sql();
-        let (conversion, changes, plans, recognitions, clearings, cancelled_conversions) = on_pool!(&self.db, pool => (
+        let corrections_sql = self.sql(
+            "SELECT c.id, c.old_converted_on, c.new_converted_on, c.old_basis, c.new_basis, \
+             c.reason, c.corrected_on, u.display_name AS corrected_by_name, c.corrected_at \
+             FROM order_conversion_corrections c LEFT JOIN users u ON u.id = c.corrected_by \
+             WHERE c.conversion_id = ? ORDER BY c.id DESC",
+        );
+        let (mut conversion, changes, plans, recognitions, clearings, cancelled_conversions) = on_pool!(&self.db, pool => (
             fetch_optional!(pool, conversion_sql, project_id)?,
             fetch_all!(pool, changes_sql, project_id)?,
             fetch_all!(pool, plans_sql, project_id)?,
@@ -985,6 +1052,12 @@ impl OrdersService {
             fetch_all!(pool, clearings_sql, project_id)?,
             fetch_all!(pool, cancelled_sql, project_id)?,
         ));
+        let conversion_ref: &mut Option<OrderConversion> = &mut conversion;
+        if let Some(c) = conversion_ref.as_mut() {
+            let conversion_id: i64 = c.id;
+            c.corrections =
+                on_pool!(&self.db, pool => fetch_all!(pool, corrections_sql, conversion_id))?;
+        }
         let cancel_blockers = match &conversion {
             Some(c) => {
                 let records: Option<RecordCounts> = on_pool!(&self.db, pool =>
@@ -1334,11 +1407,17 @@ impl OrdersService {
     /// The records are counted again inside the transaction after the project
     /// row is written (on SQLite that write takes the database's write lock,
     /// so a record written after the check cannot slip in, T13).
+    ///
+    /// `checked_remainder` is the remainder project the wiring layer checked
+    /// `EditProject` on ([`Self::conversion_remainder`]): the cancellation
+    /// sets that project to 中止, so the caller must be allowed to edit it
+    /// too. A conversion whose remainder is another one is refused as stale.
     pub async fn cancel_conversion(
         &self,
         project_id: i64,
         input: ConversionCancelInput,
         actor_user_id: Option<i64>,
+        checked_remainder: Option<i64>,
     ) -> Result<OrderSummary, BantoError> {
         let state = self.state(project_id).await?;
         let Some(conversion) = state.conversion.as_ref() else {
@@ -1346,6 +1425,9 @@ impl OrdersService {
                 field_errors: vec![field_error("status", "受注転換していない案件です")],
             });
         };
+        if conversion.remainder_project_id != checked_remainder {
+            return Err(stale_version_error());
+        }
         let Some(row_version) = input.row_version else {
             return Err(BantoError::Validation {
                 field_errors: vec![field_error("rowVersion", "版番号がありません")],
@@ -1431,6 +1513,119 @@ impl OrdersService {
         });
         self.notify_changed();
         self.summary(project_id).await
+    }
+
+    /// The remainder project of the project's current (not cancelled)
+    /// conversion, if it is a partial order. The wiring layer checks
+    /// `EditProject` on it before a cancellation (which sets it to 中止).
+    pub async fn conversion_remainder(&self, project_id: i64) -> Result<Option<i64>, BantoError> {
+        let sql = self.sql(
+            "SELECT remainder_project_id FROM order_conversions \
+             WHERE project_id = ? AND cancelled_at IS NULL",
+        );
+        let row: Option<(Option<i64>,)> =
+            on_pool!(&self.db, pool => fetch_optional!(pool, sql, project_id))?;
+        Ok(row.and_then(|(id,)| id))
+    }
+
+    /// Correct the 受注日 / 根拠 of the project's conversion (T41) with a reason,
+    /// also after records are on the order (unlike the cancellation, T40). The
+    /// conversion row keeps the corrected values and the correction keeps
+    /// both, so the history shows what was entered first. Neither value feeds
+    /// any amount, so no figure changes. Settled projects are refused
+    /// (`cost_domain::order::check_conversion_correction`).
+    ///
+    /// Starts with the `revenue_version` compare-and-set, which also requires
+    /// the project to be still ordered and not settled (T13).
+    pub async fn correct_conversion(
+        &self,
+        project_id: i64,
+        input: ConversionCorrectionInput,
+        actor_user_id: Option<i64>,
+    ) -> Result<(OrderSummary, CorrectionRecord), BantoError> {
+        let state = self.state(project_id).await?;
+        let Some(conversion) = state.conversion.as_ref() else {
+            return Err(BantoError::Validation {
+                field_errors: vec![field_error("status", "受注転換していない案件です")],
+            });
+        };
+        let Some(revenue_version) = input.revenue_version else {
+            return Err(BantoError::Validation {
+                field_errors: vec![field_error("revenueVersion", "版番号がありません")],
+            });
+        };
+        let mut errors = Vec::new();
+        let converted_on = input.converted_on.trim().to_string();
+        let basis = text("basis", &input.basis, None, &mut errors).unwrap_or_default();
+        let reason = text("reason", &input.reason, None, &mut errors).unwrap_or_default();
+        for issue in check_conversion_correction(&ConversionCorrection {
+            status: state.status,
+            current_converted_on: &conversion.converted_on,
+            current_basis: &conversion.basis,
+            converted_on: Date::parse(&converted_on),
+            basis: &basis,
+            reason: &reason,
+        }) {
+            let (field, message) = match issue {
+                ConversionCorrectionIssue::NotOpenOrder => (
+                    "status",
+                    "精算完了の案件は直せません（精算完了を取り消してから直してください）",
+                ),
+                ConversionCorrectionIssue::DateInvalid => {
+                    ("convertedOn", "日付は YYYY-MM-DD で入力してください")
+                }
+                ConversionCorrectionIssue::BasisRequired => (
+                    "basis",
+                    "受注の根拠（注文書番号・契約など）を入力してください",
+                ),
+                ConversionCorrectionIssue::ReasonRequired => {
+                    ("reason", "訂正の理由を入力してください")
+                }
+                ConversionCorrectionIssue::NoChange => (
+                    "convertedOn",
+                    "受注日も根拠も今のままです。直す値を入力してください",
+                ),
+            };
+            errors.push(field_error(field, message));
+        }
+        validation(errors)?;
+        let corrected_on = crate::business_date::today().to_string();
+        let guard = self.sql(
+            "UPDATE projects SET revenue_version = revenue_version + 1 \
+             WHERE id = ? AND revenue_version = ? \
+             AND status IN ('ordered', 'in_progress', 'work_done')",
+        );
+        let update = self.sql(
+            "UPDATE order_conversions SET converted_on = ?, basis = ? \
+             WHERE id = ? AND cancelled_at IS NULL AND converted_on = ? AND basis = ?",
+        );
+        let insert = self.sql(
+            "INSERT INTO order_conversion_corrections (conversion_id, old_converted_on, \
+             new_converted_on, old_basis, new_basis, reason, corrected_on, corrected_by) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        );
+        let conversion_id = conversion.id;
+        let (old_on, old_basis) = (&conversion.converted_on, &conversion.basis);
+        let correction_id: i64 = in_tx!(&self.db, tx => {
+            if execute!(&mut *tx, guard, project_id, revenue_version)? == 0 {
+                return Err(stale_version_error());
+            }
+            if execute!(&mut *tx, update, &converted_on, &basis, conversion_id, old_on,
+                old_basis)? == 0 {
+                return Err(stale_version_error());
+            }
+            scalar!(&mut *tx, insert, conversion_id, old_on, &converted_on, old_basis, &basis,
+                &reason, &corrected_on, actor_user_id)?
+        });
+        let record = CorrectionRecord {
+            conversion_id,
+            correction_id,
+            old_converted_on: old_on.clone(),
+            new_converted_on: converted_on,
+            basis_changed: *old_basis != basis,
+        };
+        self.notify_changed();
+        Ok((self.summary(project_id).await?, record))
     }
 
     async fn code_taken(&self, code: &str) -> Result<bool, BantoError> {
@@ -2050,7 +2245,7 @@ pub(crate) mod tests {
         // The reason is required; a stale row version is refused. Neither notifies.
         assert_eq!(
             field_of(
-                svc.cancel_conversion(a, cancel_input(rv, Some("  ")), Some(1))
+                svc.cancel_conversion(a, cancel_input(rv, Some("  ")), Some(1), None)
                     .await
                     .unwrap_err()
             ),
@@ -2058,15 +2253,20 @@ pub(crate) mod tests {
         );
         assert_eq!(
             field_of(
-                svc.cancel_conversion(a, cancel_input(rv - 1, Some("案件の取り違え")), Some(1))
-                    .await
-                    .unwrap_err()
+                svc.cancel_conversion(
+                    a,
+                    cancel_input(rv - 1, Some("案件の取り違え")),
+                    Some(1),
+                    None
+                )
+                .await
+                .unwrap_err()
             ),
             vec!["rowVersion"]
         );
         assert!(rx.try_recv().is_err());
         let s = svc
-            .cancel_conversion(a, cancel_input(rv, Some("案件の取り違え")), Some(2))
+            .cancel_conversion(a, cancel_input(rv, Some("案件の取り違え")), Some(2), None)
             .await
             .unwrap();
         assert!(matches!(
@@ -2096,7 +2296,7 @@ pub(crate) mod tests {
         let rv = row_version(&db, a).await;
         assert_eq!(
             field_of(
-                svc.cancel_conversion(a, cancel_input(rv, Some("再度")), None)
+                svc.cancel_conversion(a, cancel_input(rv, Some("再度")), None, None)
                     .await
                     .unwrap_err()
             ),
@@ -2114,6 +2314,220 @@ pub(crate) mod tests {
         assert_eq!(s.plan.len(), 1);
         assert_eq!(s.cancelled_conversions.len(), 1);
         assert!(s.issues.is_empty());
+    }
+
+    fn correction_input(
+        revenue_version: i64,
+        converted_on: &str,
+        basis: &str,
+        reason: &str,
+    ) -> ConversionCorrectionInput {
+        ConversionCorrectionInput {
+            revenue_version: Some(revenue_version),
+            converted_on: converted_on.into(),
+            basis: Some(basis.into()),
+            reason: Some(reason.into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn t41_conversion_correction_works_after_records_and_keeps_the_history() {
+        let db = fixture().await;
+        let a = ordered_project(&db, "P-001", vec![line(Some("2027-01"), 4_000_000)]).await;
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let svc = OrdersService::new(db.clone()).with_events(tx);
+        svc.recognize(
+            a,
+            RecognitionInput {
+                recognized_on: "2027-01-25".into(),
+                amount: 1_000_000,
+                basis: None,
+                clears: None,
+            },
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let before = svc.summary(a).await.unwrap();
+        assert_eq!(before.cancel_blockers, vec!["recognitions"]);
+        while rx.try_recv().is_ok() {}
+        let v = before.revenue_version;
+        // Nothing to correct, an empty reason, a stale version: refused, no event.
+        assert_eq!(
+            field_of(
+                svc.correct_conversion(
+                    a,
+                    correction_input(v, "2026-11-20", "注文書 PO-0001", "同じ"),
+                    Some(1)
+                )
+                .await
+                .unwrap_err()
+            ),
+            vec!["convertedOn"]
+        );
+        assert_eq!(
+            field_of(
+                svc.correct_conversion(a, correction_input(v, "2026-11-02", " ", " "), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            vec!["basis", "reason"]
+        );
+        assert_eq!(
+            field_of(
+                svc.correct_conversion(
+                    a,
+                    correction_input(v - 1, "2026-11-02", "注文書 PO-0001", "日付の誤り"),
+                    Some(1)
+                )
+                .await
+                .unwrap_err()
+            ),
+            vec!["rowVersion"]
+        );
+        assert!(rx.try_recv().is_err());
+
+        let (s, first) = svc
+            .correct_conversion(
+                a,
+                correction_input(v, "2026-11-02", "注文書 PO-0001", "注文書の日付の入力誤り"),
+                Some(2),
+            )
+            .await
+            .unwrap();
+        assert!(rx.try_recv().is_ok(), "the correction notifies");
+        let c = s.conversion.as_ref().unwrap();
+        assert_eq!(
+            (c.converted_on.as_str(), c.basis.as_str()),
+            ("2026-11-02", "注文書 PO-0001")
+        );
+        // No figure changes.
+        assert_eq!(
+            (
+                s.confirmed_amount,
+                s.recognized_total,
+                s.remaining,
+                s.status.as_str()
+            ),
+            (
+                before.confirmed_amount,
+                before.recognized_total,
+                before.remaining,
+                "ordered"
+            )
+        );
+        assert_eq!(s.plan, before.plan);
+        assert_eq!(s.revenue_version, v + 1);
+
+        let (s, second) = svc
+            .correct_conversion(
+                a,
+                correction_input(
+                    s.revenue_version,
+                    "2026-11-02",
+                    "注文書 PO-0010",
+                    "番号の誤り",
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+        let c = s.conversion.as_ref().unwrap();
+        assert_eq!(c.basis, "注文書 PO-0010");
+        let h: Vec<_> = c
+            .corrections
+            .iter()
+            .map(|r| {
+                (
+                    r.old_converted_on.as_str(),
+                    r.new_converted_on.as_str(),
+                    r.old_basis.as_str(),
+                    r.new_basis.as_str(),
+                    r.reason.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            h,
+            vec![
+                (
+                    "2026-11-02",
+                    "2026-11-02",
+                    "注文書 PO-0001",
+                    "注文書 PO-0010",
+                    "番号の誤り"
+                ),
+                (
+                    "2026-11-20",
+                    "2026-11-02",
+                    "注文書 PO-0001",
+                    "注文書 PO-0001",
+                    "注文書の日付の入力誤り"
+                ),
+            ],
+            "newest first, before and after"
+        );
+        assert_eq!(
+            c.corrections[0].corrected_on,
+            crate::business_date::today().to_string()
+        );
+        // Each call's audit names its own correction, even though the history
+        // read back after the first one could already hold a later one.
+        assert_eq!(first.correction_id, c.corrections[1].id);
+        let detail = conversion_correction_audit_detail(&first);
+        assert_eq!(detail["correctionId"], c.corrections[1].id);
+        assert_eq!(detail["convertedOnChanged"], true);
+        assert_eq!(detail["basisChanged"], false);
+        assert_eq!(
+            (&detail["fromConvertedOn"], &detail["toConvertedOn"]),
+            (
+                &serde_json::json!("2026-11-20"),
+                &serde_json::json!("2026-11-02")
+            )
+        );
+        let detail = conversion_correction_audit_detail(&second);
+        assert_eq!(detail["correctionId"], c.corrections[0].id);
+        assert_eq!(detail["basisChanged"], true);
+        assert_eq!(detail["convertedOnChanged"], false);
+        assert!(detail.get("reason").is_none());
+    }
+
+    #[tokio::test]
+    async fn t41_conversion_correction_is_refused_before_the_order_and_once_settled() {
+        let db = fixture().await;
+        let svc = OrdersService::new(db.clone());
+        let p = pipeline_project(&db, "P-001", 3_000_000, 60, "2026-12").await;
+        assert_eq!(
+            field_of(
+                svc.correct_conversion(
+                    p,
+                    correction_input(0, "2026-11-02", "注文書", "誤り"),
+                    Some(1)
+                )
+                .await
+                .unwrap_err()
+            ),
+            vec!["status"]
+        );
+        let a = ordered_project(&db, "P-002", vec![line(Some("2027-01"), 4_000_000)]).await;
+        let v = svc.summary(a).await.unwrap().revenue_version;
+        let settle = "UPDATE projects SET status = 'settled' WHERE id = ?".to_string();
+        on_pool!(&db, pool => execute!(pool, settle, a)).unwrap();
+        assert_eq!(
+            field_of(
+                svc.correct_conversion(
+                    a,
+                    correction_input(v, "2026-11-02", "注文書", "誤り"),
+                    Some(1)
+                )
+                .await
+                .unwrap_err()
+            ),
+            vec!["status"]
+        );
+        let c = svc.summary(a).await.unwrap().conversion.unwrap();
+        assert_eq!(c.converted_on, "2026-11-20");
+        assert!(c.corrections.is_empty());
     }
 
     /// A partial order: 3,000,000 ordered out of a 5,000,000 pipeline version,
@@ -2144,8 +2558,22 @@ pub(crate) mod tests {
         assert!(s.cancel_blockers.is_empty(), "{:?}", s.cancel_blockers);
         let remainder = s.conversion.unwrap().remainder_project_id.unwrap();
         let rv = row_version(&db, a).await;
+        // The remainder the caller was checked on must be this conversion's.
+        assert!(matches!(
+            svc.cancel_conversion(a, cancel_input(rv, Some("範囲の入力誤り")), Some(1), None)
+                .await
+                .unwrap_err(),
+            BantoError::Validation { .. }
+        ));
+        assert_eq!(svc.conversion_remainder(a).await.unwrap(), Some(remainder));
+        assert_eq!(svc.summary(remainder).await.unwrap().status, "lead");
         let s = svc
-            .cancel_conversion(a, cancel_input(rv, Some("範囲の入力誤り")), Some(1))
+            .cancel_conversion(
+                a,
+                cancel_input(rv, Some("範囲の入力誤り")),
+                Some(1),
+                Some(remainder),
+            )
             .await
             .unwrap();
         assert_eq!(s.status, "lead");
@@ -2209,7 +2637,7 @@ pub(crate) mod tests {
         assert_eq!(s.cancel_blockers, vec!["order_changes", "recognitions"]);
         let rv = row_version(&db, a).await;
         let err = svc
-            .cancel_conversion(a, cancel_input(rv, Some("取り違え")), Some(1))
+            .cancel_conversion(a, cancel_input(rv, Some("取り違え")), Some(1), None)
             .await
             .unwrap_err();
         match err {

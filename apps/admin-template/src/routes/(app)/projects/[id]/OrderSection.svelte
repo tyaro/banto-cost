@@ -24,6 +24,7 @@
 	import {
 		cancelOrderConversion,
 		cancelRecognition,
+		correctOrderConversion,
 		decideOrderChange,
 		getOrder,
 		recordRecognition,
@@ -67,6 +68,8 @@
 
 	const available = isPipelineAvailable();
 	const CONVERTIBLE = ['lead', 'quoting', 'negotiating', 'on_hold'];
+	/** Ordered and not settled: the 受注日・根拠 can be corrected (T41). */
+	const CORRECTABLE = ['ordered', 'in_progress', 'work_done'];
 	const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 	let summary = $state<OrderSummary | null>(null);
@@ -94,6 +97,13 @@
 	let cancelReason = $state('');
 	let cancelReasonMissing = $state(false);
 
+	// 受注日・根拠の訂正 (T41): filled from the conversion when the panel opens.
+	let correctOpen = $state(false);
+	let correctOn = $state('');
+	let correctBasis = $state('');
+	let correctReason = $state('');
+	let correctErrors = $state<Record<string, string>>({});
+
 	// 売上計上
 	let recognizedOn = $state('');
 	let recognitionAmount = $state('');
@@ -106,7 +116,11 @@
 			changeBasis !== '' ||
 			recognitionAmount !== '' ||
 			recognitionBasis !== '' ||
-			cancelReason !== ''
+			cancelReason !== '' ||
+			correctReason !== '' ||
+			(correctOpen &&
+				summary?.conversion != null &&
+				(correctOn !== summary.conversion.convertedOn || correctBasis !== summary.conversion.basis))
 	);
 	$effect(() => {
 		onPendingChange?.({
@@ -333,6 +347,67 @@
 		}
 	}
 
+	function toggleCorrect(open: boolean) {
+		correctOpen = open;
+		const conversion = summary?.conversion;
+		if (open && conversion && correctReason === '') {
+			correctOn = conversion.convertedOn;
+			correctBasis = conversion.basis;
+			correctErrors = {};
+		}
+	}
+
+	function beforeAfter(before: string, after: string): string {
+		return before === after
+			? m['orders.correctConversionUnchanged']({ value: after })
+			: m['orders.correctConversionValue']({ before, after });
+	}
+
+	/** 受注日・根拠の訂正 (T41): also after records; the history keeps both values. */
+	async function correctConversion() {
+		const conversion = summary?.conversion;
+		if (!summary || !conversion || busy) return;
+		// The order the dialog shows: a summary reloaded while it is open (another
+		// correction) is refused as stale by its revenue version.
+		const revenueVersion = summary.revenueVersion;
+		const convertedOn = correctOn.trim();
+		const basis = correctBasis.trim();
+		const reason = correctReason.trim();
+		const errors: Record<string, string> = {};
+		if (basis === '') errors.basis = m['orders.correctConversionBasisRequired']();
+		if (reason === '') errors.reason = m['orders.correctConversionReasonRequired']();
+		if (convertedOn === conversion.convertedOn && basis === conversion.basis) {
+			errors.convertedOn = m['orders.correctConversionNoChange']();
+		}
+		correctErrors = errors;
+		if (Object.keys(errors).length > 0) return;
+		const ok = await confirmAction({
+			title: m['orders.correctConversionTitle'](),
+			body: m['orders.correctConversionConfirm'](),
+			details: [
+				{ label: m['confirm.project'](), value: code },
+				{
+					label: m['orders.fieldConvertedOn'](),
+					value: beforeAfter(conversion.convertedOn, convertedOn)
+				},
+				{ label: m['orders.fieldBasis'](), value: beforeAfter(conversion.basis, basis) },
+				{ label: m['confirm.reason'](), value: reason }
+			],
+			undo: m['orders.correctConversionUndo'](),
+			confirmLabel: m['orders.correctConversionSubmit']()
+		});
+		if (!ok) return;
+		const done = await write(
+			() => correctOrderConversion(projectId, { revenueVersion, convertedOn, basis, reason }),
+			m['orders.conversionCorrected'](),
+			(fieldErrors) => (correctErrors = fieldErrors)
+		);
+		if (done) {
+			correctReason = '';
+			correctOpen = false;
+		}
+	}
+
 	function monthLabel(month: string | null): string {
 		return month ?? m['pipeline.timeUndecided']();
 	}
@@ -460,7 +535,94 @@
 				</div>
 			</dl>
 
+			{#if conversion.corrections.length > 0}
+				<h3>{m['orders.correctionsTitle']()}</h3>
+				<div class="table-wrap">
+					<table>
+						<thead>
+							<tr>
+								<th scope="col">{m['orders.colCorrectedOn']()}</th>
+								<th scope="col">{m['orders.colBefore']()}</th>
+								<th scope="col">{m['orders.colAfter']()}</th>
+								<th scope="col">{m['orders.colCorrectionReason']()}</th>
+								<th scope="col">{m['orders.colCorrectedBy']()}</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each conversion.corrections as row (row.id)}
+								<tr>
+									<td>{row.correctedOn}</td>
+									<td>{row.oldConvertedOn} / {row.oldBasis}</td>
+									<td>{row.newConvertedOn} / {row.newBasis}</td>
+									<td>{row.reason}</td>
+									<td>{row.correctedByName ?? ''}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+
 			{#if canWrite}
+				<details
+					class="cancel-conversion"
+					open={correctOpen}
+					ontoggle={(event) => toggleCorrect((event.currentTarget as HTMLDetailsElement).open)}
+				>
+					<summary>{m['orders.correctConversionTitle']()}</summary>
+					<p class="note">{m['orders.correctConversionDesc']()}</p>
+					{#if !CORRECTABLE.includes(summary.status)}
+						<p class="note">{m['orders.correctConversionSettled']()}</p>
+					{:else}
+						<form
+							class="inline-form"
+							novalidate
+							onsubmit={(event) => {
+								event.preventDefault();
+								void correctConversion();
+							}}
+						>
+							<label class="field">
+								<span>{m['orders.fieldConvertedOn']()}</span>
+								<input class="banto-input" type="date" bind:value={correctOn} disabled={busy} />
+								{#if correctErrors.convertedOn}<span class="error">{correctErrors.convertedOn}</span
+									>{/if}
+							</label>
+							<label class="field grow">
+								<span>{m['orders.fieldBasis']()}</span>
+								<input
+									class="banto-input"
+									type="text"
+									maxlength="1000"
+									bind:value={correctBasis}
+									disabled={busy}
+								/>
+								{#if correctErrors.basis}<span class="error">{correctErrors.basis}</span>{/if}
+							</label>
+							<label class="field grow">
+								<span>{m['orders.correctConversionReason']()}</span>
+								<input
+									class="banto-input"
+									type="text"
+									maxlength="1000"
+									placeholder={m['orders.correctConversionReasonPlaceholder']()}
+									bind:value={correctReason}
+									disabled={busy}
+								/>
+								{#if correctErrors.reason}<span class="error">{correctErrors.reason}</span>{/if}
+							</label>
+							<button type="submit" class="banto-btn banto-btn--secondary" disabled={busy}>
+								{m['orders.correctConversionSubmit']()}
+							</button>
+						</form>
+						{#if correctErrors.status || correctErrors.rowVersion}
+							<p class="error" role="alert">
+								{correctErrors.status ?? correctErrors.rowVersion}
+							</p>
+						{/if}
+					{/if}
+				</details>
+
 				<details class="cancel-conversion">
 					<summary>{m['orders.cancelConversionTitle']()}</summary>
 					<p class="note">{m['orders.cancelConversionDesc']()}</p>

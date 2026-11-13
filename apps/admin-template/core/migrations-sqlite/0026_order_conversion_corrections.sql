@@ -1,0 +1,25 @@
+-- banto-cost (docs/project/design.md §3.2.3, T41): 受注日・根拠の訂正.
+--
+-- The 受注日 (converted_on) and the 根拠 (basis) of a conversion may be
+-- corrected with a reason even after records (order changes, revenue,
+-- time, costs ...) are on the order, unlike the cancellation (T40). Neither
+-- value feeds any amount or aggregate, so a correction changes no figure.
+-- The conversion row keeps the corrected values; every correction keeps the
+-- values before and after, the business date, the reason, who and when.
+-- Corrections are never rewritten or deleted.
+CREATE TABLE order_conversion_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversion_id INTEGER NOT NULL REFERENCES order_conversions(id),
+    old_converted_on TEXT NOT NULL,
+    new_converted_on TEXT NOT NULL,
+    old_basis TEXT NOT NULL,
+    new_basis TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    corrected_on TEXT NOT NULL,
+    corrected_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    corrected_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (old_converted_on <> new_converted_on OR old_basis <> new_basis)
+);
+
+CREATE INDEX order_conversion_corrections_conversion
+    ON order_conversion_corrections (conversion_id);

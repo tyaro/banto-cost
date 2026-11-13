@@ -19,6 +19,7 @@
 	import * as m from '#lib/paraglide/messages.js';
 	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import {
+		dueLinesKey,
 		getRecurringMonth,
 		listRecurringAgreements,
 		monthsBetween,
@@ -170,6 +171,7 @@
 		if (!view || busy) return;
 		// Recognize the month the dialog showed, not one loaded while it was open.
 		const { month: shownMonth, dueCount, recognizedOn } = view;
+		const shownLines = dueLinesKey(view);
 		const ok = await confirmAction({
 			title: m['recurring.recognizeConfirmTitle'](),
 			body: m['recurring.recognizeConfirm']({
@@ -188,10 +190,15 @@
 		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
-			// Items added elsewhere while the dialog was open are not recognized
-			// unconfirmed: read the month again and ask again if it changed.
+			// Items added or changed elsewhere while the dialog was open are not
+			// recognized unconfirmed: read the month again and ask again if the
+			// due agreements (IDs, amounts) or the date changed.
 			const fresh = await getRecurringMonth(shownMonth);
-			if (fresh.dueCount !== dueCount || fresh.recognizedOn !== recognizedOn) {
+			if (
+				fresh.dueCount !== dueCount ||
+				fresh.recognizedOn !== recognizedOn ||
+				dueLinesKey(fresh) !== shownLines
+			) {
 				view = fresh;
 				notify('error', m['confirm.changed']());
 				return;

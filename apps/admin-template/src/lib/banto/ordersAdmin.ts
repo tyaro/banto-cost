@@ -35,6 +35,29 @@ export interface OrderConversion {
 	basis: string;
 	createdByName: string | null;
 	createdAt: string;
+	/** Corrections of the 受注日 / 根拠 (T41), newest first. */
+	corrections: ConversionCorrectionRow[];
+}
+
+/** Mirrors `admin_template_core::orders::ConversionCorrectionRow` (T41). */
+export interface ConversionCorrectionRow {
+	id: number;
+	oldConvertedOn: string;
+	newConvertedOn: string;
+	oldBasis: string;
+	newBasis: string;
+	reason: string;
+	correctedOn: string;
+	correctedByName: string | null;
+	correctedAt: string;
+}
+
+/** Mirrors `admin_template_core::orders::ConversionCorrectionInput` (T41). */
+export interface ConversionCorrectionInput {
+	revenueVersion: number;
+	convertedOn: string;
+	basis: string;
+	reason: string;
 }
 
 /** Mirrors `admin_template_core::orders::CancelledConversion` (T40). */
@@ -221,8 +244,9 @@ export async function convertOrder(
 }
 
 /**
- * 受注転換の取消 (T40): back to the status before the conversion. Only a whole
- * order with nothing recorded on it; the reason is required.
+ * 受注転換の取消 (T40): back to the status before the conversion. Only an
+ * order with nothing recorded on it (a partial order's remainder is set to
+ * 中止); the reason is required.
  */
 export async function cancelOrderConversion(
 	projectId: number,
@@ -233,6 +257,24 @@ export async function cancelOrderConversion(
 		return invokeCommand<OrderSummary>('order_conversion_cancel', { projectId, values });
 	}
 	return httpRequest<OrderSummary>(`/api/projects/${projectId}/order/conversion/cancel`, {
+		method: 'POST',
+		body: values
+	});
+}
+
+/**
+ * 受注日・根拠の訂正 (T41): also after records are on the order (not once
+ * settled). The values before and after stay in `conversion.corrections`.
+ */
+export async function correctOrderConversion(
+	projectId: number,
+	values: ConversionCorrectionInput
+): Promise<OrderSummary> {
+	guard();
+	if (tauri()) {
+		return invokeCommand<OrderSummary>('order_conversion_correct', { projectId, values });
+	}
+	return httpRequest<OrderSummary>(`/api/projects/${projectId}/order/conversion/correct`, {
 		method: 'POST',
 		body: values
 	});

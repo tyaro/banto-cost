@@ -3800,6 +3800,216 @@ async fn t40_t12_rest_conversion_cancel_needs_edit_order_and_a_reason() {
     assert!(!detail.contains("取り違え"), "{detail}");
 }
 
+/// A partial order's cancellation sets the remainder to 中止, so the caller
+/// must be allowed to edit the remainder too (both paths, PR #46 review).
+#[tokio::test]
+async fn t40_t12_rest_partial_conversion_cancel_needs_edit_project_on_the_remainder() {
+    let (router, _audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["pipeline.edit", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", 1),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": project["rowVersion"],
+                "convertedOn": "2026-11-20",
+                "confirmedAmount": 3_000_000,
+                "basis": "注文書受領",
+                "plannedStart": "2026-12-01",
+                "plannedEnd": "2027-03-31",
+                "revenuePlan": [{ "month": "2027-01", "amount": 3_000_000 }],
+                "scope": "partial",
+                "remainder": {
+                    "code": "P-001-2",
+                    "name": "二期",
+                    "version": {
+                        "stage": "negotiating",
+                        "expectedAmount": 2_000_000,
+                        "probabilityPct": 50,
+                        "expectedOrderMonth": "2027-02",
+                        "basis": "残りの範囲",
+                        "confirmedOn": "2026-11-20",
+                        "revenuePlan": [{ "month": "2027-03", "amount": 2_000_000 }]
+                    }
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let summary = body_json(response).await;
+    let remainder = summary["conversion"]["remainderProjectId"]
+        .as_i64()
+        .unwrap();
+    // The editor is not a member of the remainder any more.
+    let response = router
+        .clone()
+        .oneshot(delete_auth(
+            &format!("/api/projects/{remainder}/members/{EDITOR_ID}/sales"),
+            &admin,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}"), &editor))
+        .await
+        .unwrap();
+    let row_version = body_json(response).await["rowVersion"].clone();
+    let url = format!("/api/projects/{id}/order/conversion/cancel");
+    let body = json!({ "rowVersion": row_version, "reason": "範囲の入力誤り" });
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(&url, &editor, body.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{id}/order"), &editor))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["status"], "ordered");
+    // Back in scope: the cancellation goes through and closes the remainder.
+    let response = router
+        .clone()
+        .oneshot(put_json(
+            &format!("/api/projects/{remainder}/members/{EDITOR_ID}/sales"),
+            &admin,
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(&url, &editor, body))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(get_auth(&format!("/api/projects/{remainder}"), &editor))
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["status"], "cancelled");
+}
+
+#[tokio::test]
+async fn t41_t12_rest_conversion_correction_needs_edit_order_and_a_reason() {
+    let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["pipeline.edit", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", 1),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await;
+    let id = project["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/projects/{id}/order/convert"),
+            &editor,
+            json!({
+                "rowVersion": project["rowVersion"],
+                "convertedOn": "2026-11-20",
+                "confirmedAmount": 2_800_000,
+                "basis": "注文書受領",
+                "plannedStart": "2026-12-01",
+                "plannedEnd": "2027-03-31",
+                "revenuePlan": [{ "month": "2026-12", "amount": 2_800_000 }],
+                "scope": "whole"
+            }),
+        ))
+        .await
+        .unwrap();
+    let summary = body_json(response).await;
+    let revenue_version = summary["revenueVersion"].clone();
+    let url = format!("/api/projects/{id}/order/conversion/correct");
+    let body = json!({
+        "revenueVersion": revenue_version,
+        "convertedOn": "2026-11-02",
+        "basis": "注文書 PO-0001",
+        "reason": "注文書の日付の入力誤り"
+    });
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(&url, &viewer, body.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &url,
+            &editor,
+            json!({ "revenueVersion": revenue_version, "convertedOn": "2026-11-02",
+                "basis": "注文書 PO-0001", "reason": " " }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(&url, &editor, body))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let summary = body_json(response).await;
+    assert_eq!(summary["conversion"]["convertedOn"], "2026-11-02");
+    assert_eq!(summary["conversion"]["basis"], "注文書 PO-0001");
+    let c = &summary["conversion"]["corrections"][0];
+    assert_eq!(
+        (&c["oldConvertedOn"], &c["oldBasis"], &c["reason"]),
+        (
+            &json!("2026-11-20"),
+            &json!("注文書受領"),
+            &json!("注文書の日付の入力誤り")
+        )
+    );
+
+    // Audited with which values changed, never the basis or the reason.
+    let rows = audit.list(ListParams::default()).await.unwrap().rows;
+    let row = rows
+        .iter()
+        .find(|r| r.action == "correct_conversion")
+        .expect("correction audited");
+    let detail = row.detail.as_deref().unwrap();
+    assert!(detail.contains("\"convertedOnChanged\":true"), "{detail}");
+    assert!(!detail.contains("入力誤り"), "{detail}");
+    assert!(!detail.contains("PO-0001"), "{detail}");
+}
+
 #[tokio::test]
 async fn t23_t26_t27_rest_order_revenue_and_outlook() {
     let (router, audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
