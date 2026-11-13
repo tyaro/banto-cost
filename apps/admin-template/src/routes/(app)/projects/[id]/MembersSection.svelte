@@ -118,12 +118,16 @@
 		const userId = Number(newUser);
 		if (busy || !newUser || !Number.isInteger(userId) || !members) return;
 		const id = projectId;
+		const startedAt = loadToken;
 		busy = true;
 		try {
 			const rows = await addProjectMember(id, userId, newKind);
-			// A newer read (or another project) wins over this answer.
-			++loadToken;
-			read = { projectId: id, rows };
+			// Only while still on the same project and no read started since
+			// (that read answers with the added member as well).
+			if (id === projectId && loadToken === startedAt) {
+				++loadToken;
+				read = { projectId: id, rows };
+			}
 			newUser = '';
 			toastStore.push('success', m['members.added']());
 		} catch (err) {
@@ -140,7 +144,8 @@
 		try {
 			await removeProjectMember(member.projectId, member.userId, member.kind);
 			toastStore.push('success', m['members.removed']());
-			await load(member.projectId);
+			// Moved to another project meanwhile: its own read stands.
+			if (member.projectId === projectId) await load(projectId);
 		} catch (err) {
 			toastStore.push('error', errorText(err));
 		} finally {
