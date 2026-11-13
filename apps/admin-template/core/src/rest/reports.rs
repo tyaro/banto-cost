@@ -86,6 +86,6 @@ pub(super) fn reports_router(
         .route("/api/reports/portfolio.csv", get(portfolio_csv))
         .route("/api/reports/period-monthly.csv", get(period_monthly_csv))
         .route("/api/calendar", get(business_calendar))
-        .with_state(super::projects::state(services, audit, auth.clone()))
+        .with_state(super::projects::state(services, audit))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }

@@ -1,13 +1,11 @@
 //! `/api/customers/*`, `/api/projects/*` and the pipeline routes (banto-cost
 //! P3a). The Tauri twins are the `customers_*` / `projects_*` / `pipeline_*`
-//! commands in `src-tauri`; both sides authorize through
-//! `AuthzService::authorize_audited` with the same `Operation`s (ADR-0028,
-//! conventions §1), and lists use the same scope functions as the detail
-//! decisions (`visible_projects` / `amount_projects`, T12). Customers,
-//! projects, the pipeline and the calc basis call the authorized operations
-//! in `crate::ops::{projects, pipeline, calc_basis}` (decision, service,
-//! audit; review §8-13), and orders and the outlook those in
-//! `crate::ops::orders`.
+//! commands in `src-tauri`; both call the same authorized operations in
+//! `crate::ops::{projects, pipeline, calc_basis, orders}` (decision,
+//! service, audit; review §8-13, ADR-0028, conventions §1), and lists use
+//! the same scope functions as the detail decisions (`visible_projects` /
+//! `amount_projects`, T12). [`BusinessState::gate`] names the REST caller
+//! for every business route (`rest/{time,costs,budgets,...}.rs` too).
 //!
 //! Role floors: reads need a session; writes need `editor` (Banto's "may
 //! enter business data"). On top of the floor:
@@ -48,10 +46,9 @@
 use super::*;
 use axum::extract::Query;
 use axum::Extension;
-use banto_admin_services::authz::{Actor, Allowed, AuthzService, Operation, Policy, Subject};
+use banto_admin_services::authz::AuthzService;
 use banto_core::BantoError;
 use banto_server::AuthenticatedSession;
-use std::str::FromStr;
 
 use crate::budgets::BudgetsService;
 use crate::calc_basis::{
@@ -88,65 +85,11 @@ pub(super) struct BusinessState {
     pub(super) authz: AuthzService,
     pub(super) users: UsersService,
     pub(super) audit: AuditLogService,
-    pub(super) auth: AuthState,
-}
-
-pub(super) fn is_admin(session: &AuthenticatedSession) -> bool {
-    Role::from_str(&session.identity.role).is_ok_and(|role| role.is_admin())
 }
 
 impl BusinessState {
-    /// Decide `op` for the caller (recording a denial), returning the loaded
-    /// subject and the caller's user id.
-    pub(super) async fn guard(
-        &self,
-        session: &AuthenticatedSession,
-        op: Operation,
-        resource: &str,
-    ) -> Result<(Subject, Option<i64>), BantoError> {
-        let (subject, user_id, _) = self
-            .guard_with(session, op, Policy::default(), resource)
-            .await?;
-        Ok((subject, user_id))
-    }
-
-    /// As [`Self::guard`] with an explicit policy, also returning the decision.
-    pub(super) async fn guard_with(
-        &self,
-        session: &AuthenticatedSession,
-        op: Operation,
-        policy: Policy,
-        resource: &str,
-    ) -> Result<(Subject, Option<i64>, Allowed), BantoError> {
-        let user_id = caller_user_id(session, &self.users).await?;
-        let (subject, allowed) = self
-            .authz
-            .authorize_audited(
-                &self.audit,
-                Actor {
-                    user_id,
-                    username: &session.identity.id,
-                    role: &session.identity.role,
-                },
-                op,
-                policy,
-                resource,
-                "rest",
-            )
-            .await?;
-        Ok((subject, user_id, allowed))
-    }
-
-    pub(super) async fn subject(
-        &self,
-        session: &AuthenticatedSession,
-    ) -> Result<Subject, BantoError> {
-        let user_id = caller_user_id(session, &self.users).await?;
-        self.authz.subject(user_id).await
-    }
-
-    /// The caller of an authorized operation (`crate::ops`, review §8-13):
-    /// the same identity [`Self::guard`] decides for, from the REST path.
+    /// The caller of an authorized operation (`crate::ops`, review §8-13)
+    /// from the REST path: the session's user row and identity.
     pub(super) async fn gate<'a>(
         &'a self,
         session: &'a AuthenticatedSession,
@@ -560,11 +503,7 @@ pub(super) struct BusinessServices {
     pub users: UsersService,
 }
 
-pub(super) fn state(
-    services: BusinessServices,
-    audit: AuditLogService,
-    auth: AuthState,
-) -> BusinessState {
+pub(super) fn state(services: BusinessServices, audit: AuditLogService) -> BusinessState {
     BusinessState {
         customers: services.customers,
         projects: services.projects,
@@ -579,7 +518,6 @@ pub(super) fn state(
         authz: services.authz,
         users: services.users,
         audit,
-        auth,
     }
 }
 
@@ -611,7 +549,7 @@ pub(super) fn business_read_router(
             "/api/projects/{id}/calc-basis/preview",
             post(project_basis_preview),
         )
-        .with_state(state(services, audit, auth.clone()))
+        .with_state(state(services, audit))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -666,7 +604,7 @@ pub(super) fn business_write_router(
         .route("/api/outlook/snapshots", post(outlook_snapshot_create))
         .route("/api/calc-basis", post(calc_basis_add))
         .route("/api/projects/{id}/calc-basis", post(project_basis_add))
-        .with_state(state(services, audit.clone(), auth.clone()))
+        .with_state(state(services, audit.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {
                 auth: auth.clone(),

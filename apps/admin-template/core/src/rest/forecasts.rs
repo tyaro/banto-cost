@@ -115,7 +115,7 @@ pub(super) fn forecast_read_router(
         .route("/api/projects/{id}/forecast", get(project_forecast))
         .route("/api/projects/{id}/summary", get(project_summary))
         .route("/api/portfolio", get(portfolio))
-        .with_state(super::projects::state(services, audit, auth.clone()))
+        .with_state(super::projects::state(services, audit))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -132,11 +132,7 @@ pub(super) fn forecast_write_router(
             axum::routing::put(draft_update).delete(draft_delete),
         )
         .route("/api/forecast-versions/{id}/adopt", post(draft_adopt))
-        .with_state(super::projects::state(
-            services,
-            audit.clone(),
-            auth.clone(),
-        ))
+        .with_state(super::projects::state(services, audit.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {
                 auth: auth.clone(),

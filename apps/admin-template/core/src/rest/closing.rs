@@ -70,7 +70,7 @@ pub(super) fn closing_read_router(
     Router::new()
         .route("/api/closing", get(closing_months))
         .route("/api/closing/{month}", get(closing_get))
-        .with_state(super::projects::state(services, audit, auth.clone()))
+        .with_state(super::projects::state(services, audit))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -83,11 +83,7 @@ pub(super) fn closing_write_router(
     Router::new()
         .route("/api/closing/{month}/close", post(closing_close))
         .route("/api/closing/{month}/reopen", post(closing_reopen))
-        .with_state(super::projects::state(
-            services,
-            audit.clone(),
-            auth.clone(),
-        ))
+        .with_state(super::projects::state(services, audit.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {
                 auth: auth.clone(),

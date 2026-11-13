@@ -89,7 +89,7 @@ pub(super) fn budget_read_router(
 ) -> Router {
     Router::new()
         .route("/api/projects/{id}/budget", get(project_budget))
-        .with_state(super::projects::state(services, audit, auth.clone()))
+        .with_state(super::projects::state(services, audit))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -106,11 +106,7 @@ pub(super) fn budget_write_router(
             axum::routing::put(draft_update).delete(draft_delete),
         )
         .route("/api/budget-versions/{id}/approve", post(draft_approve))
-        .with_state(super::projects::state(
-            services,
-            audit.clone(),
-            auth.clone(),
-        ))
+        .with_state(super::projects::state(services, audit.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {
                 auth: auth.clone(),

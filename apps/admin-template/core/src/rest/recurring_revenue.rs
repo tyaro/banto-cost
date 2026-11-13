@@ -76,7 +76,7 @@ pub(super) fn recurring_revenue_read_router(
     Router::new()
         .route("/api/recurring-revenue/agreements", get(agreements_list))
         .route("/api/recurring-revenue/months/{month}", get(month_get))
-        .with_state(super::projects::state(services, audit, auth.clone()))
+        .with_state(super::projects::state(services, audit))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -96,11 +96,7 @@ pub(super) fn recurring_revenue_write_router(
             "/api/recurring-revenue/months/{month}/recognize",
             post(month_recognize),
         )
-        .with_state(super::projects::state(
-            services,
-            audit.clone(),
-            auth.clone(),
-        ))
+        .with_state(super::projects::state(services, audit.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {
                 auth: auth.clone(),
