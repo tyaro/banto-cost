@@ -44,10 +44,14 @@ function guard(): void {
 
 const tauri = () => getBantoMode() === 'tauri';
 
-export async function getMyAuthz(): Promise<MyAuthz> {
+/**
+ * `signal` cancels the HTTP request; a Tauri command cannot be cancelled and
+ * runs to its end (myAuthz.svelte.ts never stacks a second one on it).
+ */
+export async function getMyAuthz(signal?: AbortSignal): Promise<MyAuthz> {
 	guard();
 	if (tauri()) return invokeCommand<MyAuthz>('authz_me');
-	return httpRequest<MyAuthz>('/api/authz/me', { method: 'GET' });
+	return httpRequest<MyAuthz>('/api/authz/me', { method: 'GET', signal });
 }
 
 export async function listProjectMembers(projectId: number): Promise<ProjectMember[]> {

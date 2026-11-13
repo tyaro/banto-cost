@@ -23,7 +23,14 @@ import { getMyAuthz, type MyAuthz } from './projectMembersAdmin';
 export const MY_AUTHZ_WAIT_MS = 3000;
 
 let loaded = $state.raw<{ generation: number; authz: MyAuthz } | null>(null);
-let loading: { generation: number; promise: Promise<void> } | null = null;
+let loading: { generation: number; promise: Promise<void>; abort: () => void } | null = null;
+/**
+ * A request given up on at the end of the wait that has not settled yet (a
+ * Tauri command cannot be cancelled; an aborted HTTP one settles at once).
+ * While it runs, no second one is started (PR #60 review: requests must not
+ * pile up while the server does not answer).
+ */
+let givenUp: Promise<unknown> | null = null;
 /**
  * The held grants are known to be out of date (a reload was asked for and has
  * not succeeded yet): they stay in use, and the next load reads them again
@@ -56,7 +63,13 @@ export function loadMyAuthz(
 		stale = false;
 	}
 	if (force || loading?.generation !== generation) {
-		const promise = getMyAuthz()
+		// The earlier read is for another session, or replaced by a reload.
+		loading?.abort();
+		loading = null;
+		if (givenUp) return Promise.resolve();
+		const controller = new AbortController();
+		const request = getMyAuthz(controller.signal);
+		const promise = request
 			.then((authz) => {
 				// A newer session started (or a newer read was asked for) while
 				// this one was in flight: drop it.
@@ -69,16 +82,25 @@ export function loadMyAuthz(
 			.finally(() => {
 				if (loading?.promise === promise) loading = null;
 			});
-		loading = { generation, promise };
+		loading = { generation, promise, abort: () => controller.abort() };
 	}
-	const pending = loading.promise;
+	const current = loading;
+	const pending = current.promise;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<void>((resolve) => {
 		timer = setTimeout(() => {
 			// A read that has not answered in time is given up (PR #60 review):
-			// the next navigation asks again instead of waiting on it, and its
-			// late answer is not used (the `loading` check above).
-			if (loading?.promise === pending) loading = null;
+			// it is cancelled (HTTP), its late answer is not used (the `loading`
+			// check above), and the next navigation asks again - once it has
+			// settled, so a stalled Tauri command is never doubled.
+			if (loading === current) {
+				loading = null;
+				current.abort();
+				const settled = pending.finally(() => {
+					if (givenUp === settled) givenUp = null;
+				});
+				givenUp = settled;
+			}
 			resolve();
 		}, waitMs);
 	});
@@ -110,5 +132,6 @@ export function myCapabilities(): ReadonlySet<Capability> | null {
 export function setMyAuthzForTest(value: { generation: number; authz: MyAuthz } | null): void {
 	loaded = value;
 	loading = null;
+	givenUp = null;
 	stale = false;
 }

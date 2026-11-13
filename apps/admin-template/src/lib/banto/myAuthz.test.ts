@@ -35,7 +35,10 @@ describe('myAuthz (review D-4, §8-15)', () => {
 		await loadMyAuthz(1);
 		await loadMyAuthz(1);
 		expect(mocks.httpRequest).toHaveBeenCalledTimes(1);
-		expect(mocks.httpRequest).toHaveBeenCalledWith('/api/authz/me', { method: 'GET' });
+		expect(mocks.httpRequest).toHaveBeenCalledWith(
+			'/api/authz/me',
+			expect.objectContaining({ method: 'GET', signal: expect.any(AbortSignal) })
+		);
 		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry']);
 	});
 
@@ -70,19 +73,44 @@ describe('myAuthz (review D-4, §8-15)', () => {
 		expect(myCapabilities()).toBeNull();
 	});
 
-	it('gives up a read that stalls: the next load asks again and the late answer is dropped', async () => {
+	it('cancels an HTTP read that stalls, and the next load asks again', async () => {
 		vi.useFakeTimers();
-		let late: (value: unknown) => void = () => {};
-		mocks.httpRequest.mockReturnValueOnce(new Promise((resolve) => (late = resolve)));
+		let signal: AbortSignal | undefined;
+		mocks.httpRequest.mockImplementationOnce(
+			(_path: string, init: { signal?: AbortSignal }) =>
+				new Promise((_resolve, reject) => {
+					signal = init.signal;
+					init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+				})
+		);
 		const first = loadMyAuthz(1, 3000);
 		await vi.advanceTimersByTimeAsync(3000);
 		await first;
+		expect(signal?.aborted).toBe(true);
 		mocks.httpRequest.mockResolvedValueOnce(worker);
 		await loadMyAuthz(1, 3000);
 		expect(mocks.httpRequest).toHaveBeenCalledTimes(2);
 		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry']);
+	});
+
+	it('never stacks a second read on a stalled one that cannot be cancelled, and drops its late answer', async () => {
+		vi.useFakeTimers();
+		let late: (value: unknown) => void = () => {};
+		// Ignores the signal, like a Tauri command.
+		mocks.httpRequest.mockReturnValueOnce(new Promise((resolve) => (late = resolve)));
+		const first = loadMyAuthz(1, 3000);
+		await vi.advanceTimersByTimeAsync(3000);
+		await first;
+		// Still running: the next navigations neither wait nor ask again.
+		await expect(loadMyAuthz(1, 3000)).resolves.toBeUndefined();
+		await loadMyAuthz(1, 3000);
+		expect(mocks.httpRequest).toHaveBeenCalledTimes(1);
 		late({ capabilities: ['amount.view'], memberships: [] });
 		await vi.advanceTimersByTimeAsync(0);
+		expect(myCapabilities()).toBeNull();
+		mocks.httpRequest.mockResolvedValueOnce(worker);
+		await loadMyAuthz(1, 3000);
+		expect(mocks.httpRequest).toHaveBeenCalledTimes(2);
 		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry']);
 	});
 

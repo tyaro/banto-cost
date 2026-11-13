@@ -185,6 +185,8 @@ const NETWORK_ERROR_MESSAGE = 'サーバーに接続できません';
 export interface HttpInit {
 	method: string;
 	body?: unknown;
+	/** Cancels the request (a bounded wait gave up on it); it then rejects like a network error. */
+	signal?: AbortSignal;
 }
 
 /** Bearer token of the active http `AuthProvider` (same as usersAdmin.ts). */
@@ -205,7 +207,8 @@ export async function httpRequest<T>(path: string, init: HttpInit): Promise<T> {
 		response = await fetch(path, {
 			method: init.method,
 			headers,
-			body: hasBody ? JSON.stringify(init.body) : undefined
+			body: hasBody ? JSON.stringify(init.body) : undefined,
+			signal: init.signal
 		});
 	} catch {
 		throw new ProviderError({ kind: 'other', message: NETWORK_ERROR_MESSAGE });
