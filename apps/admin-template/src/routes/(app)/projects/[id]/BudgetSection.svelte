@@ -44,11 +44,14 @@
 		projectId: number;
 		/** The project code, shown in confirmation dialogs. */
 		code: string;
-		canWrite: boolean;
+		/** May start, edit, save and discard the draft (the project's manager). */
+		canEdit: boolean;
+		/** May approve the draft (the manager or accounting). */
+		canApprove: boolean;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, code, canWrite, onPendingChange }: Props = $props();
+	let { projectId, code, canEdit, canApprove, onPendingChange }: Props = $props();
 
 	interface LineRow {
 		phaseId: string;
@@ -419,7 +422,7 @@
 		<h3>{m['budget.draftTitle']()}</h3>
 		{#if !draft}
 			<p class="note">{m['budget.noDraft']()}</p>
-			{#if canWrite}
+			{#if canEdit}
 				<div class="actions">
 					<button
 						type="button"
@@ -465,7 +468,7 @@
 									<select
 										class="banto-input"
 										bind:value={row.phaseId}
-										disabled={!canWrite || busy}
+										disabled={!canEdit || busy}
 										aria-label={m['budget.colPhase']()}
 									>
 										<option value="">{m['budget.noPhase']()}</option>
@@ -478,7 +481,7 @@
 									<select
 										class="banto-input"
 										bind:value={row.costType}
-										disabled={!canWrite || busy}
+										disabled={!canEdit || busy}
 										aria-label={m['budget.colCostType']()}
 									>
 										{#each COST_TYPES as t (t)}
@@ -492,7 +495,7 @@
 											class="banto-input short"
 											inputmode="decimal"
 											bind:value={row.hours}
-											disabled={!canWrite || busy}
+											disabled={!canEdit || busy}
 											aria-label={m['budget.colHours']()}
 										/>
 									{:else}
@@ -507,7 +510,7 @@
 											class="banto-input short"
 											inputmode="numeric"
 											bind:value={row.amount}
-											disabled={!canWrite || busy}
+											disabled={!canEdit || busy}
 											aria-label={m['budget.colPlannedAmount']()}
 										/>
 									{/if}
@@ -518,7 +521,7 @@
 										: '—'}
 								</td>
 								<td>
-									{#if canWrite}
+									{#if canEdit}
 										<button
 											type="button"
 											class="banto-btn banto-btn--ghost"
@@ -549,45 +552,51 @@
 					class="banto-input"
 					rows="2"
 					bind:value={reason}
-					disabled={!canWrite || busy}
+					disabled={!canEdit || busy}
 					aria-invalid={errors.reason !== undefined}></textarea>
 				{#if errors.reason}<span class="error">{errors.reason}</span>{/if}
 			</label>
-			{#if canWrite}
+			{#if canEdit || canApprove}
 				<div class="actions">
-					<button
-						type="button"
-						class="banto-btn banto-btn--ghost"
-						disabled={busy}
-						onclick={addLine}
-					>
-						{m['budget.addLine']()}
-					</button>
-					<button
-						type="button"
-						class="banto-btn banto-btn--primary"
-						disabled={busy || !dirty}
-						onclick={save}
-					>
-						{m['common.save']()}
-					</button>
-					<button
-						type="button"
-						class="banto-btn banto-btn--secondary"
-						disabled={busy || dirty}
-						title={dirty ? m['budget.saveFirst']() : undefined}
-						onclick={approve}
-					>
-						{m['budget.approve']()}
-					</button>
-					<button
-						type="button"
-						class="banto-btn banto-btn--ghost"
-						disabled={busy}
-						onclick={discard}
-					>
-						{m['budget.discard']()}
-					</button>
+					{#if canEdit}
+						<button
+							type="button"
+							class="banto-btn banto-btn--ghost"
+							disabled={busy}
+							onclick={addLine}
+						>
+							{m['budget.addLine']()}
+						</button>
+						<button
+							type="button"
+							class="banto-btn banto-btn--primary"
+							disabled={busy || !dirty}
+							onclick={save}
+						>
+							{m['common.save']()}
+						</button>
+					{/if}
+					{#if canApprove}
+						<button
+							type="button"
+							class="banto-btn banto-btn--secondary"
+							disabled={busy || dirty}
+							title={dirty ? m['budget.saveFirst']() : undefined}
+							onclick={approve}
+						>
+							{m['budget.approve']()}
+						</button>
+					{/if}
+					{#if canEdit}
+						<button
+							type="button"
+							class="banto-btn banto-btn--ghost"
+							disabled={busy}
+							onclick={discard}
+						>
+							{m['budget.discard']()}
+						</button>
+					{/if}
 				</div>
 			{/if}
 		{/if}

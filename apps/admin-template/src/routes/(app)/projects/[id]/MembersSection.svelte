@@ -35,9 +35,14 @@
 		projectId: number;
 		/** Bumped by the page after the basic information is saved (the manager may have changed). */
 		reloadKey?: number;
+		/**
+		 * After an add or a removal on this project: who may do what on the
+		 * page (and in the nav) may have changed with the membership.
+		 */
+		onMembersChanged?: () => void;
 	}
 
-	let { projectId, reloadKey = 0 }: Props = $props();
+	let { projectId, reloadKey = 0, onMembersChanged }: Props = $props();
 
 	const available = isPipelineAvailable();
 	const canEdit = $derived(isAdmin(sessionStore.role));
@@ -121,6 +126,7 @@
 		busy = true;
 		try {
 			await addProjectMember(id, userId, newKind);
+			onMembersChanged?.();
 			// Read the list again after the add, still on the same project: a
 			// read started meanwhile may predate the add, and this one
 			// supersedes it (moved to another project: its own read stands).
@@ -140,6 +146,7 @@
 		busy = true;
 		try {
 			await removeProjectMember(member.projectId, member.userId, member.kind);
+			onMembersChanged?.();
 			toastStore.push('success', m['members.removed']());
 			// Moved to another project meanwhile: its own read stands.
 			if (member.projectId === projectId) await load(projectId);

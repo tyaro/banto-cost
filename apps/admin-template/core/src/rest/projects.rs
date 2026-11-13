@@ -17,6 +17,7 @@
 //! | user names (id + display name) | `admin` role, or `ViewMasters` |
 //! | projects list | `admin` role sees all; others `visible_projects` |
 //! | projects get | `admin` role, or `ViewProject` |
+//! | project actions (what the caller may do on the page; display only) | `admin` role, or `ViewProject` |
 //! | projects create | `CreateProject` |
 //! | projects update | `EditProject` |
 //! | pipeline versions list | `ViewProjectAmounts` |
@@ -185,6 +186,19 @@ async fn projects_get(
     let gate = state.gate(&session).await?;
     Ok(Json(
         ops::projects::projects_get(&gate, &state.projects, id).await?,
+    ))
+}
+
+/// What the caller may do on the project's page (review D-4, §8-15):
+/// display only, every write still decides on its own.
+async fn project_actions(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(id): Path<i64>,
+) -> Result<Json<ops::projects::ProjectActions>, ApiError> {
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::project_actions(&gate, &state.projects, &state.calc_basis, id).await?,
     ))
 }
 
@@ -533,6 +547,7 @@ pub(super) fn business_read_router(
         .route("/api/user-names", get(user_names_list))
         .route("/api/projects/list", post(projects_list))
         .route("/api/projects/{id}", get(projects_get))
+        .route("/api/projects/{id}/actions", get(project_actions))
         .route(
             "/api/projects/{id}/pipeline-versions",
             get(pipeline_versions_list),

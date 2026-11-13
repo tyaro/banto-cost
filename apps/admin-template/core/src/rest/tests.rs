@@ -6620,3 +6620,62 @@ async fn t38_rest_recurring_revenue_needs_finance_close_and_recognizes_a_month_o
         );
     }
 }
+
+#[tokio::test]
+async fn t12_rest_project_actions_are_what_the_writes_would_decide() {
+    let (router, _audit, admin, editor, viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["pipeline.edit", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", 1),
+        ))
+        .await
+        .unwrap();
+    let id = body_json(response).await["id"].as_i64().unwrap();
+    let url = format!("/api/projects/{id}/actions");
+
+    // The registrant is the sales owner: the pipeline and the order, not
+    // the manager's drafts nor accounting's recognition.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&url, &editor))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let actions = body_json(response).await;
+    assert_eq!(actions["editProject"], json!(true));
+    assert_eq!(actions["editPipeline"], json!(true));
+    assert_eq!(actions["editOrder"], json!(true));
+    assert_eq!(actions["manageProject"], json!(false));
+    assert_eq!(actions["recognizeRevenue"], json!(false));
+    assert_eq!(actions["editMembers"], json!(false));
+    assert!(actions["overrideCalcItems"].is_array());
+
+    // The admin role without a capability: the members only.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&url, &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let actions = body_json(response).await;
+    assert_eq!(actions["editMembers"], json!(true));
+    assert_eq!(actions["editProject"], json!(false));
+
+    // No capability and not the admin role: the page itself is refused.
+    let response = router
+        .clone()
+        .oneshot(get_auth(&url, &viewer))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}

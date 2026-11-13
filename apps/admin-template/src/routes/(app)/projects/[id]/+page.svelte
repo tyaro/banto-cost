@@ -23,6 +23,10 @@
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
 	 * Viewing needs admin or `ViewProject` on this project (design 第2章);
 	 * `forbidden` shows a no-access state.
+	 * What the person may do here (review D-4, §8-15) is read from the server
+	 * (projectActions.ts) and hides the buttons of the actions it refuses -
+	 * display only, every write is still decided by the server. Unknown (a
+	 * failed read, demo mode) leaves only the role floor, as before.
 	 *
 	 * As with every detail page, the (app) layout keys this page on its route params,
 	 * so reading `page.params.id` once at setup is enough.
@@ -40,6 +44,15 @@
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
+	import {
+		allows,
+		getProjectActions,
+		overridableItems,
+		type ProjectActionKey,
+		type ProjectActions
+	} from '#lib/banto/projectActions.js';
+	import { reloadMyAuthz } from '#lib/banto/myAuthz.svelte.js';
+	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { untrack } from 'svelte';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import ProjectSummary, { type TocEntry } from './ProjectSummary.svelte';
@@ -56,6 +69,11 @@
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
+	/** The server's answer for this project, or `null` while unknown. */
+	let actions = $state.raw<ProjectActions | null>(null);
+	let actionsToken = 0;
+	const may = (key: ProjectActionKey) => allows(actions, canWrite, key);
+	const canEditProject = $derived(may('editProject'));
 
 	// Tauri's `projects_get` takes `id: i64`: convert the route param first.
 	const rawId = page.params.id ?? '';
@@ -166,6 +184,32 @@
 		void loadForm();
 	});
 
+	/**
+	 * Read what the person may do here. A failure keeps the previous answer
+	 * (or none): the buttons then follow the role floor and the server still
+	 * refuses what it must. A late answer to an older read is dropped.
+	 */
+	async function loadActions() {
+		if (!idValid || !isPipelineAvailable()) return;
+		const token = ++actionsToken;
+		try {
+			const read = await getProjectActions(parsedId);
+			if (token === actionsToken) actions = read;
+		} catch {
+			// Unknown: leave it to the role floor and the server.
+		}
+	}
+
+	$effect(() => {
+		void loadActions();
+	});
+
+	/** Members changed: the page's actions and the nav's memberships may have. */
+	function membersChanged() {
+		void loadActions();
+		void reloadMyAuthz();
+	}
+
 	const isNotFound = $derived.by(() => {
 		if (!idValid) return true;
 		const err = formResource?.error;
@@ -202,7 +246,7 @@
 	);
 
 	async function handleSubmit(values: Record<string, unknown>) {
-		if (!formResource || !canWrite || !schema || !store) return;
+		if (!formResource || !canEditProject || !schema || !store) return;
 		formErrors = [];
 		const result = await formResource.submit(values);
 		if (result.ok) {
@@ -211,6 +255,8 @@
 			// changed, and the sections follow the status (review D-2).
 			await loadForm();
 			membersKey++;
+			// The manager may have changed with the basic information.
+			void loadActions();
 		} else {
 			store.setServerErrors(result.fieldErrors);
 			formErrors = unmatchedFieldErrors(
@@ -274,6 +320,9 @@
 			{#if ordered}
 				<p class="hint">{m['projects.orderedStatusHint']()}</p>
 			{/if}
+			{#if canWrite && !canEditProject}
+				<p class="hint">{m['projects.readOnlyHint']()}</p>
+			{/if}
 			{#if !managerIsSelect}
 				<p class="hint">{m['projects.managerIdHint']()}</p>
 			{/if}
@@ -285,7 +334,7 @@
 				{schema}
 				{store}
 				onSubmit={handleSubmit}
-				submitting={(formResource?.saving ?? false) || !canWrite}
+				submitting={(formResource?.saving ?? false) || !canEditProject}
 				submitLabel={m['common.save']()}
 			>
 				<UnsavedChangesNotice pending={guard.pending} label={m['unsaved.notice']()} />
@@ -297,14 +346,16 @@
 	</div>
 
 	{#if schema && idValid}
-		<MembersSection projectId={parsedId} reloadKey={membersKey} />
+		<MembersSection projectId={parsedId} reloadKey={membersKey} onMembersChanged={membersChanged} />
 		{#key sectionStatus}
 			<OrderSection
 				projectId={parsedId}
 				code={projectCode}
 				status={sectionStatus}
 				rowVersion={projectRowVersion}
-				{canWrite}
+				canEditOrder={may('editOrder')}
+				canDecideChange={may('decideOrderChange')}
+				canRecognize={may('recognizeRevenue')}
 				onProjectChanged={() => void loadForm()}
 				onPendingChange={(pending) => {
 					ordersDirty = pending.dirty;
@@ -315,7 +366,7 @@
 		<PipelineSection
 			projectId={parsedId}
 			{ordered}
-			{canWrite}
+			canEdit={may('editPipeline')}
 			onPendingChange={(pending) => {
 				pipelineDirty = pending.dirty;
 				pipelineBusy = pending.busy;
@@ -324,6 +375,7 @@
 		<CalcBasisSection
 			projectId={parsedId}
 			{canWrite}
+			overridable={overridableItems(actions, canWrite)}
 			onPendingChange={(pending) => {
 				calcDirty = pending.dirty;
 				calcBusy = pending.busy;
@@ -332,7 +384,8 @@
 		<BudgetSection
 			projectId={parsedId}
 			code={projectCode}
-			{canWrite}
+			canEdit={may('manageProject')}
+			canApprove={may('approveBudget')}
 			onPendingChange={(pending) => {
 				budgetDirty = pending.dirty;
 				budgetBusy = pending.busy;
@@ -342,7 +395,8 @@
 			<ForecastSection
 				projectId={parsedId}
 				code={projectCode}
-				{canWrite}
+				canEdit={may('manageProject')}
+				canApprove={may('adoptForecast')}
 				onPendingChange={(pending) => {
 					forecastDirty = pending.dirty;
 					forecastBusy = pending.busy;
@@ -354,7 +408,7 @@
 				<CloseoutSection
 					projectId={parsedId}
 					code={projectCode}
-					{canWrite}
+					canSettle={may('settle')}
 					onProjectChanged={() => void loadForm()}
 					onPendingChange={(pending) => {
 						closeoutDirty = pending.dirty;
@@ -367,7 +421,8 @@
 		<CostsSection
 			projectId={parsedId}
 			projectLabel={`${projectCode} ${projectName}`.trim()}
-			{canWrite}
+			canEnter={may('enterCost')}
+			canEditOrders={may('editPurchaseOrder')}
 			onPendingChange={(pending) => {
 				costsDirty = pending.dirty;
 				costsBusy = pending.busy;

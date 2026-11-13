@@ -36,6 +36,7 @@
 //! | GET    | `/api/user-names`     | -             | `Vec<UserName>` (any role + admin or `ViewMasters`; id + display name only) |
 //! | POST   | `/api/projects/list`  | `ListParams`  | `ListResult<Project>` (any role; admin all, others `visible_projects`) |
 //! | GET    | `/api/projects/{id}`  | -             | `Project` (any role + admin or `ViewProject`) |
+//! | GET    | `/api/projects/{id}/actions` | -      | `ProjectActions` (any role + admin or `ViewProject`; what the caller may do on the page, display only, all `false` below `editor`) |
 //! | POST   | `/api/projects`       | `ProjectInput` | `Project` (editor+ + `CreateProject`) |
 //! | PUT    | `/api/projects/{id}`  | `ProjectInput` | `Project` (editor+ + `EditProject`; `rowVersion`) |
 //! | GET    | `/api/projects/{id}/pipeline-versions` | - | `PipelineVersion[]` (any role + `ViewProjectAmounts`) |

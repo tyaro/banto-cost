@@ -44,11 +44,14 @@
 	interface Props {
 		projectId: number;
 		projectLabel: string;
-		canWrite: boolean;
+		/** May enter direct costs on the project (a member, its manager or accounting). */
+		canEnter: boolean;
+		/** May register and revise purchase orders (the manager or accounting). */
+		canEditOrders: boolean;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, projectLabel, canWrite, onPendingChange }: Props = $props();
+	let { projectId, projectLabel, canEnter, canEditOrders, onPendingChange }: Props = $props();
 
 	const available = isPipelineAvailable();
 	let data = $state<ProjectCosts | null>(null);
@@ -353,7 +356,7 @@
 
 			<div class="subhead">
 				<h3>{m['costs.ordersTitle']()}</h3>
-				{#if canWrite}
+				{#if canEditOrders}
 					<button
 						type="button"
 						class="banto-btn banto-btn--secondary"
@@ -481,9 +484,9 @@
 										{/if}
 									</td>
 									<td>
-										{#if canWrite}
+										{#if canEnter || canEditOrders}
 											<div class="row-actions">
-												{#if o.remaining > 0}
+												{#if canEnter && o.remaining > 0}
 													<button
 														type="button"
 														class="banto-btn banto-btn--secondary"
@@ -492,24 +495,26 @@
 														>{m['costs.realize']()}</button
 													>
 												{/if}
-												<button
-													type="button"
-													class="banto-btn banto-btn--ghost"
-													onclick={() => startOrder(o)}>{m['costs.edit']()}</button
-												>
-												<button
-													type="button"
-													class="banto-btn banto-btn--ghost"
-													onclick={() => startRevise(o, 'amount')}
-													>{m['costs.reviseOrder']()}</button
-												>
-												{#if o.remaining > 0}
+												{#if canEditOrders}
 													<button
 														type="button"
 														class="banto-btn banto-btn--ghost"
-														onclick={() => startRevise(o, 'cancel')}
-														>{m['costs.cancelOrder']()}</button
+														onclick={() => startOrder(o)}>{m['costs.edit']()}</button
 													>
+													<button
+														type="button"
+														class="banto-btn banto-btn--ghost"
+														onclick={() => startRevise(o, 'amount')}
+														>{m['costs.reviseOrder']()}</button
+													>
+													{#if o.remaining > 0}
+														<button
+															type="button"
+															class="banto-btn banto-btn--ghost"
+															onclick={() => startRevise(o, 'cancel')}
+															>{m['costs.cancelOrder']()}</button
+														>
+													{/if}
 												{/if}
 											</div>
 										{/if}
@@ -610,7 +615,7 @@
 
 			<div class="subhead">
 				<h3>{m['costs.entriesTitle']()}</h3>
-				{#if canWrite}
+				{#if canEnter}
 					<button
 						type="button"
 						class="banto-btn banto-btn--secondary"
@@ -675,7 +680,7 @@
 										/>
 									</td>
 									<td>
-										{#if canWrite}
+										{#if canEnter}
 											<div class="row-actions">
 												{#if canConfirm(c)}
 													<button

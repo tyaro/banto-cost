@@ -1115,3 +1115,93 @@ async fn t10_t14_direct_costs_need_the_project_and_approving_them_its_amounts() 
     assert_eq!(denied.len(), 2);
     assert!(denied.iter().all(|r| r.origin == "tauri"));
 }
+
+#[tokio::test]
+async fn t12_project_actions_follow_authorize_without_auditing_the_probes() {
+    let env = Env::new().await;
+    // Managed by PM (projects::tests::input), ADMIN its sales member.
+    let project = env
+        .projects
+        .create(project_input("P-X21"), Some(ADMIN))
+        .await
+        .unwrap();
+    let env = &env;
+    async fn of(
+        env: &Env,
+        gate: Gate<'_>,
+        id: i64,
+    ) -> Result<projects::ProjectActions, BantoError> {
+        projects::project_actions(&gate, &env.projects, &env.calc_basis, id).await
+    }
+    let actions = |gate| of(env, gate, project.id);
+
+    // No capability: not a company member, so the page is refused.
+    assert!(forbidden(actions(env.gate(PM)).await));
+
+    // The manager: the manager's actions, not the sales owner's nor
+    // accounting's; overrides only the items managers may override.
+    env.grant(PM, &[Capability::ProjectManage, Capability::AmountView])
+        .await;
+    let pm = actions(env.gate(PM)).await.unwrap();
+    assert!(pm.edit_project && pm.edit_order && pm.decide_order_change);
+    assert!(pm.manage_project && pm.approve_budget && pm.adopt_forecast);
+    assert!(pm.settle && pm.enter_cost && pm.edit_purchase_order);
+    assert!(!pm.edit_pipeline && !pm.recognize_revenue && !pm.edit_members);
+    assert!(pm
+        .override_calc_items
+        .contains(&"forecast_rate".to_string()));
+    assert!(!pm.override_calc_items.contains(&"emp_rate".to_string()));
+
+    // The same grants under the `viewer` role: no write at all.
+    let viewer = Gate {
+        caller: Caller {
+            role: "viewer",
+            ..env.gate(PM).caller
+        },
+        ..env.gate(PM)
+    };
+    assert_eq!(
+        actions(viewer).await.unwrap(),
+        projects::ProjectActions::default()
+    );
+
+    // The admin role sees the page and edits the members without a
+    // capability, and nothing else.
+    let admin = actions(env.gate(ADMIN)).await.unwrap();
+    assert_eq!(
+        admin,
+        projects::ProjectActions {
+            edit_members: true,
+            ..Default::default()
+        }
+    );
+
+    // The sales owner with pipeline.edit and accounting's finance.close.
+    env.grant(
+        ADMIN,
+        &[
+            Capability::PipelineEdit,
+            Capability::FinanceClose,
+            Capability::AmountView,
+        ],
+    )
+    .await;
+    let admin = actions(env.gate(ADMIN)).await.unwrap();
+    assert!(admin.edit_project && admin.edit_order && admin.edit_pipeline);
+    assert!(admin.recognize_revenue && admin.decide_order_change && admin.settle);
+    assert!(admin.enter_cost && admin.edit_purchase_order && admin.approve_budget);
+    assert!(!admin.manage_project);
+
+    // An unknown project is not found; the probes leave no audit row (the
+    // first refusal above is the page's own check).
+    let unknown =
+        projects::project_actions(&env.gate(ADMIN), &env.projects, &env.calc_basis, 9_999).await;
+    assert!(matches!(unknown, Err(BantoError::NotFound { .. })));
+    let denied = env
+        .audit_rows()
+        .await
+        .into_iter()
+        .filter(|r| r.action == "denied")
+        .count();
+    assert_eq!(denied, 1);
+}
