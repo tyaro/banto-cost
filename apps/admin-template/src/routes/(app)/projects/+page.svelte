@@ -275,7 +275,7 @@
 </script>
 
 <div class="page">
-	<PageHeader hideTitle title={resource.label} description={m['projects.description']()}>
+	<PageHeader hideTitle title={m['nav.projects']()} description={m['projects.description']()}>
 		{#snippet actions()}
 			<ColumnsMenu state={gridState} messages={gridMessages()} />
 			{#if canWrite}

@@ -61,7 +61,7 @@
 </script>
 
 <div class="page">
-	<PageHeader hideTitle title={resource.label} description={m['customers.description']()}>
+	<PageHeader hideTitle title={m['nav.customers']()} description={m['customers.description']()}>
 		{#snippet actions()}
 			{#if canWrite}
 				<button
