@@ -299,7 +299,7 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		await expect(tile('pipeline-weighted')).toHaveText('¥500,000');
 		await expect(tile('outlook-this-month')).toHaveText('¥0');
 		await expect(tile('outlook-next-month')).toHaveText('¥500,000');
-		await expect(tile('attention')).toHaveText('1');
+		await expect(tile('attention')).toHaveText('1 件');
 
 		// Each business screen is one click away.
 		await page.getByRole('link', { name: /^案件見込 受注前/ }).click();
@@ -881,7 +881,11 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		// The dashboard totals only the projects in the viewer's scope (none).
 		await page.goto('/dashboard');
 		await expect(page.locator('[data-tile="pipeline-total"] .stat-value')).toHaveText('¥0');
-		await expect(page.locator('[data-tile="attention"] .stat-value')).toHaveText('0');
+		await expect(page.locator('[data-tile="attention"] .stat-value')).toHaveText('0 件');
+		// 確認すること (P8g): a source the viewer may not read says so, never 0 件.
+		await expect(page.locator('[data-tile="fixed-costs-due"] .stat-value')).toHaveText(
+			'権限がありません'
+		);
 	});
 
 	// Issue #215/#255 6th review: the session is still valid (check() passes)

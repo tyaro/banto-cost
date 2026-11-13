@@ -488,8 +488,11 @@
 		color: var(--banto-warning-tint-text);
 	}
 
+	/* The danger pair (tint + its text), not --banto-danger on the warning
+	   tint: that mix stays under 4.5:1 (axe color-contrast, P8g). */
 	.alerts li.severe {
-		color: var(--banto-danger);
+		background: var(--banto-danger-tint);
+		color: var(--banto-danger-tint-text);
 	}
 
 	.ledger-review {

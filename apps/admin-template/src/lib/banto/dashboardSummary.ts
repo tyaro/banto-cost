@@ -6,6 +6,7 @@
  */
 import type { PipelineOverview } from './pipelineAdmin';
 import type { OutlookView } from './ordersAdmin';
+import type { PortfolioTotals } from './forecastAdmin';
 
 /**
  * This month and next month (`YYYY-MM`) of a business date (`YYYY-MM-DD`),
@@ -47,4 +48,56 @@ export function attentionProjectIds(
 		for (const project of outlook.excluded) ids.add(project.projectId);
 	}
 	return [...ids].sort((a, b) => a - b);
+}
+
+/**
+ * Projects with one alert in the overall list's totals (`alertCounts`,
+ * amount-visible rows only). An alert the server did not count is 0 projects:
+ * the list judged every visible row, so a missing entry is not 未設定.
+ */
+export function alertCount(totals: Pick<PortfolioTotals, 'alertCounts'>, alert: string): number {
+	return totals.alertCounts.find((entry) => entry.alert === alert)?.count ?? 0;
+}
+
+/** The previous month (`YYYY-MM`) of a month, crossing the year start. */
+export function previousMonth(month: string): string {
+	const year = Number(month.slice(0, 4));
+	const value = Number(month.slice(5, 7));
+	return value === 1 ? `${year - 1}-12` : `${year}-${String(value - 1).padStart(2, '0')}`;
+}
+
+/** One figure the dashboard reads: still loading, read, or failed. */
+export type Source<T> =
+	{ state: 'loading' } | { state: 'ok'; value: T } | { state: 'error'; error: unknown };
+
+/**
+ * Several counts shown as one tile (承認待ち = time entries + direct costs +
+ * corrections). The total of the lists already read shows even when another
+ * is still loading or failed - `missing` says which, so the tile never reads
+ * as complete when it is not. With no list read yet, the tile takes the first
+ * failure (権限がありません / 取得できません), else it is still loading.
+ */
+export type CombinedCount =
+	| { state: 'loading' }
+	| { state: 'error'; error: unknown }
+	| { state: 'ok'; total: number; missing: 'none' | 'loading' | 'failed' };
+
+export function combineCounts(sources: readonly Source<number>[]): CombinedCount {
+	let total = 0;
+	let read = 0;
+	let loading = false;
+	let failure: { error: unknown } | null = null;
+	for (const source of sources) {
+		if (source.state === 'ok') {
+			total += source.value;
+			read += 1;
+		} else if (source.state === 'loading') {
+			loading = true;
+		} else {
+			failure ??= { error: source.error };
+		}
+	}
+	if (read === 0)
+		return failure && !loading ? { state: 'error', ...failure } : { state: 'loading' };
+	return { state: 'ok', total, missing: failure ? 'failed' : loading ? 'loading' : 'none' };
 }

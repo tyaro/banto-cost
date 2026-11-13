@@ -255,7 +255,8 @@
 	--banto-primary-hover: #60a5fa;
 	/* 暗い面 #262a31 の上で 4.5:1 を満たす（--banto-primary #3b82f6 は 3.91:1） */
 	--banto-primary-text: #60a5fa;
-	--banto-danger: #ef4444;
+	/* 暗い面 #1e2127 の上で 4.5:1 を満たす（#ef4444 は 4.29:1、banto-cost P8g の axe） */
+	--banto-danger: #f87171;
 	--banto-warning: #f59e0b;
 	--banto-success: #22c55e;
 
@@ -288,7 +289,8 @@
 	--banto-primary-solid-hover: #60a5fa;
 	--banto-on-solid: var(--banto-text-inverse);
 	--banto-danger-tint: color-mix(in srgb, #f87171 18%, transparent);
-	--banto-danger-tint-text: #f87171;
+	/* 薄い赤の面の上で 4.5:1 を満たす（#f87171 は 4.44:1、banto-cost P8g の axe） */
+	--banto-danger-tint-text: #fca5a5;
 	--banto-success-tint: color-mix(in srgb, #4ade80 18%, transparent);
 	--banto-success-tint-text: #4ade80;
 	--banto-warning-tint: color-mix(in srgb, #fbbf24 18%, transparent);

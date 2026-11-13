@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { attentionProjectIds, currentAndNextMonth, outlookMonthTotal } from './dashboardSummary';
+import {
+	alertCount,
+	attentionProjectIds,
+	combineCounts,
+	currentAndNextMonth,
+	outlookMonthTotal,
+	previousMonth
+} from './dashboardSummary';
 import type { OverviewRow, PipelineOverview } from './pipelineAdmin';
 import type { OutlookFigures, OutlookView } from './ordersAdmin';
 
@@ -120,5 +127,63 @@ describe('attentionProjectIds', () => {
 		expect(
 			attentionProjectIds(null, outlook({ excluded: [{ projectId: 8, code: 'P-8', name: 'x' }] }))
 		).toEqual([8]);
+	});
+});
+
+describe('alertCount', () => {
+	const totals = {
+		alertCounts: [
+			{ alert: 'forecast_loss', count: 2 },
+			{ alert: 'low_margin', count: 1 }
+		]
+	};
+	it('reads the projects the overall list counted for the alert', () => {
+		expect(alertCount(totals, 'forecast_loss')).toBe(2);
+	});
+	it('is 0 for an alert no visible project has', () => {
+		expect(alertCount(totals, 'forecast_over_budget')).toBe(0);
+	});
+});
+
+describe('previousMonth', () => {
+	it('steps back one month', () => {
+		expect(previousMonth('2026-11')).toBe('2026-10');
+	});
+	it('crosses the year start', () => {
+		expect(previousMonth('2027-01')).toBe('2026-12');
+	});
+});
+
+describe('combineCounts', () => {
+	const ok = (value: number) => ({ state: 'ok', value }) as const;
+	const loading = { state: 'loading' } as const;
+	const failed = (error: unknown) => ({ state: 'error', error }) as const;
+
+	it('sums every list once all are read', () => {
+		expect(combineCounts([ok(1), ok(2), ok(0)])).toEqual({
+			state: 'ok',
+			total: 3,
+			missing: 'none'
+		});
+	});
+	it('shows the lists already read while another loads', () => {
+		expect(combineCounts([ok(2), loading, ok(1)])).toEqual({
+			state: 'ok',
+			total: 3,
+			missing: 'loading'
+		});
+	});
+	it('keeps the readable lists when one is forbidden, and says a part is missing', () => {
+		expect(combineCounts([failed('403'), ok(1), ok(0)])).toEqual({
+			state: 'ok',
+			total: 1,
+			missing: 'failed'
+		});
+	});
+	it('fails with the first error when nothing could be read', () => {
+		expect(combineCounts([failed('a'), failed('b')])).toEqual({ state: 'error', error: 'a' });
+	});
+	it('is loading while nothing is read and a list is still on its way', () => {
+		expect(combineCounts([failed('a'), loading])).toEqual({ state: 'loading' });
 	});
 });
