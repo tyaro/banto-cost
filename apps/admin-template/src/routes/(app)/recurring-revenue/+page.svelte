@@ -168,25 +168,27 @@
 
 	async function recognize() {
 		if (!view || busy) return;
+		// Recognize the month the dialog showed, not one loaded while it was open.
+		const { month: shownMonth, dueCount, recognizedOn } = view;
 		const ok = await confirmAction({
 			title: m['recurring.recognizeConfirmTitle'](),
 			body: m['recurring.recognizeConfirm']({
-				month: view.month,
-				count: view.dueCount,
-				date: view.recognizedOn
+				month: shownMonth,
+				count: dueCount,
+				date: recognizedOn
 			}),
 			details: [
-				{ label: m['confirm.month'](), value: view.month },
-				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: view.dueCount }) },
-				{ label: m['recurring.recognizedOn'](), value: view.recognizedOn }
+				{ label: m['confirm.month'](), value: shownMonth },
+				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: dueCount }) },
+				{ label: m['recurring.recognizedOn'](), value: recognizedOn }
 			],
 			undo: m['recurring.recognizeUndo'](),
-			confirmLabel: m['recurring.recognize']({ count: view.dueCount })
+			confirmLabel: m['recurring.recognize']({ count: dueCount })
 		});
-		if (!ok || !view || busy) return;
+		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
-			const result = await recognizeRecurringMonth(view.month);
+			const result = await recognizeRecurringMonth(shownMonth);
 			view = result.view;
 			notify('success', m['recurring.recognized']({ month: view.month, count: result.recognized }));
 			if (result.failures.length > 0) {

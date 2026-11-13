@@ -294,10 +294,12 @@
 
 	async function submitApproveWeek() {
 		if (acting || pendingApprove.length === 0) return;
+		// Act on the entries the dialog counted, not a list reloaded while it was open.
+		const rows = pendingApprove;
 		const details = [
 			{
 				label: m['confirm.count'](),
-				value: m['confirm.countValue']({ count: pendingApprove.length })
+				value: m['confirm.countValue']({ count: rows.length })
 			}
 		];
 		if (approveExcluded > 0) {
@@ -308,15 +310,15 @@
 		}
 		const ok = await confirmAction({
 			title: m['time.submitApproveConfirmTitle'](),
-			body: m['time.submitApproveWeekConfirm']({ count: pendingApprove.length }),
+			body: m['time.submitApproveWeekConfirm']({ count: rows.length }),
 			details,
 			undo: m['approvals.approveUndo'](),
-			confirmLabel: m['time.submitApproveWeek']({ count: pendingApprove.length })
+			confirmLabel: m['time.submitApproveWeek']({ count: rows.length })
 		});
 		if (!ok || acting) return;
 		acting = true;
 		try {
-			const result = await runEach(pendingApprove, submitAndApprove);
+			const result = await runEach(rows, submitAndApprove);
 			reportApproved(result.done, result.failed, result.firstError);
 		} finally {
 			acting = false;

@@ -117,8 +117,10 @@
 
 	async function approveAll() {
 		if (busy || returning !== null || approvable.length === 0) return;
+		// Approve the rows the dialog counted, not a list reloaded while it was open.
+		const rows = approvable;
 		const details = [
-			{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: approvable.length }) }
+			{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: rows.length }) }
 		];
 		if (rateMissingCount > 0) {
 			details.push({
@@ -128,15 +130,15 @@
 		}
 		const ok = await confirmAction({
 			title: m['approvals.approveAllConfirmTitle'](),
-			body: m['approvals.approveAllConfirm']({ count: approvable.length }),
+			body: m['approvals.approveAllConfirm']({ count: rows.length }),
 			details,
 			undo: m['approvals.approveUndo'](),
-			confirmLabel: m['approvals.approveAll']({ count: approvable.length })
+			confirmLabel: m['approvals.approveAll']({ count: rows.length })
 		});
 		if (!ok || busy) return;
 		busy = true;
 		try {
-			const result = await runEach(approvable, (e) =>
+			const result = await runEach(rows, (e) =>
 				decideEntry(e.id, { rowVersion: e.rowVersion, approve: true })
 			);
 			if (result.done > 0) notify('success', m['approvals.approvedCount']({ count: result.done }));

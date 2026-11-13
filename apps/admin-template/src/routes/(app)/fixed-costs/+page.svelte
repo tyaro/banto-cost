@@ -189,20 +189,22 @@
 
 	async function post() {
 		if (!view || busy) return;
+		// Post the month the dialog showed, not one loaded while it was open.
+		const { month: shownMonth, dueCount } = view;
 		const ok = await confirmAction({
 			title: m['fixedCosts.postConfirmTitle'](),
-			body: m['fixedCosts.postConfirm']({ month: view.month, count: view.dueCount }),
+			body: m['fixedCosts.postConfirm']({ month: shownMonth, count: dueCount }),
 			details: [
-				{ label: m['confirm.month'](), value: view.month },
-				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: view.dueCount }) }
+				{ label: m['confirm.month'](), value: shownMonth },
+				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: dueCount }) }
 			],
 			undo: m['fixedCosts.postUndo'](),
-			confirmLabel: m['fixedCosts.post']({ count: view.dueCount })
+			confirmLabel: m['fixedCosts.post']({ count: dueCount })
 		});
-		if (!ok || !view || busy) return;
+		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
-			const result = await postFixedCostMonth(view.month);
+			const result = await postFixedCostMonth(shownMonth);
 			view = result.view;
 			notify('success', m['fixedCosts.posted']({ month: view.month, count: result.posted }));
 			contracts = await listFixedCostContracts().catch(() => contracts);
