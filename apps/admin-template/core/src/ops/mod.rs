@@ -20,7 +20,7 @@
 //! areas with the fewest operations, as the review proposed - then 予算
 //! ([`budgets`]), 完了見込と全体一覧 ([`forecasts`]) and 帳票 ([`reports`]),
 //! then 顧客・案件 ([`projects`]), 見込 ([`pipeline`]) and 計算基準
-//! ([`calc_basis`]).
+//! ([`calc_basis`]), then 受注・売上・月次見通し ([`orders`]).
 
 pub mod budgets;
 pub mod calc_basis;
@@ -28,6 +28,7 @@ pub mod closeouts;
 pub mod closing;
 pub mod fixed_costs;
 pub mod forecasts;
+pub mod orders;
 pub mod pipeline;
 pub mod projects;
 pub mod recurring_revenue;

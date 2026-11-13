@@ -22,6 +22,7 @@
 
 ## [Unreleased]
 
+- banto-cost（認可の配線を core に寄せる、レビュー §8-13 の4段目）: 受注（受注転換・取消・訂正・受注変更の申請と承認・売上予定の組み替え）・売上計上と取消・月次見通しとスナップショットも `admin_template_core::ops::orders` に移した。画面・API・DB の変更なし。
 - banto-cost（認可の配線を core に寄せる、レビュー §8-13 の3段目）: 顧客・案件台帳（担当者の氏名一覧を含む）・見込・計算基準も `admin_template_core::ops` に移した。マスタと案件の基本情報で admin ロールを通す判定（`ops::Gate::check_or_admin`）と案件一覧の範囲（`visible_scope`）も両経路で1か所にした。画面・API・DB の変更なし。
 - banto-cost（認可の配線を core に寄せる、レビュー §8-13 の2段目）: 予算・完了見込（案件の要約・全体一覧を含む）・帳票（月別収支と CSV 出力）も `admin_template_core::ops` に移した。全体一覧と CSV の「見える行・金額を出す案件」の決め方も両経路で1か所（`ops::Gate::portfolio_scopes`）にした。画面・API・DB の変更なし。
 - banto-cost（認可の配線を core に寄せる、レビュー §8-13 の1段目）: 精算完了・月次締め・月額固定原価・定期売上で、REST と Tauri が別々に書いていた「操作の選択→能力と案件範囲の判定→サービス→成功の監査」を `admin_template_core::ops` の関数1つにまとめ、両経路はロール床の確認と引数の取り出しだけにした。デスクトップ版（Tauri）とブラウザ（REST）で判定する操作や監査の中身が食い違う余地をなくし、Tauri の呼び出し方での判定・監査を core のテストで確かめる。画面・API・DB の変更なし。

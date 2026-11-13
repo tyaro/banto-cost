@@ -6,7 +6,8 @@
 //! decisions (`visible_projects` / `amount_projects`, T12). Customers,
 //! projects, the pipeline and the calc basis call the authorized operations
 //! in `crate::ops::{projects, pipeline, calc_basis}` (decision, service,
-//! audit; review §8-13); orders and the outlook still decide here.
+//! audit; review §8-13), and orders and the outlook those in
+//! `crate::ops::orders`.
 //!
 //! Role floors: reads need a session; writes need `editor` (Banto's "may
 //! enter business data"). On top of the floor:
@@ -47,9 +48,7 @@
 use super::*;
 use axum::extract::Query;
 use axum::Extension;
-use banto_admin_services::authz::{
-    amount_projects, Actor, Allowed, AuthzService, Operation, Policy, Subject,
-};
+use banto_admin_services::authz::{Actor, Allowed, AuthzService, Operation, Policy, Subject};
 use banto_core::BantoError;
 use banto_server::AuthenticatedSession;
 use std::str::FromStr;
@@ -63,8 +62,7 @@ use crate::direct_costs::DirectCostsService;
 use crate::ops::{self, Caller, Gate};
 use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use crate::orders::{
-    conversion_cancel_audit_detail, conversion_correction_audit_detail, CancelInput,
-    ChangeDecision, ChangeRequest, ConversionCancelInput, ConversionCorrectionInput,
+    CancelInput, ChangeDecision, ChangeRequest, ConversionCancelInput, ConversionCorrectionInput,
     ConversionRequest, OrderSummary, OrdersService, RecognitionInput, ReplanInput,
 };
 use crate::pipeline::{PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput};
@@ -314,306 +312,130 @@ async fn pipeline_overview(
     Ok(Json(ops::pipeline::overview(&gate, &state.pipeline).await?))
 }
 
-// --- orders (P3b) -------------------------------------------------------------
+// --- orders, outlook (P3b, crate::ops::orders) ------------------------------
 
 async fn order_get(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
     Path(id): Path<i64>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    state
-        .guard(
-            &session,
-            Operation::ViewProjectAmounts { project_id: id },
-            "orders",
-        )
-        .await?;
-    Ok(Json(state.orders.summary(id).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::orders::get(&gate, &state.orders, id).await?))
 }
 
 async fn order_convert(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ConversionRequest>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
-        .await?;
-    let summary = state.orders.convert(id, input, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "convert",
-        "orders",
-        Some(&id.to_string()),
-        Some(json!({
-            "confirmedAmount": summary.confirmed_amount,
-            "scope": summary.conversion.as_ref().map(|c| c.scope.clone()),
-            "remainderProjectId": summary.conversion.as_ref().and_then(|c| c.remainder_project_id),
-        })),
-    )
-    .await;
-    Ok(Json(summary))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::convert(&gate, &state.orders, id, input).await?,
+    ))
 }
 
-/// 受注転換の取消 (T40): the audit detail names the cancelled conversion and
-/// its amount, not the reason.
 async fn order_conversion_cancel(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ConversionCancelInput>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
-        .await?;
-    // A partial order's remainder is set to 中止: editing it is checked too.
-    let remainder = state.orders.conversion_remainder(id).await?;
-    if let Some(remainder_id) = remainder {
-        state
-            .guard(
-                &session,
-                Operation::EditProject {
-                    project_id: remainder_id,
-                },
-                "projects",
-            )
-            .await?;
-    }
-    let summary = state
-        .orders
-        .cancel_conversion(id, input, user_id, remainder)
-        .await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "cancel_conversion",
-        "orders",
-        Some(&id.to_string()),
-        Some(conversion_cancel_audit_detail(&summary)),
-    )
-    .await;
-    Ok(Json(summary))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::cancel_conversion(&gate, &state.orders, id, input).await?,
+    ))
 }
 
-/// 受注日・根拠の訂正 (T41): the audit detail names the conversion, which
-/// values changed and the 受注日 before and after, not the basis or reason.
 async fn order_conversion_correct(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ConversionCorrectionInput>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
-        .await?;
-    let (summary, record) = state.orders.correct_conversion(id, input, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "correct_conversion",
-        "orders",
-        Some(&id.to_string()),
-        Some(conversion_correction_audit_detail(&record)),
-    )
-    .await;
-    Ok(Json(summary))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::correct_conversion(&gate, &state.orders, id, input).await?,
+    ))
 }
 
 async fn order_change_create(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ChangeRequest>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
-        .await?;
-    let delta = input.delta_amount;
-    let summary = state.orders.request_change(id, input, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "request_change",
-        "orders",
-        Some(&id.to_string()),
-        Some(json!({ "deltaAmount": delta })),
-    )
-    .await;
-    Ok(Json(summary))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::request_change(&gate, &state.orders, id, input).await?,
+    ))
 }
 
 async fn order_change_decide(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path((id, change_id)): Path<(i64, i64)>,
     Json(input): Json<ChangeDecision>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    state
-        .guard(
-            &session,
-            Operation::ViewProjectAmounts { project_id: id },
-            "orders",
-        )
-        .await?;
-    let requester = state.orders.change_requester(id, change_id).await?;
-    let (_, user_id, allowed) = state
-        .guard_with(
-            &session,
-            Operation::Approve {
-                project_id: id,
-                // A request without a requester (deleted user) is nobody's own.
-                submitted_by: requester.unwrap_or(0),
-            },
-            crate::approval::APPROVAL_POLICY,
-            "orders",
-        )
-        .await?;
-    let approve = input.approve;
-    let summary = state
-        .orders
-        .decide_change(id, change_id, input, user_id)
-        .await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        if approve {
-            "approve_change"
-        } else {
-            "reject_change"
-        },
-        "orders",
-        Some(&id.to_string()),
-        Some(json!({
-            "changeId": change_id,
-            "selfApproval": allowed.self_approval_exception,
-        })),
-    )
-    .await;
-    Ok(Json(summary))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::decide_change(&gate, &state.orders, id, change_id, input).await?,
+    ))
 }
 
 async fn revenue_plan_replace(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ReplanInput>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    state
-        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
-        .await?;
-    let summary = state.orders.replan(id, input).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "replan",
-        "orders",
-        Some(&id.to_string()),
-        Some(json!({ "lines": summary.plan.len() })),
-    )
-    .await;
-    Ok(Json(summary))
-}
-
-/// Revenue recognition is accounting's (`FinanceClose`) and shows amounts.
-async fn finance_guard(
-    state: &BusinessState,
-    session: &AuthenticatedSession,
-    project_id: i64,
-) -> Result<Option<i64>, BantoError> {
-    let (_, user_id) = state
-        .guard(session, Operation::FinanceClose, "revenue_recognitions")
-        .await?;
-    state
-        .guard(
-            session,
-            Operation::ViewProjectAmounts { project_id },
-            "revenue_recognitions",
-        )
-        .await?;
-    Ok(user_id)
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::replan(&gate, &state.orders, id, input).await?,
+    ))
 }
 
 async fn recognition_create(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<RecognitionInput>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    let user_id = finance_guard(&state, &session, id).await?;
-    let amount = input.amount;
-    let summary = state.orders.recognize(id, input, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "create",
-        "revenue_recognitions",
-        Some(&id.to_string()),
-        Some(json!({ "amount": amount })),
-    )
-    .await;
-    Ok(Json(summary))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::recognize(&gate, &state.orders, id, input).await?,
+    ))
 }
 
 async fn recognition_cancel(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path((id, recognition_id)): Path<(i64, i64)>,
     Json(input): Json<CancelInput>,
 ) -> Result<Json<OrderSummary>, ApiError> {
-    let user_id = finance_guard(&state, &session, id).await?;
-    let summary = state
-        .orders
-        .cancel_recognition(id, recognition_id, input, user_id)
-        .await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "cancel",
-        "revenue_recognitions",
-        Some(&id.to_string()),
-        Some(json!({ "recognitionId": recognition_id })),
-    )
-    .await;
-    Ok(Json(summary))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::cancel_recognition(&gate, &state.orders, id, recognition_id, input).await?,
+    ))
 }
-
-// --- outlook (P3b) ------------------------------------------------------------
 
 async fn outlook_get(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
     Query(query): Query<OutlookQuery>,
 ) -> Result<Json<OutlookView>, ApiError> {
-    let scope = amount_projects(&state.subject(&session).await?);
-    Ok(Json(state.orders.outlook(&scope, query).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::outlook(&gate, &state.orders, query).await?,
+    ))
 }
 
 async fn outlook_snapshots_list(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
 ) -> Result<Json<Vec<SnapshotInfo>>, ApiError> {
-    state
-        .guard(&session, Operation::ViewMasters, "outlook_snapshots")
-        .await?;
-    Ok(Json(state.orders.snapshots().await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::orders::snapshots(&gate, &state.orders).await?))
 }
 
 async fn outlook_snapshot_get(
@@ -622,8 +444,10 @@ async fn outlook_snapshot_get(
     Path(id): Path<i64>,
     Query(query): Query<OutlookQuery>,
 ) -> Result<Json<OutlookView>, ApiError> {
-    let scope = amount_projects(&state.subject(&session).await?);
-    Ok(Json(state.orders.snapshot_view(id, &scope, query).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::snapshot_view(&gate, &state.orders, id, query).await?,
+    ))
 }
 
 #[derive(serde::Deserialize)]
@@ -635,24 +459,12 @@ struct SnapshotCreate {
 async fn outlook_snapshot_create(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Json(input): Json<SnapshotCreate>,
 ) -> Result<Json<SnapshotInfo>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::ViewAllReports, "outlook_snapshots")
-        .await?;
-    let snapshot = state.orders.save_snapshot(input.label, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "create",
-        "outlook_snapshots",
-        Some(&snapshot.id.to_string()),
-        Some(json!({ "label": snapshot.label })),
-    )
-    .await;
-    Ok(Json(snapshot))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::orders::save_snapshot(&gate, &state.orders, input.label).await?,
+    ))
 }
 
 // --- calc basis (P4a, crate::ops::calc_basis) -----------------------------

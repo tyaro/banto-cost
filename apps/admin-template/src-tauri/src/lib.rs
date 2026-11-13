@@ -26,8 +26,8 @@ mod keyring_store;
 use admin_template_core::assets::FrontendAssets;
 use admin_template_core::audit::{AuditEntry, AuditLogList, AuditLogService};
 use admin_template_core::authz::{
-    amount_projects, approval_projects, cost_approval_projects, Actor, Allowed, AuthzService,
-    Capability, MemberKind, Operation, Policy, ProjectMember, Subject,
+    approval_projects, cost_approval_projects, Actor, Allowed, AuthzService, Capability,
+    MemberKind, Operation, Policy, ProjectMember, Subject,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
 use admin_template_core::budgets::{
@@ -60,8 +60,7 @@ use admin_template_core::forecasts::{
 use admin_template_core::ops::{self, Caller, Gate};
 use admin_template_core::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use admin_template_core::orders::{
-    conversion_cancel_audit_detail, conversion_correction_audit_detail, CancelInput,
-    ChangeDecision, ChangeRequest, ConversionCancelInput, ConversionCorrectionInput,
+    CancelInput, ChangeDecision, ChangeRequest, ConversionCancelInput, ConversionCorrectionInput,
     ConversionRequest, OrderSummary, OrdersService, RecognitionInput, ReplanInput,
 };
 use admin_template_core::pipeline::{
@@ -3629,8 +3628,8 @@ async fn pipeline_overview_body(state: &AppState) -> Result<PipelineOverview, Ba
 // --- banto-cost P3b: orders, revenue, outlook (ADR-0028) ------------------
 //
 // Tauri twins of the order / outlook routes in
-// `admin_template_core::rest::projects`: same role floors, same
-// `Operation`s, same scopes, same audit actions.
+// `admin_template_core::rest::projects`: the same role floors, then the same
+// authorized operation (`admin_template_core::ops::orders`).
 
 #[tauri::command]
 async fn order_get(
@@ -3642,14 +3641,8 @@ async fn order_get(
 
 async fn order_get_body(state: &AppState, project_id: i64) -> Result<OrderSummary, BantoError> {
     let identity = require_role(state, Role::Viewer, "orders").await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        "orders",
-    )
-    .await?;
-    state.orders.summary(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::orders::get(&gate, &state.orders, project_id).await
 }
 
 #[tauri::command]
@@ -3667,23 +3660,8 @@ async fn order_convert_body(
     values: ConversionRequest,
 ) -> Result<OrderSummary, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) =
-        business_guard(state, &actor, Operation::EditOrder { project_id }, "orders").await?;
-    let summary = state.orders.convert(project_id, values, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "convert",
-        "orders",
-        Some(&project_id.to_string()),
-        Some(serde_json::json!({
-            "confirmedAmount": summary.confirmed_amount,
-            "scope": summary.conversion.as_ref().map(|c| c.scope.clone()),
-            "remainderProjectId": summary.conversion.as_ref().and_then(|c| c.remainder_project_id),
-        })),
-    )
-    .await;
-    Ok(summary)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::orders::convert(&gate, &state.orders, project_id, values).await
 }
 
 /// 受注転換の取消 (T40): the twin of `POST /api/projects/{id}/order/conversion/cancel`.
@@ -3702,35 +3680,8 @@ async fn order_conversion_cancel_body(
     values: ConversionCancelInput,
 ) -> Result<OrderSummary, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) =
-        business_guard(state, &actor, Operation::EditOrder { project_id }, "orders").await?;
-    // A partial order's remainder is set to 中止: editing it is checked too.
-    let remainder = state.orders.conversion_remainder(project_id).await?;
-    if let Some(remainder_id) = remainder {
-        business_guard(
-            state,
-            &actor,
-            Operation::EditProject {
-                project_id: remainder_id,
-            },
-            "projects",
-        )
-        .await?;
-    }
-    let summary = state
-        .orders
-        .cancel_conversion(project_id, values, user_id, remainder)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "cancel_conversion",
-        "orders",
-        Some(&project_id.to_string()),
-        Some(conversion_cancel_audit_detail(&summary)),
-    )
-    .await;
-    Ok(summary)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::orders::cancel_conversion(&gate, &state.orders, project_id, values).await
 }
 
 /// 受注日・根拠の訂正 (T41): the twin of `POST /api/projects/{id}/order/conversion/correct`.
@@ -3749,22 +3700,8 @@ async fn order_conversion_correct_body(
     values: ConversionCorrectionInput,
 ) -> Result<OrderSummary, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) =
-        business_guard(state, &actor, Operation::EditOrder { project_id }, "orders").await?;
-    let (summary, record) = state
-        .orders
-        .correct_conversion(project_id, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "correct_conversion",
-        "orders",
-        Some(&project_id.to_string()),
-        Some(conversion_correction_audit_detail(&record)),
-    )
-    .await;
-    Ok(summary)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::orders::correct_conversion(&gate, &state.orders, project_id, values).await
 }
 
 #[tauri::command]
@@ -3774,28 +3711,8 @@ async fn order_change_create(
     values: ChangeRequest,
 ) -> Result<OrderSummary, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        &state,
-        &actor,
-        Operation::EditOrder { project_id },
-        "orders",
-    )
-    .await?;
-    let delta = values.delta_amount;
-    let summary = state
-        .orders
-        .request_change(project_id, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "request_change",
-        "orders",
-        Some(&project_id.to_string()),
-        Some(serde_json::json!({ "deltaAmount": delta })),
-    )
-    .await;
-    Ok(summary)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::orders::request_change(&gate, &state.orders, project_id, values).await
 }
 
 #[tauri::command]
@@ -3815,48 +3732,8 @@ async fn order_change_decide_body(
     values: ChangeDecision,
 ) -> Result<OrderSummary, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    business_guard(
-        state,
-        &actor,
-        Operation::ViewProjectAmounts { project_id },
-        "orders",
-    )
-    .await?;
-    let requester = state.orders.change_requester(project_id, change_id).await?;
-    let (_, user_id, allowed) = business_guard_with(
-        state,
-        &actor,
-        Operation::Approve {
-            project_id,
-            // A request without a requester (deleted user) is nobody's own.
-            submitted_by: requester.unwrap_or(0),
-        },
-        admin_template_core::approval::APPROVAL_POLICY,
-        "orders",
-    )
-    .await?;
-    let approve = values.approve;
-    let summary = state
-        .orders
-        .decide_change(project_id, change_id, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        if approve {
-            "approve_change"
-        } else {
-            "reject_change"
-        },
-        "orders",
-        Some(&project_id.to_string()),
-        Some(serde_json::json!({
-            "changeId": change_id,
-            "selfApproval": allowed.self_approval_exception,
-        })),
-    )
-    .await;
-    Ok(summary)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::orders::decide_change(&gate, &state.orders, project_id, change_id, values).await
 }
 
 #[tauri::command]
@@ -3866,47 +3743,8 @@ async fn revenue_plan_replace(
     values: ReplanInput,
 ) -> Result<OrderSummary, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    business_guard(
-        &state,
-        &actor,
-        Operation::EditOrder { project_id },
-        "orders",
-    )
-    .await?;
-    let summary = state.orders.replan(project_id, values).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "replan",
-        "orders",
-        Some(&project_id.to_string()),
-        Some(serde_json::json!({ "lines": summary.plan.len() })),
-    )
-    .await;
-    Ok(summary)
-}
-
-/// Revenue recognition is accounting's (`FinanceClose`) and shows amounts.
-async fn finance_guard(
-    state: &AppState,
-    actor: &UserIdentity,
-    project_id: i64,
-) -> Result<Option<i64>, BantoError> {
-    let (_, user_id) = business_guard(
-        state,
-        actor,
-        Operation::FinanceClose,
-        "revenue_recognitions",
-    )
-    .await?;
-    business_guard(
-        state,
-        actor,
-        Operation::ViewProjectAmounts { project_id },
-        "revenue_recognitions",
-    )
-    .await?;
-    Ok(user_id)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::orders::replan(&gate, &state.orders, project_id, values).await
 }
 
 #[tauri::command]
@@ -3924,19 +3762,8 @@ async fn revenue_recognition_create_body(
     values: RecognitionInput,
 ) -> Result<OrderSummary, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let user_id = finance_guard(state, &actor, project_id).await?;
-    let amount = values.amount;
-    let summary = state.orders.recognize(project_id, values, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        "revenue_recognitions",
-        Some(&project_id.to_string()),
-        Some(serde_json::json!({ "amount": amount })),
-    )
-    .await;
-    Ok(summary)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::orders::recognize(&gate, &state.orders, project_id, values).await
 }
 
 #[tauri::command]
@@ -3947,21 +3774,8 @@ async fn revenue_recognition_cancel(
     values: CancelInput,
 ) -> Result<OrderSummary, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    let user_id = finance_guard(&state, &actor, project_id).await?;
-    let summary = state
-        .orders
-        .cancel_recognition(project_id, recognition_id, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "cancel",
-        "revenue_recognitions",
-        Some(&project_id.to_string()),
-        Some(serde_json::json!({ "recognitionId": recognition_id })),
-    )
-    .await;
-    Ok(summary)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::orders::cancel_recognition(&gate, &state.orders, project_id, recognition_id, values).await
 }
 
 #[tauri::command]
@@ -3976,9 +3790,9 @@ async fn outlook_get_body(
     state: &AppState,
     query: OutlookQuery,
 ) -> Result<OutlookView, BantoError> {
-    require_role(state, Role::Viewer, "outlook").await?;
-    let scope = amount_projects(&caller_subject(state).await?);
-    state.orders.outlook(&scope, query).await
+    let identity = require_role(state, Role::Viewer, "outlook").await?;
+    let gate = tauri_gate(state, &identity).await?;
+    ops::orders::outlook(&gate, &state.orders, query).await
 }
 
 #[tauri::command]
@@ -3986,14 +3800,8 @@ async fn outlook_snapshots_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<SnapshotInfo>, BantoError> {
     let identity = require_role(&state, Role::Viewer, "outlook_snapshots").await?;
-    business_guard(
-        &state,
-        &identity,
-        Operation::ViewMasters,
-        "outlook_snapshots",
-    )
-    .await?;
-    state.orders.snapshots().await
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::orders::snapshots(&gate, &state.orders).await
 }
 
 #[tauri::command]
@@ -4002,12 +3810,9 @@ async fn outlook_snapshot_get(
     id: i64,
     query: Option<OutlookQuery>,
 ) -> Result<OutlookView, BantoError> {
-    require_role(&state, Role::Viewer, "outlook_snapshots").await?;
-    let scope = amount_projects(&caller_subject(&state).await?);
-    state
-        .orders
-        .snapshot_view(id, &scope, query.unwrap_or_default())
-        .await
+    let identity = require_role(&state, Role::Viewer, "outlook_snapshots").await?;
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::orders::snapshot_view(&gate, &state.orders, id, query.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -4016,24 +3821,8 @@ async fn outlook_snapshot_create(
     label: Option<String>,
 ) -> Result<SnapshotInfo, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        &state,
-        &actor,
-        Operation::ViewAllReports,
-        "outlook_snapshots",
-    )
-    .await?;
-    let snapshot = state.orders.save_snapshot(label, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        "outlook_snapshots",
-        Some(&snapshot.id.to_string()),
-        Some(serde_json::json!({ "label": snapshot.label })),
-    )
-    .await;
-    Ok(snapshot)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::orders::save_snapshot(&gate, &state.orders, label).await
 }
 
 // --- banto-cost P4a: calc basis (design §10, ADR-0028) ---------------------
