@@ -27,10 +27,11 @@ let loading: { generation: number; promise: Promise<void>; abort: () => void } |
 /**
  * A request given up on at the end of the wait that has not settled yet (a
  * Tauri command cannot be cancelled; an aborted HTTP one settles at once).
- * While it runs, no second one is started (PR #60 review: requests must not
- * pile up while the server does not answer).
+ * While it runs, no second one is started for the same session (PR #60
+ * review: requests must not pile up while the server does not answer); a new
+ * session (a sign-in again) always asks.
  */
-let givenUp: Promise<unknown> | null = null;
+let givenUp: { generation: number; settled: Promise<unknown> } | null = null;
 /**
  * The held grants are known to be out of date (a reload was asked for and has
  * not succeeded yet): they stay in use, and the next load reads them again
@@ -66,7 +67,7 @@ export function loadMyAuthz(
 		// The earlier read is for another session, or replaced by a reload.
 		loading?.abort();
 		loading = null;
-		if (givenUp) return Promise.resolve();
+		if (givenUp?.generation === generation) return Promise.resolve();
 		const controller = new AbortController();
 		const request = getMyAuthz(controller.signal);
 		const promise = request
@@ -96,10 +97,10 @@ export function loadMyAuthz(
 			if (loading === current) {
 				loading = null;
 				current.abort();
-				const settled = pending.finally(() => {
-					if (givenUp === settled) givenUp = null;
+				const settled: Promise<unknown> = pending.finally(() => {
+					if (givenUp?.settled === settled) givenUp = null;
 				});
-				givenUp = settled;
+				givenUp = { generation: current.generation, settled };
 			}
 			resolve();
 		}, waitMs);

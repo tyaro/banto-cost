@@ -153,4 +153,17 @@ describe('myAuthz (review D-4, §8-15)', () => {
 		mocks.generation = 2;
 		expect(myCapabilities()).toBeNull();
 	});
+
+	it('a stalled read that cannot be cancelled holds back only its own session', async () => {
+		vi.useFakeTimers();
+		mocks.httpRequest.mockReturnValueOnce(new Promise(() => {}));
+		const first = loadMyAuthz(1, 3000);
+		await vi.advanceTimersByTimeAsync(3000);
+		await first;
+		mocks.generation = 2;
+		mocks.httpRequest.mockResolvedValueOnce(worker);
+		await loadMyAuthz(2, 3000);
+		expect(mocks.httpRequest).toHaveBeenCalledTimes(2);
+		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry']);
+	});
 });
