@@ -24,6 +24,12 @@ export const MY_AUTHZ_WAIT_MS = 3000;
 
 let loaded = $state.raw<{ generation: number; authz: MyAuthz } | null>(null);
 let loading: { generation: number; promise: Promise<void> } | null = null;
+/**
+ * The held grants are known to be out of date (a reload was asked for and has
+ * not succeeded yet): they stay in use, and the next load reads them again
+ * (PR #60 review).
+ */
+let stale = false;
 
 function currentGeneration(): number {
 	return getSessionController().snapshot.generation;
@@ -40,7 +46,7 @@ export function loadMyAuthz(
 	waitMs: number = MY_AUTHZ_WAIT_MS,
 	force = false
 ): Promise<void> {
-	if (!force && loaded?.generation === generation) return Promise.resolve();
+	if (!force && !stale && loaded?.generation === generation) return Promise.resolve();
 	if (!isPipelineAvailable()) return Promise.resolve();
 	if (force || loading?.generation !== generation) {
 		const promise = getMyAuthz()
@@ -49,6 +55,7 @@ export function loadMyAuthz(
 				// this one was in flight: drop it.
 				if (currentGeneration() === generation && loading?.promise === promise) {
 					loaded = { generation, authz };
+					stale = false;
 				}
 			})
 			.catch(() => {})
@@ -76,6 +83,7 @@ export function loadMyAuthz(
  * capabilities). The held ones stay in use until the new ones arrive.
  */
 export function reloadMyAuthz(): Promise<void> {
+	stale = true;
 	return loadMyAuthz(currentGeneration(), MY_AUTHZ_WAIT_MS, true);
 }
 
@@ -95,4 +103,5 @@ export function myCapabilities(): ReadonlySet<Capability> | null {
 export function setMyAuthzForTest(value: { generation: number; authz: MyAuthz } | null): void {
 	loaded = value;
 	loading = null;
+	stale = false;
 }

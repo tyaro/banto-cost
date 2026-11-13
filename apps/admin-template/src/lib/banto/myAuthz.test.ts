@@ -97,4 +97,21 @@ describe('myAuthz (review D-4, §8-15)', () => {
 		await wait;
 		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry', 'amount.view']);
 	});
+
+	it('a reload that fails is tried again on the next load, keeping the held grants meanwhile', async () => {
+		mocks.httpRequest.mockResolvedValueOnce(worker);
+		await loadMyAuthz(1);
+		mocks.httpRequest.mockRejectedValueOnce(new Error('offline'));
+		await reloadMyAuthz();
+		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry']);
+		mocks.httpRequest.mockResolvedValueOnce({
+			capabilities: ['time.entry', 'amount.view'],
+			memberships: []
+		});
+		await loadMyAuthz(1);
+		expect(mocks.httpRequest).toHaveBeenCalledTimes(3);
+		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry', 'amount.view']);
+		await loadMyAuthz(1);
+		expect(mocks.httpRequest).toHaveBeenCalledTimes(3);
+	});
 });
