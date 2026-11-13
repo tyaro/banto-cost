@@ -950,12 +950,16 @@ fn build_overview(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::projects::tests::{fixture, input as project_input};
     use crate::projects::{ProjectInput, ProjectsService};
 
-    fn version(stage: &str, amount: Option<i64>, prob: Option<i64>) -> PipelineVersionInput {
+    pub(crate) fn version(
+        stage: &str,
+        amount: Option<i64>,
+        prob: Option<i64>,
+    ) -> PipelineVersionInput {
         PipelineVersionInput {
             stage: stage.into(),
             expected_amount: amount,
