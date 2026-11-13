@@ -45,7 +45,8 @@ async fn reset_schema(url: &str) {
         "DROP TABLE IF EXISTS time_entries, phases, common_activities CASCADE",
         "DROP TABLE IF EXISTS calc_values, calc_items CASCADE",
         "DROP TABLE IF EXISTS outlook_snapshot_rows, outlook_snapshots, revenue_clearings, \
-         revenue_recognitions, revenue_plan, order_changes, order_conversions CASCADE",
+         revenue_recognitions, revenue_plan, order_changes, order_conversion_corrections, \
+         order_conversions CASCADE",
         "DROP TABLE IF EXISTS pipeline_revenue_plan, pipeline_versions, projects, customers, \
          project_members, user_capabilities CASCADE",
         "DROP TABLE IF EXISTS attachments, audit_log, users, settings, items CASCADE",
@@ -1048,7 +1049,7 @@ async fn app_layer_crud_round_trips_on_postgres() {
                 "reason": "日付と番号の入力誤り"
             }))
             .unwrap();
-        let s = orders
+        let (s, _) = orders
             .correct_conversion(wrong.id, correct, Some(manager))
             .await
             .expect("correct the conversion on Postgres");

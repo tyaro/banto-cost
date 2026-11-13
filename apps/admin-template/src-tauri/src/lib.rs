@@ -3826,7 +3826,7 @@ async fn order_conversion_correct_body(
     let actor = require_role(state, Role::Editor, "business").await?;
     let (_, user_id) =
         business_guard(state, &actor, Operation::EditOrder { project_id }, "orders").await?;
-    let summary = state
+    let (summary, record) = state
         .orders
         .correct_conversion(project_id, values, user_id)
         .await?;
@@ -3836,7 +3836,7 @@ async fn order_conversion_correct_body(
         "correct_conversion",
         "orders",
         Some(&project_id.to_string()),
-        Some(conversion_correction_audit_detail(&summary)),
+        Some(conversion_correction_audit_detail(&record)),
     )
     .await;
     Ok(summary)

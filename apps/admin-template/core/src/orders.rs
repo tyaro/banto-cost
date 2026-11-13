@@ -670,21 +670,29 @@ pub fn conversion_cancel_audit_detail(summary: &OrderSummary) -> serde_json::Val
     })
 }
 
+/// The correction one `correct_conversion` call recorded (T41), as written
+/// in its transaction: the audit is built from this, not from the history
+/// read back afterwards, which may already hold a later correction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorrectionRecord {
+    pub conversion_id: i64,
+    pub correction_id: i64,
+    pub old_converted_on: String,
+    pub new_converted_on: String,
+    pub basis_changed: bool,
+}
+
 /// The audit detail of a 受注日・根拠の訂正 (REST and Tauri): the conversion,
 /// which values changed and the 受注日 before and after. Never the basis
 /// text or the reason.
-pub fn conversion_correction_audit_detail(summary: &OrderSummary) -> serde_json::Value {
-    let correction = summary
-        .conversion
-        .as_ref()
-        .and_then(|c| c.corrections.first().map(|r| (c.id, r)));
+pub fn conversion_correction_audit_detail(record: &CorrectionRecord) -> serde_json::Value {
     serde_json::json!({
-        "conversionId": correction.map(|(id, _)| id),
-        "correctionId": correction.map(|(_, r)| r.id),
-        "convertedOnChanged": correction.map(|(_, r)| r.old_converted_on != r.new_converted_on),
-        "basisChanged": correction.map(|(_, r)| r.old_basis != r.new_basis),
-        "fromConvertedOn": correction.map(|(_, r)| r.old_converted_on.clone()),
-        "toConvertedOn": correction.map(|(_, r)| r.new_converted_on.clone()),
+        "conversionId": record.conversion_id,
+        "correctionId": record.correction_id,
+        "convertedOnChanged": record.old_converted_on != record.new_converted_on,
+        "basisChanged": record.basis_changed,
+        "fromConvertedOn": record.old_converted_on,
+        "toConvertedOn": record.new_converted_on,
     })
 }
 
@@ -1534,7 +1542,7 @@ impl OrdersService {
         project_id: i64,
         input: ConversionCorrectionInput,
         actor_user_id: Option<i64>,
-    ) -> Result<OrderSummary, BantoError> {
+    ) -> Result<(OrderSummary, CorrectionRecord), BantoError> {
         let state = self.state(project_id).await?;
         let Some(conversion) = state.conversion.as_ref() else {
             return Err(BantoError::Validation {
@@ -1594,11 +1602,11 @@ impl OrdersService {
         let insert = self.sql(
             "INSERT INTO order_conversion_corrections (conversion_id, old_converted_on, \
              new_converted_on, old_basis, new_basis, reason, corrected_on, corrected_by) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         );
         let conversion_id = conversion.id;
         let (old_on, old_basis) = (&conversion.converted_on, &conversion.basis);
-        in_tx!(&self.db, tx => {
+        let correction_id: i64 = in_tx!(&self.db, tx => {
             if execute!(&mut *tx, guard, project_id, revenue_version)? == 0 {
                 return Err(stale_version_error());
             }
@@ -1606,11 +1614,18 @@ impl OrdersService {
                 old_basis)? == 0 {
                 return Err(stale_version_error());
             }
-            execute!(&mut *tx, insert, conversion_id, old_on, &converted_on, old_basis, &basis,
-                &reason, &corrected_on, actor_user_id)?;
+            scalar!(&mut *tx, insert, conversion_id, old_on, &converted_on, old_basis, &basis,
+                &reason, &corrected_on, actor_user_id)?
         });
+        let record = CorrectionRecord {
+            conversion_id,
+            correction_id,
+            old_converted_on: old_on.clone(),
+            new_converted_on: converted_on,
+            basis_changed: *old_basis != basis,
+        };
         self.notify_changed();
-        self.summary(project_id).await
+        Ok((self.summary(project_id).await?, record))
     }
 
     async fn code_taken(&self, code: &str) -> Result<bool, BantoError> {
@@ -2372,7 +2387,7 @@ pub(crate) mod tests {
         );
         assert!(rx.try_recv().is_err());
 
-        let s = svc
+        let (s, first) = svc
             .correct_conversion(
                 a,
                 correction_input(v, "2026-11-02", "注文書 PO-0001", "注文書の日付の入力誤り"),
@@ -2404,7 +2419,7 @@ pub(crate) mod tests {
         assert_eq!(s.plan, before.plan);
         assert_eq!(s.revenue_version, v + 1);
 
-        let s = svc
+        let (s, second) = svc
             .correct_conversion(
                 a,
                 correction_input(
@@ -2456,7 +2471,22 @@ pub(crate) mod tests {
             c.corrections[0].corrected_on,
             crate::business_date::today().to_string()
         );
-        let detail = conversion_correction_audit_detail(&s);
+        // Each call's audit names its own correction, even though the history
+        // read back after the first one could already hold a later one.
+        assert_eq!(first.correction_id, c.corrections[1].id);
+        let detail = conversion_correction_audit_detail(&first);
+        assert_eq!(detail["correctionId"], c.corrections[1].id);
+        assert_eq!(detail["convertedOnChanged"], true);
+        assert_eq!(detail["basisChanged"], false);
+        assert_eq!(
+            (&detail["fromConvertedOn"], &detail["toConvertedOn"]),
+            (
+                &serde_json::json!("2026-11-20"),
+                &serde_json::json!("2026-11-02")
+            )
+        );
+        let detail = conversion_correction_audit_detail(&second);
+        assert_eq!(detail["correctionId"], c.corrections[0].id);
         assert_eq!(detail["basisChanged"], true);
         assert_eq!(detail["convertedOnChanged"], false);
         assert!(detail.get("reason").is_none());

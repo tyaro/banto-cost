@@ -504,7 +504,7 @@ async fn order_conversion_correct(
     let (_, user_id) = state
         .guard(&session, Operation::EditOrder { project_id: id }, "orders")
         .await?;
-    let summary = state.orders.correct_conversion(id, input, user_id).await?;
+    let (summary, record) = state.orders.correct_conversion(id, input, user_id).await?;
     record_write(
         &state.audit,
         &state.auth,
@@ -512,7 +512,7 @@ async fn order_conversion_correct(
         "correct_conversion",
         "orders",
         Some(&id.to_string()),
-        Some(conversion_correction_audit_detail(&summary)),
+        Some(conversion_correction_audit_detail(&record)),
     )
     .await;
     Ok(Json(summary))
