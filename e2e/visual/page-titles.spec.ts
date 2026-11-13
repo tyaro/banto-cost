@@ -13,7 +13,7 @@ for (const [index, locale] of ['ja', 'en'].entries()) {
 	const resource = copy['customers.resourceLabel'];
 	const pages = [
 		['/dashboard', copy['nav.dashboard']],
-		['/customers', copy['nav.customers'], resource],
+		['/customers', copy['nav.customers']],
 		['/customers/new', copy['customers.createTitle'].replace('{resource}', resource)],
 		['/customers/1', copy['customers.editTitle'].replace('{resource}', resource)],
 		['/users', copy['nav.users']],

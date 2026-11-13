@@ -428,7 +428,7 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 	// template's own screens are scanned by the visual project (a11y.spec.ts).
 	const SCREENS: { path: () => string; heading: string }[] = [
 		{ path: () => '/dashboard', heading: 'ダッシュボード' },
-		{ path: () => '/projects', heading: '案件' },
+		{ path: () => '/projects', heading: '案件台帳' },
 		{ path: () => `/projects/${projectId}`, heading: '案件の詳細' },
 		{ path: () => '/pipeline', heading: '案件見込' },
 		{ path: () => '/outlook', heading: '月次見通し' },

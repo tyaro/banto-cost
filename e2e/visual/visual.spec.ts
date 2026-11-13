@@ -165,7 +165,7 @@ interface DiagonalPage {
 // viewport (1440x900).
 const DIAGONAL_PAGES: DiagonalPage[] = [
 	{ name: 'customers', path: '/customers', heading: '顧客' },
-	{ name: 'projects', path: '/projects', heading: '案件' },
+	{ name: 'projects', path: '/projects', heading: '案件台帳' },
 	{ name: 'users', path: '/users', heading: 'ユーザー管理' },
 	// settings-routes step 2 (choiapp-feedback-2026-09 §3.2): each category
 	// is now its own route, so no single settings screenshot shows all of
