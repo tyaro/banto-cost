@@ -105,6 +105,97 @@ pub fn check_plan_lines(plan: &[RevenuePlanLine]) -> Vec<ConversionIssue> {
     issues
 }
 
+/// 受注転換を取り消すときに確かめる、その案件の状態と受注後に付いた記録の有無（T40）。
+///
+/// 取消は案件の取り違えなど、受注後の業務がまだ始まっていない誤りを直すためのもの。
+/// 受注変更・売上計上（取消済みを含む）・予算・工数・直接費（発注・配分を含む）・
+/// 完了見込・月額固定・定期売上のどれかがあれば取り消さない（レビュー U-3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConversionCancelFacts {
+    /// 今の案件の状態。
+    pub status: Option<ProjectStatus>,
+    /// 転換前の状態（`order_conversions.previous_status`）。
+    pub previous: Option<ProjectStatus>,
+    pub scope: Option<ConversionScope>,
+    pub has_order_changes: bool,
+    pub has_recognitions: bool,
+    pub has_budgets: bool,
+    pub has_time_entries: bool,
+    pub has_direct_costs: bool,
+    pub has_forecasts: bool,
+    pub has_fixed_costs: bool,
+    pub has_recurring_revenue: bool,
+}
+
+/// 受注転換を取り消せない理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionCancelIssue {
+    /// 受注（進行中・作業完了・精算完了でない）の案件でない。
+    NotOrdered,
+    /// 転換前の状態が受注前の有効な状態として読めない。
+    PreviousUnknown,
+    /// 一部受注。残りの範囲の案件が別にあり、戻すと見込が重なる。
+    Partial,
+    OrderChanges,
+    /// 売上計上の記録がある（取消済みを含む。消し込みの履歴が売上予定を参照する）。
+    Recognitions,
+    Budgets,
+    TimeEntries,
+    DirectCosts,
+    Forecasts,
+    FixedCosts,
+    RecurringRevenue,
+}
+
+impl ConversionCancelIssue {
+    /// 通信で返す理由の符号。
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::NotOrdered => "not_ordered",
+            Self::PreviousUnknown => "previous_unknown",
+            Self::Partial => "partial",
+            Self::OrderChanges => "order_changes",
+            Self::Recognitions => "recognitions",
+            Self::Budgets => "budgets",
+            Self::TimeEntries => "time_entries",
+            Self::DirectCosts => "direct_costs",
+            Self::Forecasts => "forecasts",
+            Self::FixedCosts => "fixed_costs",
+            Self::RecurringRevenue => "recurring_revenue",
+        }
+    }
+}
+
+/// 受注転換を取り消せるかを検査する（T40）。空なら取り消せ、案件は転換前の状態
+/// （[`ProjectStatus::unconverted_to`]）へ戻る。
+pub fn check_conversion_cancel(facts: &ConversionCancelFacts) -> Vec<ConversionCancelIssue> {
+    let mut issues = Vec::new();
+    if facts.status != Some(ProjectStatus::Ordered) {
+        issues.push(ConversionCancelIssue::NotOrdered);
+    }
+    if !facts.previous.is_some_and(|p| p.convertible()) {
+        issues.push(ConversionCancelIssue::PreviousUnknown);
+    }
+    if facts.scope != Some(ConversionScope::Whole) {
+        issues.push(ConversionCancelIssue::Partial);
+    }
+    let records = [
+        (facts.has_order_changes, ConversionCancelIssue::OrderChanges),
+        (facts.has_recognitions, ConversionCancelIssue::Recognitions),
+        (facts.has_budgets, ConversionCancelIssue::Budgets),
+        (facts.has_time_entries, ConversionCancelIssue::TimeEntries),
+        (facts.has_direct_costs, ConversionCancelIssue::DirectCosts),
+        (facts.has_forecasts, ConversionCancelIssue::Forecasts),
+        (facts.has_fixed_costs, ConversionCancelIssue::FixedCosts),
+        (
+            facts.has_recurring_revenue,
+            ConversionCancelIssue::RecurringRevenue,
+        ),
+    ];
+    issues.extend(records.into_iter().filter(|(has, _)| *has).map(|(_, i)| i));
+    issues
+}
+
 /// 受注変更の状態。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeStatus {
@@ -402,5 +493,101 @@ mod tests {
         for s in [ConversionScope::Whole, ConversionScope::Partial] {
             assert_eq!(ConversionScope::parse(s.as_str()), Some(s));
         }
+    }
+
+    fn cancellable() -> ConversionCancelFacts {
+        ConversionCancelFacts {
+            status: Some(ProjectStatus::Ordered),
+            previous: Some(ProjectStatus::Negotiating),
+            scope: Some(ConversionScope::Whole),
+            ..ConversionCancelFacts::default()
+        }
+    }
+
+    #[test]
+    fn t40_受注後の記録がない全部受注は取り消せ転換前の状態へ戻る() {
+        assert_eq!(check_conversion_cancel(&cancellable()), vec![]);
+        assert_eq!(
+            ProjectStatus::Ordered.unconverted_to(ProjectStatus::Negotiating),
+            Some(ProjectStatus::Negotiating)
+        );
+        assert_eq!(
+            ProjectStatus::Ordered.unconverted_to(ProjectStatus::OnHold),
+            Some(ProjectStatus::OnHold),
+            "保留から転換した案件は保留に戻る"
+        );
+    }
+
+    #[test]
+    fn t40_受注後の記録があれば理由を全部返して取り消さない() {
+        let facts = ConversionCancelFacts {
+            has_order_changes: true,
+            has_recognitions: true,
+            has_budgets: true,
+            has_time_entries: true,
+            has_direct_costs: true,
+            has_forecasts: true,
+            has_fixed_costs: true,
+            has_recurring_revenue: true,
+            ..cancellable()
+        };
+        let codes: Vec<&str> = check_conversion_cancel(&facts)
+            .into_iter()
+            .map(ConversionCancelIssue::code)
+            .collect();
+        assert_eq!(
+            codes,
+            vec![
+                "order_changes",
+                "recognitions",
+                "budgets",
+                "time_entries",
+                "direct_costs",
+                "forecasts",
+                "fixed_costs",
+                "recurring_revenue"
+            ]
+        );
+    }
+
+    #[test]
+    fn t40_進行中以降と一部受注は取り消さない() {
+        for status in [
+            ProjectStatus::InProgress,
+            ProjectStatus::WorkDone,
+            ProjectStatus::Settled,
+            ProjectStatus::Negotiating,
+        ] {
+            let facts = ConversionCancelFacts {
+                status: Some(status),
+                ..cancellable()
+            };
+            assert_eq!(
+                check_conversion_cancel(&facts),
+                vec![ConversionCancelIssue::NotOrdered],
+                "{status:?}"
+            );
+            assert_eq!(status.unconverted_to(ProjectStatus::Lead), None);
+        }
+        let partial = ConversionCancelFacts {
+            scope: Some(ConversionScope::Partial),
+            ..cancellable()
+        };
+        assert_eq!(
+            check_conversion_cancel(&partial),
+            vec![ConversionCancelIssue::Partial]
+        );
+        let unknown = ConversionCancelFacts {
+            previous: Some(ProjectStatus::Lost),
+            ..cancellable()
+        };
+        assert_eq!(
+            check_conversion_cancel(&unknown),
+            vec![ConversionCancelIssue::PreviousUnknown]
+        );
+        assert_eq!(
+            ProjectStatus::Ordered.unconverted_to(ProjectStatus::Lost),
+            None
+        );
     }
 }
