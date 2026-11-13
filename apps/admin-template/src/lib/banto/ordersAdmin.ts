@@ -43,6 +43,10 @@ export interface CancelledConversion {
 	previousStatus: string;
 	convertedOn: string;
 	confirmedAmount: number;
+	scope: 'whole' | 'partial';
+	/** A partial order's remainder project (set to 中止 by the cancellation). */
+	remainderProjectId: number | null;
+	remainderCode: string | null;
 	basis: string;
 	createdByName: string | null;
 	cancelledOn: string;

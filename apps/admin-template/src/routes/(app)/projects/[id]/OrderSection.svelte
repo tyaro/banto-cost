@@ -303,6 +303,16 @@
 				{ label: m['confirm.project'](), value: code },
 				{ label: m['orders.fieldConvertedOn'](), value: conversion.convertedOn },
 				{ label: m['orders.convertedAmount'](), value: formatYen(conversion.confirmedAmount) },
+				...(conversion.remainderCode !== null
+					? [
+							{
+								label: m['orders.cancelConversionRemainder'](),
+								value: m['orders.cancelConversionRemainderValue']({
+									code: conversion.remainderCode
+								})
+							}
+						]
+					: []),
 				{ label: m['confirm.reason'](), value: reason }
 			],
 			undo: m['orders.cancelConversionUndo'](),
@@ -808,7 +818,13 @@
 							<tr>
 								<td>{row.convertedOn}</td>
 								<td class="num">{formatYen(row.confirmedAmount)}</td>
-								<td>{statusLabel(row.previousStatus)}</td>
+								<td>
+									{statusLabel(row.previousStatus)}
+									{#if row.remainderProjectId !== null}
+										/ {m['orders.cancelConversionRemainder']()}
+										<a href={resolve(`projects/${row.remainderProjectId}`)}>{row.remainderCode}</a>
+									{/if}
+								</td>
 								<td>{row.cancelledOn}</td>
 								<td>{row.cancelReason}</td>
 								<td>{row.cancelledByName ?? ''}</td>

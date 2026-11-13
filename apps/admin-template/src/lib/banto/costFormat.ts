@@ -97,7 +97,9 @@ export function revenueIssueLabel(issue: string): string {
 const CANCEL_BLOCKER_LABELS: Record<string, () => string> = {
 	not_ordered: () => m['orders.cancelBlocker.notOrdered'](),
 	previous_unknown: () => m['orders.cancelBlocker.previousUnknown'](),
-	partial: () => m['orders.cancelBlocker.partial'](),
+	scope_unknown: () => m['orders.cancelBlocker.scopeUnknown'](),
+	remainder_unknown: () => m['orders.cancelBlocker.remainderUnknown'](),
+	remainder_ordered: () => m['orders.cancelBlocker.remainderOrdered'](),
 	order_changes: () => m['orders.cancelBlocker.orderChanges'](),
 	recognitions: () => m['orders.cancelBlocker.recognitions'](),
 	budgets: () => m['orders.cancelBlocker.budgets'](),
