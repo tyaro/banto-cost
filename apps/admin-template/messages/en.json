@@ -130,6 +130,7 @@
   "dashboard.fixedCostsDue": "Fixed costs not posted",
   "dashboard.recurringRevenueDue": "Recurring revenue not recognized",
   "dashboard.dueNote": "Count for {month}. {count} not done for the previous month ({previous})",
+  "dashboard.dueNotePreviousFailed": "Count for {month}. The previous month ({previous}) could not be read",
   "dashboard.ledgerReview": "The direct-cost ledger has records to review; {count} projects cannot be totalled",
   "dashboard.forbidden": "Not permitted",
   "dashboard.loadFailed": "Unavailable",

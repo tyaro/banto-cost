@@ -105,10 +105,14 @@
 	let overview = $state<Source<PipelineOverview>>({ state: 'loading' });
 	let outlook = $state<Source<OutlookView>>({ state: 'loading' });
 
-	/** Unposted / unrecognized contracts of this month and the previous one. */
+	/**
+	 * Unposted / unrecognized contracts of this month and the previous one.
+	 * `previous` is `null` when only that read failed: this month's count still
+	 * shows, and the note says the previous month could not be read.
+	 */
 	interface DueMonths {
 		current: number;
-		previous: number;
+		previous: number | null;
 	}
 
 	let portfolio = $state<Source<Portfolio>>({ state: 'loading' });
@@ -117,19 +121,35 @@
 	let recurringDue = $state<Source<DueMonths>>({ state: 'loading' });
 	let loadToken = 0;
 
-	function settled<T>(result: PromiseSettledResult<T>): Source<T> {
-		return result.status === 'fulfilled'
-			? { state: 'ok', value: result.value }
-			: { state: 'error', error: result.reason };
+	/**
+	 * Each source shows as soon as it answers (PR #48 review): one slow API
+	 * never holds back the tiles already read. A newer load wins (`loadToken`).
+	 */
+	async function track<T>(
+		token: number,
+		request: Promise<T>,
+		apply: (source: Source<T>) => void
+	): Promise<void> {
+		let source: Source<T>;
+		try {
+			source = { state: 'ok', value: await request };
+		} catch (error) {
+			source = { state: 'error', error };
+		}
+		if (token === loadToken) apply(source);
 	}
 
-	/** Both months of one due count; either failing fails the tile. */
+	/** This month's count fails the tile; the previous month's only its note. */
 	async function dueMonths(
 		read: (month: string) => Promise<{ dueCount: number }>,
 		month: string
 	): Promise<DueMonths> {
-		const [current, previous] = await Promise.all([read(month), read(previousMonth(month))]);
-		return { current: current.dueCount, previous: previous.dueCount };
+		const [current, previous] = await Promise.allSettled([read(month), read(previousMonth(month))]);
+		if (current.status === 'rejected') throw current.reason;
+		return {
+			current: current.value.dueCount,
+			previous: previous.status === 'fulfilled' ? previous.value.dueCount : null
+		};
 	}
 
 	/** Every list /approvals shows: time entries, direct costs, corrections. */
@@ -152,22 +172,15 @@
 		approvals = { state: 'loading' };
 		fixedDue = { state: 'loading' };
 		recurringDue = { state: 'loading' };
-		const [o, l, p, a, f, r] = await Promise.allSettled([
-			getPipelineOverview(),
-			getOutlook({ from: range.current, to: range.next }),
-			getPortfolio(),
-			approvalCount(),
-			dueMonths(getFixedCostMonth, range.current),
-			dueMonths(getRecurringMonth, range.current)
-		]);
-		if (token !== loadToken) return;
 		months = range;
-		overview = settled(o);
-		outlook = settled(l);
-		portfolio = settled(p);
-		approvals = settled(a);
-		fixedDue = settled(f);
-		recurringDue = settled(r);
+		await Promise.all([
+			track(token, getPipelineOverview(), (s) => (overview = s)),
+			track(token, getOutlook({ from: range.current, to: range.next }), (s) => (outlook = s)),
+			track(token, getPortfolio(), (s) => (portfolio = s)),
+			track(token, approvalCount(), (s) => (approvals = s)),
+			track(token, dueMonths(getFixedCostMonth, range.current), (s) => (fixedDue = s)),
+			track(token, dueMonths(getRecurringMonth, range.current), (s) => (recurringDue = s))
+		]);
 	}
 
 	void load();
@@ -286,17 +299,19 @@
 	}
 
 	function dueNote(source: Source<DueMonths>): string {
-		return source.state === 'ok'
-			? m['dashboard.dueNote']({
+		if (source.state !== 'ok') return '';
+		const previous = previousMonth(months.current);
+		return source.value.previous === null
+			? m['dashboard.dueNotePreviousFailed']({ month: months.current, previous })
+			: m['dashboard.dueNote']({
 					month: months.current,
-					previous: previousMonth(months.current),
+					previous,
 					count: source.value.previous.toLocaleString()
-				})
-			: '';
+				});
 	}
 
 	const dueActive = (source: Source<DueMonths>) =>
-		source.state === 'ok' && source.value.current + source.value.previous > 0;
+		source.state === 'ok' && source.value.current + (source.value.previous ?? 0) > 0;
 
 	const checks = $derived<CheckTile[]>([
 		alertTile('forecast-loss', TrendingDown, 'forecast_loss', m['dashboard.forecastLoss']()),

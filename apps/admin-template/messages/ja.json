@@ -130,6 +130,7 @@
   "dashboard.fixedCostsDue": "月額固定原価の未計上",
   "dashboard.recurringRevenueDue": "定期売上の未計上",
   "dashboard.dueNote": "{month} の件数。前月（{previous}）の未計上 {count} 件",
+  "dashboard.dueNotePreviousFailed": "{month} の件数。前月（{previous}）の件数は取得できません",
   "dashboard.ledgerReview": "直接費の台帳に要確認の明細があり、{count} 件の案件を集計できません",
   "dashboard.forbidden": "権限がありません",
   "dashboard.loadFailed": "取得できません",

@@ -320,6 +320,38 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 		await expect(page.getByText(PROJECT_NAME).first()).toBeVisible();
 	});
 
+	test('9b. ダッシュボード: each source shows when it answers; a failed previous month only marks the note', async () => {
+		const previous = (() => {
+			const [y, m] = month.split('-').map(Number);
+			return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+		})();
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => (release = resolve));
+		await page.route('**/api/portfolio', async (route) => {
+			await held;
+			await route.continue();
+		});
+		await page.route(`**/api/fixed-costs/months/${previous}`, (route) =>
+			route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
+		);
+		try {
+			await page.goto('/dashboard');
+			// The overall list is still on its way; the other tiles do not wait for it.
+			await expect(tile(page, 'approvals')).toHaveText('0 件');
+			await expect(tile(page, 'forecast-loss')).toHaveText('読み込み中…');
+			// This month's count stays; only the note says the previous month failed.
+			await expect(tile(page, 'fixed-costs-due')).toHaveText('0 件');
+			await expect(page.locator('[data-tile="fixed-costs-due"] .stat-note')).toContainText(
+				`前月（${previous}）の件数は取得できません`
+			);
+			release();
+			await expect(tile(page, 'forecast-loss')).toHaveText('1 件');
+		} finally {
+			release();
+			await page.unrouteAll({ behavior: 'wait' });
+		}
+	});
+
 	// D-8: the business screens of the flow, with its data on them. The
 	// template's own screens are scanned by the visual project (a11y.spec.ts).
 	const SCREENS: { path: () => string; heading: string }[] = [
