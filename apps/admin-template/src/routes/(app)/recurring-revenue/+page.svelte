@@ -17,6 +17,7 @@
 	import { resolve } from '$app/paths';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import {
 		getRecurringMonth,
 		listRecurringAgreements,
@@ -167,16 +168,22 @@
 
 	async function recognize() {
 		if (!view || busy) return;
-		if (
-			!window.confirm(
-				m['recurring.recognizeConfirm']({
-					month: view.month,
-					count: view.dueCount,
-					date: view.recognizedOn
-				})
-			)
-		)
-			return;
+		const ok = await confirmAction({
+			title: m['recurring.recognizeConfirmTitle'](),
+			body: m['recurring.recognizeConfirm']({
+				month: view.month,
+				count: view.dueCount,
+				date: view.recognizedOn
+			}),
+			details: [
+				{ label: m['confirm.month'](), value: view.month },
+				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: view.dueCount }) },
+				{ label: m['recurring.recognizedOn'](), value: view.recognizedOn }
+			],
+			undo: m['recurring.recognizeUndo'](),
+			confirmLabel: m['recurring.recognize']({ count: view.dueCount })
+		});
+		if (!ok || !view || busy) return;
 		busy = true;
 		try {
 			const result = await recognizeRecurringMonth(view.month);

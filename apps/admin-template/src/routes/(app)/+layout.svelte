@@ -15,6 +15,7 @@
 	import ShellLauncher from '#lib/components/ShellLauncher.svelte';
 	import { settings } from '#lib/settings.svelte.js';
 	import CommandPalette from '#lib/components/CommandPalette.svelte';
+	import ConfirmActionHost from '#lib/components/ConfirmActionHost.svelte';
 	import { commandPaletteStore } from '#lib/commandPalette.svelte.js';
 	import { appShortcuts, commandPaletteCommand } from '#lib/shortcuts.js';
 	import { watchRecentCommandOwner } from '#lib/recentCommands.js';
@@ -317,6 +318,8 @@
 		<CommandPalette />
 	</div>
 {/if}
+
+<ConfirmActionHost />
 
 <style>
 	.shell {

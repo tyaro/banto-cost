@@ -15,6 +15,7 @@
 	import { resolve } from '$app/paths';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import {
 		closeMonth,
 		getClosingMonth,
@@ -86,7 +87,14 @@
 
 	async function close() {
 		if (!view || busy) return;
-		if (!window.confirm(m['closing.closeConfirm']({ month: view.month }))) return;
+		const ok = await confirmAction({
+			title: m['closing.closeConfirmTitle'](),
+			body: m['closing.closeConfirm']({ month: view.month }),
+			details: [{ label: m['confirm.month'](), value: view.month }],
+			undo: m['closing.closeUndo'](),
+			confirmLabel: m['closing.close']()
+		});
+		if (!ok || !view || busy) return;
 		busy = true;
 		try {
 			view = await closeMonth(view.month, view.rowVersion);
@@ -101,7 +109,18 @@
 
 	async function reopen() {
 		if (!view || busy || reason.trim() === '') return;
-		if (!window.confirm(m['closing.reopenConfirm']({ month: view.month }))) return;
+		const ok = await confirmAction({
+			title: m['closing.reopenConfirmTitle'](),
+			body: m['closing.reopenConfirm']({ month: view.month }),
+			details: [
+				{ label: m['confirm.month'](), value: view.month },
+				{ label: m['confirm.reason'](), value: reason.trim() }
+			],
+			undo: m['closing.reopenUndo'](),
+			confirmLabel: m['closing.reopen'](),
+			danger: true
+		});
+		if (!ok || !view || busy) return;
 		busy = true;
 		try {
 			view = await reopenMonth(view.month, view.rowVersion, reason.trim());

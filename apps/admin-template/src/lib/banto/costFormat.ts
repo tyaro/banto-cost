@@ -94,6 +94,25 @@ export function revenueIssueLabel(issue: string): string {
 	return REVENUE_ISSUE_LABELS[issue]?.() ?? issue;
 }
 
+const CANCEL_BLOCKER_LABELS: Record<string, () => string> = {
+	not_ordered: () => m['orders.cancelBlocker.notOrdered'](),
+	previous_unknown: () => m['orders.cancelBlocker.previousUnknown'](),
+	partial: () => m['orders.cancelBlocker.partial'](),
+	order_changes: () => m['orders.cancelBlocker.orderChanges'](),
+	recognitions: () => m['orders.cancelBlocker.recognitions'](),
+	budgets: () => m['orders.cancelBlocker.budgets'](),
+	time_entries: () => m['orders.cancelBlocker.timeEntries'](),
+	direct_costs: () => m['orders.cancelBlocker.directCosts'](),
+	forecasts: () => m['orders.cancelBlocker.forecasts'](),
+	fixed_costs: () => m['orders.cancelBlocker.fixedCosts'](),
+	recurring_revenue: () => m['orders.cancelBlocker.recurringRevenue']()
+};
+
+/** Why a conversion cannot be cancelled (`cost_domain::order::ConversionCancelIssue`, T40). */
+export function cancelBlockerLabel(code: string): string {
+	return CANCEL_BLOCKER_LABELS[code]?.() ?? code;
+}
+
 const CHANGE_STATUS_LABELS: Record<string, () => string> = {
 	pending: () => m['orders.changeStatus.pending'](),
 	approved: () => m['orders.changeStatus.approved'](),

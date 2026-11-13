@@ -18,6 +18,7 @@
 	import { isProviderError, notify, type FieldError } from '@banto/admin-core';
 	import { LoadingState, StatusBadge } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { formatSignedYen, formatYen, isForbiddenError } from '#lib/banto/costFormat.js';
 	import {
@@ -216,10 +217,16 @@
 		});
 	}
 
-	function approve() {
+	async function approve() {
 		const d = draft;
 		if (!d || dirty) return;
-		if (!window.confirm(m['budget.approveConfirm']())) return;
+		const ok = await confirmAction({
+			title: m['budget.approveConfirmTitle'](),
+			body: m['budget.approveConfirm'](),
+			undo: m['budget.approveUndo'](),
+			confirmLabel: m['budget.approve']()
+		});
+		if (!ok) return;
 		void run(async () => {
 			const v = await approveBudgetDraft(d.id, d.rowVersion);
 			notify('success', m['budget.approved']({ version: versionLabel(v.versionNo) }));

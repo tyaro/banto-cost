@@ -37,6 +37,20 @@ export interface OrderConversion {
 	createdAt: string;
 }
 
+/** Mirrors `admin_template_core::orders::CancelledConversion` (T40). */
+export interface CancelledConversion {
+	id: number;
+	previousStatus: string;
+	convertedOn: string;
+	confirmedAmount: number;
+	basis: string;
+	createdByName: string | null;
+	cancelledOn: string;
+	cancelReason: string;
+	cancelledByName: string | null;
+	cancelledAt: string;
+}
+
 export interface OrderChangeRow {
 	id: number;
 	changeNo: number;
@@ -99,6 +113,14 @@ export interface OrderSummary {
 	changes: OrderChangeRow[];
 	recognitions: RecognitionRow[];
 	issues: string[];
+	/**
+	 * Why the current conversion cannot be cancelled
+	 * (`cost_domain::order::ConversionCancelIssue` codes); empty when it can,
+	 * or when there is no conversion (T40).
+	 */
+	cancelBlockers: string[];
+	/** Cancelled conversions, newest first. */
+	cancelledConversions: CancelledConversion[];
 }
 
 export interface ConversionRequest {
@@ -189,6 +211,24 @@ export async function convertOrder(
 	guard();
 	if (tauri()) return invokeCommand<OrderSummary>('order_convert', { projectId, values });
 	return httpRequest<OrderSummary>(`/api/projects/${projectId}/order/convert`, {
+		method: 'POST',
+		body: values
+	});
+}
+
+/**
+ * 受注転換の取消 (T40): back to the status before the conversion. Only a whole
+ * order with nothing recorded on it; the reason is required.
+ */
+export async function cancelOrderConversion(
+	projectId: number,
+	values: { rowVersion: number; reason: string }
+): Promise<OrderSummary> {
+	guard();
+	if (tauri()) {
+		return invokeCommand<OrderSummary>('order_conversion_cancel', { projectId, values });
+	}
+	return httpRequest<OrderSummary>(`/api/projects/${projectId}/order/conversion/cancel`, {
 		method: 'POST',
 		body: values
 	});

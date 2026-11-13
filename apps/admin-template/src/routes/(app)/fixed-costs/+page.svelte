@@ -16,6 +16,7 @@
 	import { resolve } from '$app/paths';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import {
 		cancelFixedCostPosting,
 		currentMonth,
@@ -188,8 +189,17 @@
 
 	async function post() {
 		if (!view || busy) return;
-		if (!window.confirm(m['fixedCosts.postConfirm']({ month: view.month, count: view.dueCount })))
-			return;
+		const ok = await confirmAction({
+			title: m['fixedCosts.postConfirmTitle'](),
+			body: m['fixedCosts.postConfirm']({ month: view.month, count: view.dueCount }),
+			details: [
+				{ label: m['confirm.month'](), value: view.month },
+				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: view.dueCount }) }
+			],
+			undo: m['fixedCosts.postUndo'](),
+			confirmLabel: m['fixedCosts.post']({ count: view.dueCount })
+		});
+		if (!ok || !view || busy) return;
 		busy = true;
 		try {
 			const result = await postFixedCostMonth(view.month);

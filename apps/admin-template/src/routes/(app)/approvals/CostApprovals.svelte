@@ -14,6 +14,7 @@
 	import { isProviderError, notify } from '@banto/admin-core';
 	import { LoadingState } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
 	import { formatSignedYen, isForbiddenError } from '#lib/banto/costFormat.js';
 	import { decideCost, listCostApprovals, type DirectCost } from '#lib/banto/costsAdmin.js';
 	import { costTypeLabel } from '#lib/banto/budgetFormat.js';
@@ -80,7 +81,16 @@
 	async function approveAll() {
 		if (busy || returning !== null || !costs || costs.length === 0) return;
 		const rows = costs;
-		if (!window.confirm(m['costs.approveAllConfirm']({ count: rows.length }))) return;
+		const ok = await confirmAction({
+			title: m['costs.approveAllConfirmTitle'](),
+			body: m['costs.approveAllConfirm']({ count: rows.length }),
+			details: [
+				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: rows.length }) }
+			],
+			undo: m['costs.approveUndo'](),
+			confirmLabel: m['approvals.approveAll']({ count: rows.length })
+		});
+		if (!ok || busy) return;
 		busy = true;
 		try {
 			const result = await runEach(rows, (c) =>
