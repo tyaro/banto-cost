@@ -1,7 +1,8 @@
 //! `/api/recurring-revenue` (定期売上, banto-cost P7c, design §9.4, T38).
 //! The Tauri twins are the `recurring_revenue_*` commands in `src-tauri`;
-//! both sides authorize through `AuthzService::authorize_audited` with the
-//! same `Operation` (ADR-0028, conventions §1).
+//! both sides call the same
+//! authorized operation in `crate::ops::recurring_revenue` (decision, service, audit;
+//! review §8-13, ADR-0028, conventions §1).
 //!
 //! | Route | Decision |
 //! |-------|----------|
@@ -14,21 +15,17 @@
 use super::projects::{BusinessServices, BusinessState};
 use super::*;
 use axum::Extension;
-use banto_admin_services::authz::Operation;
 use banto_server::AuthenticatedSession;
 
-use crate::recurring_revenue::{
-    audit_detail, Agreement, AgreementInput, MonthView, RecognizeResult, RESOURCE,
-};
+use crate::ops::recurring_revenue as ops;
+use crate::recurring_revenue::{Agreement, AgreementInput, MonthView, RecognizeResult};
 
 async fn agreements_list(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
 ) -> Result<Json<Vec<Agreement>>, ApiError> {
-    state
-        .guard(&session, Operation::ManageRecurringRevenue, RESOURCE)
-        .await?;
-    Ok(Json(state.forecasts.recurring_revenue().list().await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::agreements(&gate, &state.forecasts).await?))
 }
 
 async fn month_get(
@@ -36,99 +33,38 @@ async fn month_get(
     Extension(session): Extension<AuthenticatedSession>,
     Path(month): Path<String>,
 ) -> Result<Json<MonthView>, ApiError> {
-    state
-        .guard(&session, Operation::ManageRecurringRevenue, RESOURCE)
-        .await?;
-    Ok(Json(
-        state.forecasts.recurring_revenue().month(&month).await?,
-    ))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::month(&gate, &state.forecasts, &month).await?))
 }
 
 async fn agreement_create(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Json(input): Json<AgreementInput>,
 ) -> Result<Json<Agreement>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::ManageRecurringRevenue, RESOURCE)
-        .await?;
-    let a = state
-        .forecasts
-        .recurring_revenue()
-        .create(input, user_id)
-        .await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "create",
-        RESOURCE,
-        Some(&a.id.to_string()),
-        Some(audit_detail("create", Some(a.id), None, &[a.project_id])),
-    )
-    .await;
-    Ok(Json(a))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::create(&gate, &state.forecasts, input).await?))
 }
 
 async fn agreement_update(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<AgreementInput>,
 ) -> Result<Json<Agreement>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::ManageRecurringRevenue, RESOURCE)
-        .await?;
-    let a = state
-        .forecasts
-        .recurring_revenue()
-        .update(id, input, user_id)
-        .await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "update",
-        RESOURCE,
-        Some(&a.id.to_string()),
-        Some(audit_detail("update", Some(a.id), None, &[a.project_id])),
-    )
-    .await;
-    Ok(Json(a))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::update(&gate, &state.forecasts, id, input).await?))
 }
 
 async fn month_recognize(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(month): Path<String>,
 ) -> Result<Json<RecognizeResult>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::ManageRecurringRevenue, RESOURCE)
-        .await?;
-    let r = state
-        .forecasts
-        .recurring_revenue()
-        .recognize_month(&month, user_id)
-        .await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "recognize",
-        RESOURCE,
-        Some(&r.view.month),
-        Some(audit_detail(
-            "recognize",
-            None,
-            Some(&r.view.month),
-            &r.project_ids,
-        )),
-    )
-    .await;
-    Ok(Json(r))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::recognize_month(&gate, &state.forecasts, &month).await?,
+    ))
 }
 
 /// Reads (session only; the decision is in the handler).

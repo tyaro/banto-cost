@@ -58,6 +58,7 @@ use admin_template_core::forecasts::{
     ForecastDraftCreated, ForecastDraftInput, ForecastOverview, ForecastVersion,
     ForecastVersionInput, ForecastsService, RESOURCE as FORECAST_RESOURCE,
 };
+use admin_template_core::ops::{self, Caller, Gate};
 use admin_template_core::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use admin_template_core::orders::{
     conversion_cancel_audit_detail, conversion_correction_audit_detail, CancelInput,
@@ -3416,6 +3417,28 @@ async fn business_guard_or_admin(
     Ok(())
 }
 
+/// The caller of an authorized operation (`admin_template_core::ops`,
+/// review §8-13) from the Tauri path: the session's user and the identity
+/// the role floor returned, as [`business_guard`] decides for.
+async fn tauri_gate<'a>(
+    state: &'a AppState,
+    identity: &'a UserIdentity,
+) -> Result<Gate<'a>, BantoError> {
+    let session = current_session(state)
+        .await?
+        .ok_or(BantoError::Unauthorized)?;
+    Ok(Gate {
+        authz: &state.authz,
+        audit: &state.audit,
+        caller: Caller {
+            user_id: session_user_id(&session),
+            username: &identity.username,
+            role: identity.role.as_str(),
+            origin: "tauri",
+        },
+    })
+}
+
 async fn caller_subject(state: &AppState) -> Result<Subject, BantoError> {
     let session = current_session(state)
         .await?
@@ -5112,12 +5135,11 @@ async fn forecast_draft_adopt_body(
 }
 
 // --- banto-cost P6a: 精算完了 (T17) -------------------------------------------
-// Twins of `/api/projects/{id}/closeout` (`admin_template_core::rest::closeouts`):
-// and `/api/projects/{id}/closeout/reopen`: the same role floors, the same
-// `Operation`s through `authorize_audited` (`ViewProjectAmounts`,
-// `SettleProject` for settling and reopening), the same audit actions and
-// details (`closeouts::audit_detail`, `closeouts::reopen_audit_detail`; no
-// amounts, no reason).
+// Twins of `/api/projects/{id}/closeout` and `.../closeout/reopen`
+// (`admin_template_core::rest::closeouts`): the same role floors here, then
+// the same authorized operation (`admin_template_core::ops::closeouts`:
+// `ViewProjectAmounts`, `SettleProject`, the audit details without amounts
+// or the reason), review §8-13.
 
 #[tauri::command]
 async fn project_closeout_get(
@@ -5132,14 +5154,8 @@ async fn project_closeout_get_body(
     project_id: i64,
 ) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
     let identity = require_role(state, Role::Viewer, CLOSEOUT_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        CLOSEOUT_RESOURCE,
-    )
-    .await?;
-    state.forecasts.closeouts().check(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::closeouts::get(&gate, &state.forecasts, project_id).await
 }
 
 #[tauri::command]
@@ -5157,32 +5173,8 @@ async fn project_closeout_settle_body(
     values: admin_template_core::closeouts::SettleInput,
 ) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::SettleProject { project_id },
-        CLOSEOUT_RESOURCE,
-    )
-    .await?;
-    let settled = state
-        .forecasts
-        .closeouts()
-        .settle(project_id, values, user_id)
-        .await?;
-    if let Some(record) = &settled.closeout {
-        record_ok(
-            &state.audit,
-            &actor,
-            "settle",
-            CLOSEOUT_RESOURCE,
-            Some(&project_id.to_string()),
-            Some(admin_template_core::closeouts::audit_detail(
-                project_id, record,
-            )),
-        )
-        .await;
-    }
-    Ok(settled)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::closeouts::settle(&gate, &state.forecasts, project_id, values).await
 }
 
 #[tauri::command]
@@ -5200,49 +5192,24 @@ async fn project_closeout_reopen_body(
     values: admin_template_core::closeouts::ReopenInput,
 ) -> Result<admin_template_core::closeouts::CloseoutCheck, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::SettleProject { project_id },
-        CLOSEOUT_RESOURCE,
-    )
-    .await?;
-    let reopened = state
-        .forecasts
-        .closeouts()
-        .reopen(project_id, values, user_id)
-        .await?;
-    if let Some(record) = reopened.history.first() {
-        record_ok(
-            &state.audit,
-            &actor,
-            "reopen",
-            CLOSEOUT_RESOURCE,
-            Some(&project_id.to_string()),
-            Some(admin_template_core::closeouts::reopen_audit_detail(
-                project_id, record,
-            )),
-        )
-        .await;
-    }
-    Ok(reopened)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::closeouts::reopen(&gate, &state.forecasts, project_id, values).await
 }
 
 // --- banto-cost P6b: 月次締め (T11) --------------------------------------------
 // Twins of `/api/closing`, `/api/closing/{month}`, `/api/closing/{month}/close`
 // and `/api/closing/{month}/reopen` (`admin_template_core::rest::closing`):
-// the same role floors (any role for reads, editor for writes), the same
-// `Operation::CloseMonth` through `authorize_audited`, the same audit
-// actions and detail (`closing::audit_detail`: the month and the action, no
-// reason, no figures).
+// the same role floors here (any role for reads, editor for writes), then the
+// same authorized operation (`admin_template_core::ops::closing`:
+// `CloseMonth`, the month and the action in the audit), review §8-13.
 
 #[tauri::command]
 async fn closing_months(
     state: State<'_, AppState>,
 ) -> Result<Vec<admin_template_core::closing::MonthRow>, BantoError> {
     let identity = require_role(&state, Role::Viewer, CLOSING_RESOURCE).await?;
-    business_guard(&state, &identity, Operation::CloseMonth, CLOSING_RESOURCE).await?;
-    state.forecasts.closing().months().await
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::closing::months(&gate, &state.forecasts).await
 }
 
 #[tauri::command]
@@ -5251,8 +5218,8 @@ async fn closing_get(
     month: String,
 ) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
     let identity = require_role(&state, Role::Viewer, CLOSING_RESOURCE).await?;
-    business_guard(&state, &identity, Operation::CloseMonth, CLOSING_RESOURCE).await?;
-    state.forecasts.closing().get(&month).await
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::closing::get(&gate, &state.forecasts, &month).await
 }
 
 #[tauri::command]
@@ -5262,26 +5229,8 @@ async fn closing_close(
     values: admin_template_core::closing::CloseInput,
 ) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    let (_, user_id) =
-        business_guard(&state, &actor, Operation::CloseMonth, CLOSING_RESOURCE).await?;
-    let closed = state
-        .forecasts
-        .closing()
-        .close(&month, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "close",
-        CLOSING_RESOURCE,
-        Some(&closed.month),
-        Some(admin_template_core::closing::audit_detail(
-            &closed.month,
-            "close",
-        )),
-    )
-    .await;
-    Ok(closed)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::closing::close(&gate, &state.forecasts, &month, values).await
 }
 
 #[tauri::command]
@@ -5291,35 +5240,17 @@ async fn closing_reopen(
     values: admin_template_core::closing::ReopenInput,
 ) -> Result<admin_template_core::closing::MonthClosing, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    let (_, user_id) =
-        business_guard(&state, &actor, Operation::CloseMonth, CLOSING_RESOURCE).await?;
-    let reopened = state
-        .forecasts
-        .closing()
-        .reopen(&month, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "reopen",
-        CLOSING_RESOURCE,
-        Some(&reopened.month),
-        Some(admin_template_core::closing::audit_detail(
-            &reopened.month,
-            "reopen",
-        )),
-    )
-    .await;
-    Ok(reopened)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::closing::reopen(&gate, &state.forecasts, &month, values).await
 }
 
 // --- banto-cost P7b: 月額固定原価 (T37) -------------------------------------------
 // Twins of `/api/fixed-costs/contracts` (GET/POST), `/api/fixed-costs/contracts/{id}`
 // (PUT), `/api/fixed-costs/months/{month}` (GET), `.../months/{month}/post` and
 // `/api/fixed-costs/postings/{id}/cancel` (`admin_template_core::rest::fixed_costs`):
-// the same role floors (any role for reads, editor for writes), the same
-// `Operation::ManageFixedCosts` through `authorize_audited`, the same audit
-// actions and detail (`fixed_costs::audit_detail`: no amount, no reason).
+// the same role floors here (any role for reads, editor for writes), then the
+// same authorized operation (`admin_template_core::ops::fixed_costs`:
+// `ManageFixedCosts`, no amount or reason in the audit), review §8-13.
 
 #[tauri::command]
 async fn fixed_cost_contracts(
@@ -5332,14 +5263,8 @@ async fn fixed_cost_contracts_body(
     state: &AppState,
 ) -> Result<Vec<admin_template_core::fixed_costs::Contract>, BantoError> {
     let identity = require_role(state, Role::Viewer, FIXED_COSTS_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ManageFixedCosts,
-        FIXED_COSTS_RESOURCE,
-    )
-    .await?;
-    state.forecasts.fixed_costs().list().await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::fixed_costs::contracts(&gate, &state.forecasts).await
 }
 
 #[tauri::command]
@@ -5355,14 +5280,8 @@ async fn fixed_cost_month_body(
     month: String,
 ) -> Result<admin_template_core::fixed_costs::MonthView, BantoError> {
     let identity = require_role(state, Role::Viewer, FIXED_COSTS_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ManageFixedCosts,
-        FIXED_COSTS_RESOURCE,
-    )
-    .await?;
-    state.forecasts.fixed_costs().month(&month).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::fixed_costs::month(&gate, &state.forecasts, &month).await
 }
 
 #[tauri::command]
@@ -5378,33 +5297,8 @@ async fn fixed_cost_contract_create_body(
     values: admin_template_core::fixed_costs::ContractInput,
 ) -> Result<admin_template_core::fixed_costs::Contract, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageFixedCosts,
-        FIXED_COSTS_RESOURCE,
-    )
-    .await?;
-    let c = state
-        .forecasts
-        .fixed_costs()
-        .create(values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        FIXED_COSTS_RESOURCE,
-        Some(&c.id.to_string()),
-        Some(admin_template_core::fixed_costs::audit_detail(
-            "create",
-            Some(c.id),
-            None,
-            Some(c.project_id),
-        )),
-    )
-    .await;
-    Ok(c)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::fixed_costs::create(&gate, &state.forecasts, values).await
 }
 
 #[tauri::command]
@@ -5422,33 +5316,8 @@ async fn fixed_cost_contract_update_body(
     values: admin_template_core::fixed_costs::ContractInput,
 ) -> Result<admin_template_core::fixed_costs::Contract, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageFixedCosts,
-        FIXED_COSTS_RESOURCE,
-    )
-    .await?;
-    let c = state
-        .forecasts
-        .fixed_costs()
-        .update(id, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        FIXED_COSTS_RESOURCE,
-        Some(&c.id.to_string()),
-        Some(admin_template_core::fixed_costs::audit_detail(
-            "update",
-            Some(c.id),
-            None,
-            Some(c.project_id),
-        )),
-    )
-    .await;
-    Ok(c)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::fixed_costs::update(&gate, &state.forecasts, id, values).await
 }
 
 #[tauri::command]
@@ -5464,33 +5333,8 @@ async fn fixed_cost_month_post_body(
     month: String,
 ) -> Result<admin_template_core::fixed_costs::PostResult, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageFixedCosts,
-        FIXED_COSTS_RESOURCE,
-    )
-    .await?;
-    let r = state
-        .forecasts
-        .fixed_costs()
-        .post_month(&month, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "post",
-        FIXED_COSTS_RESOURCE,
-        Some(&r.view.month),
-        Some(admin_template_core::fixed_costs::audit_detail(
-            "post",
-            None,
-            Some(&r.view.month),
-            None,
-        )),
-    )
-    .await;
-    Ok(r)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::fixed_costs::post_month(&gate, &state.forecasts, &month).await
 }
 
 #[tauri::command]
@@ -5508,31 +5352,8 @@ async fn fixed_cost_posting_cancel_body(
     values: admin_template_core::fixed_costs::CancelInput,
 ) -> Result<admin_template_core::fixed_costs::MonthView, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageFixedCosts,
-        FIXED_COSTS_RESOURCE,
-    )
-    .await?;
-    let svc = state.forecasts.fixed_costs();
-    let (project_id, month) = svc.posting_scope(id).await?;
-    let view = svc.cancel(id, values, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "cancel",
-        FIXED_COSTS_RESOURCE,
-        Some(&id.to_string()),
-        Some(admin_template_core::fixed_costs::audit_detail(
-            "cancel",
-            None,
-            Some(&month),
-            Some(project_id),
-        )),
-    )
-    .await;
-    Ok(view)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::fixed_costs::cancel_posting(&gate, &state.forecasts, id, values).await
 }
 
 // --- banto-cost P7c: 定期売上 (T38) --------------------------------------------
@@ -5540,9 +5361,9 @@ async fn fixed_cost_posting_cancel_body(
 // `/api/recurring-revenue/agreements/{id}` (PUT),
 // `/api/recurring-revenue/months/{month}` (GET) and
 // `.../months/{month}/recognize` (`admin_template_core::rest::recurring_revenue`):
-// the same role floors (any role for reads, editor for writes), the same
-// `Operation::ManageRecurringRevenue` through `authorize_audited`, the same
-// audit actions and detail (`recurring_revenue::audit_detail`: no amount).
+// the same role floors here (any role for reads, editor for writes), then the
+// same authorized operation (`admin_template_core::ops::recurring_revenue`:
+// `ManageRecurringRevenue`, no amount in the audit), review §8-13.
 
 #[tauri::command]
 async fn recurring_revenue_agreements(
@@ -5555,14 +5376,8 @@ async fn recurring_revenue_agreements_body(
     state: &AppState,
 ) -> Result<Vec<admin_template_core::recurring_revenue::Agreement>, BantoError> {
     let identity = require_role(state, Role::Viewer, RECURRING_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ManageRecurringRevenue,
-        RECURRING_RESOURCE,
-    )
-    .await?;
-    state.forecasts.recurring_revenue().list().await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::recurring_revenue::agreements(&gate, &state.forecasts).await
 }
 
 #[tauri::command]
@@ -5578,14 +5393,8 @@ async fn recurring_revenue_month_body(
     month: String,
 ) -> Result<admin_template_core::recurring_revenue::MonthView, BantoError> {
     let identity = require_role(state, Role::Viewer, RECURRING_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ManageRecurringRevenue,
-        RECURRING_RESOURCE,
-    )
-    .await?;
-    state.forecasts.recurring_revenue().month(&month).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::recurring_revenue::month(&gate, &state.forecasts, &month).await
 }
 
 #[tauri::command]
@@ -5601,33 +5410,8 @@ async fn recurring_revenue_agreement_create_body(
     values: admin_template_core::recurring_revenue::AgreementInput,
 ) -> Result<admin_template_core::recurring_revenue::Agreement, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageRecurringRevenue,
-        RECURRING_RESOURCE,
-    )
-    .await?;
-    let a = state
-        .forecasts
-        .recurring_revenue()
-        .create(values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        RECURRING_RESOURCE,
-        Some(&a.id.to_string()),
-        Some(admin_template_core::recurring_revenue::audit_detail(
-            "create",
-            Some(a.id),
-            None,
-            &[a.project_id],
-        )),
-    )
-    .await;
-    Ok(a)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::recurring_revenue::create(&gate, &state.forecasts, values).await
 }
 
 #[tauri::command]
@@ -5645,33 +5429,8 @@ async fn recurring_revenue_agreement_update_body(
     values: admin_template_core::recurring_revenue::AgreementInput,
 ) -> Result<admin_template_core::recurring_revenue::Agreement, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageRecurringRevenue,
-        RECURRING_RESOURCE,
-    )
-    .await?;
-    let a = state
-        .forecasts
-        .recurring_revenue()
-        .update(id, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        RECURRING_RESOURCE,
-        Some(&a.id.to_string()),
-        Some(admin_template_core::recurring_revenue::audit_detail(
-            "update",
-            Some(a.id),
-            None,
-            &[a.project_id],
-        )),
-    )
-    .await;
-    Ok(a)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::recurring_revenue::update(&gate, &state.forecasts, id, values).await
 }
 
 #[tauri::command]
@@ -5687,33 +5446,8 @@ async fn recurring_revenue_month_recognize_body(
     month: String,
 ) -> Result<admin_template_core::recurring_revenue::RecognizeResult, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageRecurringRevenue,
-        RECURRING_RESOURCE,
-    )
-    .await?;
-    let r = state
-        .forecasts
-        .recurring_revenue()
-        .recognize_month(&month, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "recognize",
-        RECURRING_RESOURCE,
-        Some(&r.view.month),
-        Some(admin_template_core::recurring_revenue::audit_detail(
-            "recognize",
-            None,
-            Some(&r.view.month),
-            &r.project_ids,
-        )),
-    )
-    .await;
-    Ok(r)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::recurring_revenue::recognize_month(&gate, &state.forecasts, &month).await
 }
 
 // --- banto-cost P6c: 月別収支と CSV (T12・T15) -----------------------------------

@@ -59,6 +59,7 @@ use crate::calc_basis::{
 };
 use crate::customers::{Customer, CustomerInput, CustomersService};
 use crate::direct_costs::DirectCostsService;
+use crate::ops::{Caller, Gate};
 use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use crate::orders::{
     conversion_cancel_audit_detail, conversion_correction_audit_detail, CancelInput,
@@ -156,6 +157,24 @@ impl BusinessState {
     ) -> Result<Subject, BantoError> {
         let user_id = caller_user_id(session, &self.users).await?;
         self.authz.subject(user_id).await
+    }
+
+    /// The caller of an authorized operation (`crate::ops`, review §8-13):
+    /// the same identity [`Self::guard`] decides for, from the REST path.
+    pub(super) async fn gate<'a>(
+        &'a self,
+        session: &'a AuthenticatedSession,
+    ) -> Result<Gate<'a>, BantoError> {
+        Ok(Gate {
+            authz: &self.authz,
+            audit: &self.audit,
+            caller: Caller {
+                user_id: caller_user_id(session, &self.users).await?,
+                username: &session.identity.id,
+                role: &session.identity.role,
+                origin: "rest",
+            },
+        })
     }
 }
 
