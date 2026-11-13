@@ -133,16 +133,21 @@ CREATE TRIGGER fixed_cost_postings_dates BEFORE INSERT OR UPDATE OF month, booke
 CREATE TRIGGER recurring_revenues_dates BEFORE INSERT OR UPDATE OF from_month, to_month ON recurring_revenues
     FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'from_month', 'month', 'to_month');
 
--- TG_ARGV[0] is the key column (project_id or pipeline_version_id). The
--- services write a project's revenue plan after updating the project row
--- (revenue_version), which holds that row's lock, so two writers of the
--- same project's plan do not both pass this check.
+-- TG_ARGV[0] is the key column (project_id or pipeline_version_id) and
+-- TG_ARGV[1] the table it refers to (projects or pipeline_versions). The
+-- referred row is locked first, so two transactions adding a line for the
+-- same project (pipeline version) take turns, and the second one's check
+-- (a new snapshot under READ COMMITTED, which the services use) sees the
+-- first one's committed line. The services write a project's plan after
+-- updating the project row (revenue_version), so they already hold it.
 CREATE OR REPLACE FUNCTION banto_cost_check_plan_month() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
     new_row jsonb := to_jsonb(NEW);
     old_row jsonb;
     key text := TG_ARGV[0];
+    parent text := TG_ARGV[1];
+    key_value bigint := (new_row ->> key)::bigint;
     taken boolean;
 BEGIN
     IF TG_OP = 'UPDATE' THEN
@@ -152,11 +157,13 @@ BEGIN
             RETURN NEW;
         END IF;
     END IF;
+    EXECUTE format('SELECT 1 FROM %I WHERE id = $1 FOR NO KEY UPDATE', parent)
+        USING key_value;
     EXECUTE format(
         'SELECT EXISTS (SELECT 1 FROM %I WHERE %I = $1 AND month IS NOT DISTINCT FROM $2 AND id <> $3)',
         TG_TABLE_NAME, key)
         INTO taken
-        USING (new_row ->> key)::bigint, new_row ->> 'month', (new_row ->> 'id')::bigint;
+        USING key_value, new_row ->> 'month', (new_row ->> 'id')::bigint;
     IF taken THEN
         RAISE EXCEPTION '%: one line per % and month', TG_TABLE_NAME, key
             USING ERRCODE = 'unique_violation';
@@ -166,7 +173,7 @@ END;
 $$;
 
 CREATE TRIGGER revenue_plan_month BEFORE INSERT OR UPDATE OF project_id, month ON revenue_plan
-    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_plan_month('project_id');
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_plan_month('project_id', 'projects');
 
 CREATE TRIGGER pipeline_revenue_plan_month BEFORE INSERT OR UPDATE OF pipeline_version_id, month ON pipeline_revenue_plan
-    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_plan_month('pipeline_version_id');
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_plan_month('pipeline_version_id', 'pipeline_versions');
