@@ -636,6 +636,20 @@ fn ledger_entry(r: &LedgerRow) -> Result<CostEntry, &'static str> {
     })
 }
 
+/// Whether the row may belong to an original's project: a confirmation, an
+/// adjustment, or a row whose kind cannot be read. A normal or provisional
+/// row lands on its own project.
+fn may_refer(r: &LedgerRow) -> bool {
+    RecordKind::parse(&r.1)
+        .is_none_or(|k| matches!(k, RecordKind::Confirms | RecordKind::Adjustment))
+}
+
+/// The original the row is chained to (T39): its `ref_id` only when the row
+/// may refer ([`may_refer`]), the same links `ledger::resolve` follows.
+fn chain_ref(r: &LedgerRow) -> Option<i64> {
+    r.2.filter(|_| may_refer(r))
+}
+
 /// The rows as ledger entries and allocations; a row that cannot be read is
 /// kept aside with its column (T39), never dropped.
 struct LedgerInput {
@@ -654,12 +668,8 @@ fn ledger_of(rows: &[LedgerRow], allocs: &[(i64, i64, i64)]) -> LedgerInput {
                 Unreadable {
                     id: r.0.to_string(),
                     project: r.4.map(|p| p.to_string()),
-                    refers_to: r.2.map(|t| t.to_string()),
-                    // A normal or provisional row lands on its own project:
-                    // only a confirmation, an adjustment or an unknown kind
-                    // may belong to an original's.
-                    may_refer: RecordKind::parse(&r.1)
-                        .is_none_or(|k| matches!(k, RecordKind::Confirms | RecordKind::Adjustment)),
+                    refers_to: chain_ref(r).map(|t| t.to_string()),
+                    may_refer: may_refer(r),
                 },
                 column,
             )),
@@ -706,7 +716,7 @@ fn problems_of(
     // caller scoped to those projects sees the record that holds them back.
     let mut links: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
     for r in rows {
-        if let Some(t) = r.2 {
+        if let Some(t) = chain_ref(r) {
             links.entry(r.0).or_default().push(t);
             links.entry(t).or_default().push(r.0);
         }
@@ -2839,6 +2849,20 @@ pub(crate) mod tests {
         };
         // An adjustment with neither its original nor its project readable,
         // and one naming an original that is not in the ledger.
+        // A normal row's stray ref_id chains nothing: the record names only
+        // its own project, so a caller scoped to it sees the record.
+        let mut stray_ref = row(3, "normal", Some(99_999), Some(10));
+        stray_ref.8 = "2026-11-99".into();
+        let rows = vec![
+            row(1, "normal", None, Some(10)),
+            row(99_999, "normal", None, Some(20)),
+            stray_ref,
+        ];
+        let resolved = resolve_rows(&rows, &[]);
+        assert!(!resolved.is_clean("10") && resolved.is_clean("20"));
+        let problems = problems_of(&rows, &[], &resolved);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].project_ids, vec![10]);
         // A normal row with no project and an unreadable date belongs to no
         // original: it is reported, and no project waits for it.
         let mut stray = row(3, "normal", None, None);
