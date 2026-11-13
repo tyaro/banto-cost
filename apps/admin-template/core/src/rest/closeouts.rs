@@ -1,8 +1,8 @@
 //! `/api/projects/{id}/closeout` (精算完了, banto-cost P6a, spec §5.1, T17).
 //! The Tauri twins are the `project_closeout_get` / `project_closeout_settle`
-//! / `project_closeout_reopen` commands in `src-tauri`; both sides authorize through
-//! `AuthzService::authorize_audited` with the same `Operation`s (ADR-0028,
-//! conventions §1).
+//! / `project_closeout_reopen` commands in `src-tauri`; both sides call the same
+//! authorized operation in `crate::ops::closeouts` (decision, service, audit;
+//! review §8-13, ADR-0028, conventions §1).
 //!
 //! | Route | Decision |
 //! |-------|----------|
@@ -18,94 +18,38 @@
 use super::projects::{BusinessServices, BusinessState};
 use super::*;
 use axum::Extension;
-use banto_admin_services::authz::Operation;
 use banto_server::AuthenticatedSession;
 
-use crate::closeouts::{
-    audit_detail, reopen_audit_detail, CloseoutCheck, ReopenInput, SettleInput, RESOURCE,
-};
+use crate::closeouts::{CloseoutCheck, ReopenInput, SettleInput};
+use crate::ops::closeouts as ops;
 
 async fn closeout_get(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
     Path(id): Path<i64>,
 ) -> Result<Json<CloseoutCheck>, ApiError> {
-    state
-        .guard(
-            &session,
-            Operation::ViewProjectAmounts { project_id: id },
-            RESOURCE,
-        )
-        .await?;
-    Ok(Json(state.forecasts.closeouts().check(id).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::get(&gate, &state.forecasts, id).await?))
 }
 
 async fn closeout_settle(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<SettleInput>,
 ) -> Result<Json<CloseoutCheck>, ApiError> {
-    let (_, user_id) = state
-        .guard(
-            &session,
-            Operation::SettleProject { project_id: id },
-            RESOURCE,
-        )
-        .await?;
-    let settled = state
-        .forecasts
-        .closeouts()
-        .settle(id, input, user_id)
-        .await?;
-    if let Some(record) = &settled.closeout {
-        record_write(
-            &state.audit,
-            &state.auth,
-            &headers,
-            "settle",
-            RESOURCE,
-            Some(&id.to_string()),
-            Some(audit_detail(id, record)),
-        )
-        .await;
-    }
-    Ok(Json(settled))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::settle(&gate, &state.forecasts, id, input).await?))
 }
 
 async fn closeout_reopen(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ReopenInput>,
 ) -> Result<Json<CloseoutCheck>, ApiError> {
-    let (_, user_id) = state
-        .guard(
-            &session,
-            Operation::SettleProject { project_id: id },
-            RESOURCE,
-        )
-        .await?;
-    let reopened = state
-        .forecasts
-        .closeouts()
-        .reopen(id, input, user_id)
-        .await?;
-    if let Some(record) = reopened.history.first() {
-        record_write(
-            &state.audit,
-            &state.auth,
-            &headers,
-            "reopen",
-            RESOURCE,
-            Some(&id.to_string()),
-            Some(reopen_audit_detail(id, record)),
-        )
-        .await;
-    }
-    Ok(Json(reopened))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::reopen(&gate, &state.forecasts, id, input).await?))
 }
 
 /// Reads (session only; the decision is in the handler).

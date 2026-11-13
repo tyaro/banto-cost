@@ -50,6 +50,11 @@ CI の frontend ジョブで強制）が検査する。対象は各節に **[機
 - Tauri: `src-tauri/src/lib.rs` の `require_role`（doc コメントに
   「mirrors REST's `RoleGuard`」と明記）+ 各コマンドの `audit.record(...)`。
 - 対応表は `rest/mod.rs` のモジュール doc（仕様 M14）にある。
+- banto-cost の業務操作（2026-11-13、レビュー design-ux-data-review-2026-11 §8-13）:
+  能力×案件範囲の判定・サービス呼び出し・成功の監査は `admin_template_core::ops` の
+  関数（`ops::Gate` に呼び出し元と origin を渡す）に1つだけ書き、両経路はロール床と
+  引数の取り出しだけにする。移行済みの領域に経路ごとの `authorize_audited`・
+  `record_write`／`record_ok` を書き戻さない。
 - **読み取り系（list/get）は両経路とも監査しない**。denied 記録は
   「認証済みだがロール不足」のみ。無セッション（Unauthorized）は記録しない
   — この判断も両側で揃える。

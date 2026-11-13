@@ -57,6 +57,12 @@ Tauri paths**. Only the origin (`"rest"` / `"tauri"`) differs.
 - Tauri: `require_role` in `src-tauri/src/lib.rs` (its doc comment states
   "mirrors REST's `RoleGuard`") + `audit.record(...)` in each command.
 - The correspondence table is in the module doc of `rest/mod.rs` (spec M14).
+- banto-cost business operations (2026-11-13, review design-ux-data-review-2026-11 §8-13):
+  the capability × project-scope decision, the service call and the success audit
+  live once in a function of `admin_template_core::ops` (the caller and origin go in
+  through `ops::Gate`); both paths only check the role floor and take the arguments
+  apart. Do not write a per-path `authorize_audited` or `record_write` / `record_ok`
+  back into a migrated area.
 - **Read operations (list/get) are not audited on either path.** A denied
   record is written only for "authenticated but insufficient role." No-session
   (Unauthorized) is not recorded — this decision, too, is aligned on both

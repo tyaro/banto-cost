@@ -19,6 +19,7 @@ pub mod events;
 pub mod first_boot;
 pub mod fixed_costs;
 pub mod forecasts;
+pub mod ops;
 pub mod orders;
 pub mod pipeline;
 pub mod portfolio;

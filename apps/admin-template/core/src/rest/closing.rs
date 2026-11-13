@@ -1,8 +1,8 @@
 //! `/api/closing` (月次締め, banto-cost P6b, spec §7 / §9, T11). The Tauri
 //! twins are the `closing_months` / `closing_get` / `closing_close` /
-//! `closing_reopen` commands in `src-tauri`; both sides authorize through
-//! `AuthzService::authorize_audited` with the same `Operation` (ADR-0028,
-//! conventions §1).
+//! `closing_reopen` commands in `src-tauri`; both sides call the same
+//! authorized operation in `crate::ops::closing` (decision, service, audit;
+//! review §8-13, ADR-0028, conventions §1).
 //!
 //! | Route | Decision |
 //! |-------|----------|
@@ -15,19 +15,17 @@
 use super::projects::{BusinessServices, BusinessState};
 use super::*;
 use axum::Extension;
-use banto_admin_services::authz::Operation;
 use banto_server::AuthenticatedSession;
 
-use crate::closing::{audit_detail, CloseInput, MonthClosing, MonthRow, ReopenInput, RESOURCE};
+use crate::closing::{CloseInput, MonthClosing, MonthRow, ReopenInput};
+use crate::ops::closing as ops;
 
 async fn closing_months(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
 ) -> Result<Json<Vec<MonthRow>>, ApiError> {
-    state
-        .guard(&session, Operation::CloseMonth, RESOURCE)
-        .await?;
-    Ok(Json(state.forecasts.closing().months().await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::months(&gate, &state.forecasts).await?))
 }
 
 async fn closing_get(
@@ -35,66 +33,32 @@ async fn closing_get(
     Extension(session): Extension<AuthenticatedSession>,
     Path(month): Path<String>,
 ) -> Result<Json<MonthClosing>, ApiError> {
-    state
-        .guard(&session, Operation::CloseMonth, RESOURCE)
-        .await?;
-    Ok(Json(state.forecasts.closing().get(&month).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::get(&gate, &state.forecasts, &month).await?))
 }
 
 async fn closing_close(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(month): Path<String>,
     Json(input): Json<CloseInput>,
 ) -> Result<Json<MonthClosing>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::CloseMonth, RESOURCE)
-        .await?;
-    let closed = state
-        .forecasts
-        .closing()
-        .close(&month, input, user_id)
-        .await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "close",
-        RESOURCE,
-        Some(&closed.month),
-        Some(audit_detail(&closed.month, "close")),
-    )
-    .await;
-    Ok(Json(closed))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::close(&gate, &state.forecasts, &month, input).await?,
+    ))
 }
 
 async fn closing_reopen(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(month): Path<String>,
     Json(input): Json<ReopenInput>,
 ) -> Result<Json<MonthClosing>, ApiError> {
-    let (_, user_id) = state
-        .guard(&session, Operation::CloseMonth, RESOURCE)
-        .await?;
-    let reopened = state
-        .forecasts
-        .closing()
-        .reopen(&month, input, user_id)
-        .await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "reopen",
-        RESOURCE,
-        Some(&reopened.month),
-        Some(audit_detail(&reopened.month, "reopen")),
-    )
-    .await;
-    Ok(Json(reopened))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::reopen(&gate, &state.forecasts, &month, input).await?,
+    ))
 }
 
 /// Reads (session only; the decision is in the handler).
