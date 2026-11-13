@@ -57,11 +57,18 @@ export function loadMyAuthz(
 			});
 		loading = { generation, promise };
 	}
+	const pending = loading.promise;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<void>((resolve) => {
-		timer = setTimeout(resolve, waitMs);
+		timer = setTimeout(() => {
+			// A read that has not answered in time is given up (PR #60 review):
+			// the next navigation asks again instead of waiting on it, and its
+			// late answer is not used (the `loading` check above).
+			if (loading?.promise === pending) loading = null;
+			resolve();
+		}, waitMs);
 	});
-	return Promise.race([loading.promise, timeout]).finally(() => clearTimeout(timer));
+	return Promise.race([pending, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**

@@ -70,6 +70,22 @@ describe('myAuthz (review D-4, §8-15)', () => {
 		expect(myCapabilities()).toBeNull();
 	});
 
+	it('gives up a read that stalls: the next load asks again and the late answer is dropped', async () => {
+		vi.useFakeTimers();
+		let late: (value: unknown) => void = () => {};
+		mocks.httpRequest.mockReturnValueOnce(new Promise((resolve) => (late = resolve)));
+		const first = loadMyAuthz(1, 3000);
+		await vi.advanceTimersByTimeAsync(3000);
+		await first;
+		mocks.httpRequest.mockResolvedValueOnce(worker);
+		await loadMyAuthz(1, 3000);
+		expect(mocks.httpRequest).toHaveBeenCalledTimes(2);
+		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry']);
+		late({ capabilities: ['amount.view'], memberships: [] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect([...(myCapabilities() ?? [])]).toEqual(['time.entry']);
+	});
+
 	it('reload keeps the held grants until the new ones arrive', async () => {
 		mocks.httpRequest.mockResolvedValueOnce(worker);
 		await loadMyAuthz(1);
