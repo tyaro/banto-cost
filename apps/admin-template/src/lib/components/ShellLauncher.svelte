@@ -15,11 +15,16 @@
 	import { NAV_ICONS } from './navIcons';
 	import { navBadges } from '#lib/navBadges.svelte.js';
 	import { sessionStore } from '#lib/session.svelte.js';
+	import { myCapabilities } from '#lib/banto/myAuthz.svelte.js';
 	import { settings } from '#lib/settings.svelte.js';
 	import { LauncherBar, type LauncherGroup, type LauncherItem } from '@banto/ui';
 
 	const sections = $derived(
-		navSections({ publicViewer: sessionStore.publicViewer, role: sessionStore.role })
+		navSections({
+			publicViewer: sessionStore.publicViewer,
+			role: sessionStore.role,
+			capabilities: myCapabilities()
+		})
 	);
 
 	/** Unseen-change badge text, capped like the sidebar's. */

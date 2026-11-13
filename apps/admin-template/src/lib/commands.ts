@@ -22,11 +22,13 @@ import { navItems, navSections, resolveAppPath, type NavItem } from './navigatio
 import { settings } from './settings.svelte';
 import { sessionStore } from './session.svelte';
 import { soleUserStore } from './banto/soleUser.svelte';
+import { myCapabilities } from './banto/myAuthz.svelte';
 
 function isNavItemVisible(item: NavItem): boolean {
 	const { main, admin } = navSections({
 		publicViewer: sessionStore.publicViewer,
-		role: sessionStore.role
+		role: sessionStore.role,
+		capabilities: myCapabilities()
 	});
 	return main.includes(item) || admin.includes(item);
 }

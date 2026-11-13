@@ -19,9 +19,11 @@ import {
 	navGroups,
 	navItems,
 	navSections,
+	meetsCapabilityRule,
 	pageTitle,
 	type AppPath
 } from './navigation';
+import { CAPABILITIES, type Capability } from './banto/capabilitiesAdmin';
 import { navBadges } from './navBadges.svelte';
 import * as m from '#lib/paraglide/messages.js';
 
@@ -171,5 +173,66 @@ describe('navGroups', () => {
 			.map((g) => g.group)
 			.filter((g) => g !== undefined);
 		expect(new Set(keys).size).toBe(keys.length);
+	});
+});
+
+// banto-cost review D-4 (§8-15): with the person's capabilities known, the nav hides
+// the screens they cannot use. Display only - the server still decides.
+describe('navSections with capabilities', () => {
+	const paths = (items: { path: string }[]) => items.map((item) => item.path);
+	const all = new Set(CAPABILITIES);
+	const main = (capabilities: ReadonlySet<Capability> | null) =>
+		paths(navSections({ publicViewer: false, role: 'editor', capabilities }).main);
+
+	it('hides nothing while the capabilities are unknown, or when all are held', () => {
+		const everything = paths(navItems.filter((item) => !item.adminOnly));
+		expect(main(null)).toEqual(everything);
+		expect(main(all)).toEqual(everything);
+	});
+
+	it('a worker with time.entry only sees their entry screens and the masters', () => {
+		expect(main(new Set<Capability>(['time.entry']))).toEqual([
+			'/dashboard',
+			'/projects',
+			'/customers',
+			'/time',
+			'/costs',
+			'/work-masters',
+			'/settings'
+		]);
+	});
+
+	it('accounting sees the monthly screens, not the fixed costs without finance.rate', () => {
+		const shown = main(new Set<Capability>(['finance.close', 'amount.view']));
+		expect(shown).toEqual(expect.arrayContaining(['/approvals', '/closing', '/recurring-revenue']));
+		expect(shown).toContain('/calc-basis');
+		expect(shown).not.toContain('/fixed-costs');
+		expect(shown).not.toContain('/time');
+	});
+
+	it('an amount-gated screen needs amount.view as well', () => {
+		expect(main(new Set<Capability>(['finance.close']))).not.toContain('/closing');
+		expect(main(new Set<Capability>(['report.all']))).not.toContain('/calc-basis');
+		expect(main(new Set<Capability>(['report.all', 'amount.view']))).toContain('/calc-basis');
+	});
+
+	it('leaves the admin section and the public-viewer allowlist to the role rules', () => {
+		const none = new Set<Capability>();
+		expect(
+			paths(navSections({ publicViewer: false, role: 'admin', capabilities: none }).admin)
+		).toEqual(paths(navItems.filter((item) => item.adminOnly)));
+		expect(
+			paths(navSections({ publicViewer: true, role: 'viewer', capabilities: none }).main)
+		).toEqual(paths(navItems.filter((item) => item.publicViewer)));
+	});
+
+	it('meetsCapabilityRule: all and any', () => {
+		const held = new Set<Capability>(['amount.view', 'finance.rate']);
+		expect(meetsCapabilityRule(undefined, held)).toBe(true);
+		expect(meetsCapabilityRule({ all: ['amount.view'] }, null)).toBe(true);
+		expect(meetsCapabilityRule({ all: ['amount.view', 'finance.rate'] }, held)).toBe(true);
+		expect(meetsCapabilityRule({ all: ['amount.view', 'finance.close'] }, held)).toBe(false);
+		expect(meetsCapabilityRule({ any: ['finance.close', 'finance.rate'] }, held)).toBe(true);
+		expect(meetsCapabilityRule({ all: ['amount.view'], any: ['report.all'] }, held)).toBe(false);
 	});
 });

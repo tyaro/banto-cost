@@ -9,6 +9,7 @@ import type { RouteId } from '$app/types';
 import { isDemoBuild } from '#lib/banto/environment.js';
 import { resources } from '#lib/banto/resources/index.js';
 import { isAdmin, type Role } from '#lib/permissions.js';
+import type { Capability } from '#lib/banto/capabilitiesAdmin.js';
 import * as m from '#lib/paraglide/messages.js';
 
 /** Icon resolution key (visual-refresh-design.md §5.1). Resolved to an actual
@@ -108,6 +109,33 @@ export interface NavItem {
 	 * the end).
 	 */
 	group?: CostNavGroupKey;
+
+	/**
+	 * banto-cost (review D-4, §8-15): the capabilities without which the
+	 * screen can show nothing - `all` must all be held, and at least one of
+	 * `any`. Mirrors the server's checks for the screen's reads
+	 * (`banto_admin_services::authz::authorize`) but is DISPLAY ONLY: it hides
+	 * the entry when the person's grants are known (`myAuthz.svelte.ts`), and
+	 * the server still decides every request. Undefined = shown to everyone.
+	 */
+	capabilities?: CapabilityRule;
+}
+
+/** See `NavItem.capabilities`. */
+export interface CapabilityRule {
+	all?: readonly Capability[];
+	any?: readonly Capability[];
+}
+
+/** Does `held` satisfy `rule`? `held === null` (grants unknown) satisfies everything. */
+export function meetsCapabilityRule(
+	rule: CapabilityRule | undefined,
+	held: ReadonlySet<Capability> | null | undefined
+): boolean {
+	if (!rule || !held) return true;
+	if (rule.all && !rule.all.every((cap) => held.has(cap))) return false;
+	if (rule.any && !rule.any.some((cap) => held.has(cap))) return false;
+	return true;
 }
 
 export { isPathActive, resolveAppPath, type AppPath } from '#lib/appPath.js';
@@ -115,9 +143,21 @@ export { isPathActive, resolveAppPath, type AppPath } from '#lib/appPath.js';
 const allNavItems: NavItem[] = [
 	{ path: '/dashboard', labelKey: 'nav.dashboard', icon: 'dashboard', publicViewer: true },
 	// banto-cost P3a. Not `publicViewer`: amounts and project scope are capability-gated.
-	{ path: '/pipeline', labelKey: 'nav.pipeline', icon: 'pipeline', group: 'nav.groupSales' },
+	{
+		path: '/pipeline',
+		labelKey: 'nav.pipeline',
+		icon: 'pipeline',
+		group: 'nav.groupSales',
+		capabilities: { all: ['amount.view'] }
+	},
 	// banto-cost P3b: 月次売上見通し (amounts, scope `amount_projects`).
-	{ path: '/outlook', labelKey: 'nav.outlook', icon: 'outlook', group: 'nav.groupSales' },
+	{
+		path: '/outlook',
+		labelKey: 'nav.outlook',
+		icon: 'outlook',
+		group: 'nav.groupSales',
+		capabilities: { all: ['amount.view'] }
+	},
 	{
 		path: '/projects',
 		labelKey: 'nav.projects',
@@ -143,28 +183,63 @@ const allNavItems: NavItem[] = [
 		}
 	},
 	// banto-cost P4b: 工数入力・承認一覧 (spec §6.1 / §9). Capability-gated by the server.
-	{ path: '/time', labelKey: 'nav.time', icon: 'time', group: 'nav.groupDaily' },
+	{
+		path: '/time',
+		labelKey: 'nav.time',
+		icon: 'time',
+		group: 'nav.groupDaily',
+		capabilities: { all: ['time.entry'] }
+	},
 	// banto-cost P4d: 直接費入力 (spec §6.3 / §9). Capability-gated by the server.
-	{ path: '/costs', labelKey: 'nav.costs', icon: 'costs', group: 'nav.groupDaily' },
-	{ path: '/approvals', labelKey: 'nav.approvals', icon: 'approvals', group: 'nav.groupDaily' },
+	{
+		path: '/costs',
+		labelKey: 'nav.costs',
+		icon: 'costs',
+		group: 'nav.groupDaily',
+		capabilities: { any: ['time.entry', 'project.manage', 'finance.close'] }
+	},
+	{
+		path: '/approvals',
+		labelKey: 'nav.approvals',
+		icon: 'approvals',
+		group: 'nav.groupDaily',
+		capabilities: { any: ['project.manage', 'finance.close'] }
+	},
 	// banto-cost P7b: 月額固定原価 (design §9.4, T37). finance.rate + amount.view (server-side).
 	{
 		path: '/fixed-costs',
 		labelKey: 'nav.fixedCosts',
 		icon: 'fixed-costs',
-		group: 'nav.groupMonthly'
+		group: 'nav.groupMonthly',
+		capabilities: { all: ['finance.rate', 'amount.view'] }
 	},
 	// banto-cost P7c: 定期売上 (design §9.4, T38). finance.close + amount.view (server-side).
 	{
 		path: '/recurring-revenue',
 		labelKey: 'nav.recurringRevenue',
 		icon: 'recurring-revenue',
-		group: 'nav.groupMonthly'
+		group: 'nav.groupMonthly',
+		capabilities: { all: ['finance.close', 'amount.view'] }
 	},
 	// banto-cost P6b: 月次締め (spec §7 / §9, T11). Accounting only (finance.close, server-side).
-	{ path: '/closing', labelKey: 'nav.closing', icon: 'closing', group: 'nav.groupMonthly' },
+	{
+		path: '/closing',
+		labelKey: 'nav.closing',
+		icon: 'closing',
+		group: 'nav.groupMonthly',
+		capabilities: { all: ['finance.close', 'amount.view'] }
+	},
 	// banto-cost P4a: 計算基準 (design 第10章). Amounts: capability-gated by the server.
-	{ path: '/calc-basis', labelKey: 'nav.calcBasis', icon: 'calc-basis', group: 'nav.groupBasis' },
+	{
+		path: '/calc-basis',
+		labelKey: 'nav.calcBasis',
+		icon: 'calc-basis',
+		group: 'nav.groupBasis',
+		capabilities: {
+			all: ['amount.view'],
+			any: ['finance.rate', 'finance.close', 'report.all', 'project.manage']
+		}
+	},
 	// banto-cost P4b: 工程・共通活動 masters (spec §5.2).
 	{
 		path: '/work-masters',
@@ -201,13 +276,26 @@ export function publicNavItems(): NavItem[] {
  * (a publicViewer grant identity's role is always `viewer`, so `admin` would
  * already be empty, but the explicit check keeps this correct even if that
  * ever changed).
+ *
+ * banto-cost (review D-4, §8-15): with the person's capabilities known, a
+ * main entry whose `capabilities` rule they do not meet is hidden too
+ * (display only - the server decides).
  */
-export function navSections(session: { publicViewer: boolean; role: Role }): {
+export function navSections(session: {
+	publicViewer: boolean;
+	role: Role;
+	/** banto-cost (review D-4): the person's capabilities, `null`/absent while unknown. */
+	capabilities?: ReadonlySet<Capability> | null;
+}): {
 	main: NavItem[];
 	admin: NavItem[];
 } {
 	return {
-		main: session.publicViewer ? publicNavItems() : navItems.filter((item) => !item.adminOnly),
+		main: session.publicViewer
+			? publicNavItems()
+			: navItems.filter(
+					(item) => !item.adminOnly && meetsCapabilityRule(item.capabilities, session.capabilities)
+				),
 		admin:
 			!session.publicViewer && isAdmin(session.role)
 				? navItems.filter((item) => item.adminOnly)

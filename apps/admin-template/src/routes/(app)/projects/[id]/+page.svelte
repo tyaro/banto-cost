@@ -13,7 +13,8 @@
 	 * forecast versions (P5, spec §6.6) ForecastSection.svelte, its settlement
 	 * (精算完了, P6a, spec §5.1, T17) CloseoutSection.svelte, its figures by
 	 * month, fiscal period and cumulative with the CSV (P6c, T15)
-	 * MonthlySection.svelte.
+	 * MonthlySection.svelte. Its members (担当者: 担当営業・作業者, review F-2,
+	 * §8-15) are MembersSection.svelte.
 	 * The profit summary and the contents of the sections at the top (review
 	 * D-1, P8c) are ProjectSummary.svelte; it reads the summary again after
 	 * any section (or the basic information) finishes an action.
@@ -51,6 +52,7 @@
 	import ForecastSection from './ForecastSection.svelte';
 	import CloseoutSection from './CloseoutSection.svelte';
 	import MonthlySection from './MonthlySection.svelte';
+	import MembersSection from './MembersSection.svelte';
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
@@ -79,6 +81,8 @@
 	let projectName = $state('');
 	let projectRowVersion = $state(0);
 	let formErrors = $state<string[]>([]);
+	/** Bumped after the basic information is saved: the 責任者 row may have moved. */
+	let membersKey = $state(0);
 
 	// The pipeline section's own form counts too (PR #9 review).
 	let pipelineDirty = $state(false);
@@ -173,6 +177,7 @@
 	const toc = $derived.by<TocEntry[]>(() => {
 		const entries: TocEntry[] = [
 			{ id: 'project-basic', label: m['projectSummary.basicInfo']() },
+			{ id: 'members-heading', label: m['members.sectionTitle']() },
 			{ id: 'orders-heading', label: m['orders.sectionTitle']() },
 			{ id: 'pipeline-heading', label: m['pipeline.sectionTitle']() },
 			{ id: 'calc-basis-heading', label: m['calcBasis.projectSectionTitle']() },
@@ -205,6 +210,7 @@
 			// Stay on the project and read it back: the status and rowVersion
 			// changed, and the sections follow the status (review D-2).
 			await loadForm();
+			membersKey++;
 		} else {
 			store.setServerErrors(result.fieldErrors);
 			formErrors = unmatchedFieldErrors(
@@ -291,6 +297,7 @@
 	</div>
 
 	{#if schema && idValid}
+		<MembersSection projectId={parsedId} reloadKey={membersKey} />
 		{#key sectionStatus}
 			<OrderSection
 				projectId={parsedId}

@@ -23,6 +23,7 @@
 	import { navBadges } from '#lib/navBadges.svelte.js';
 	import { settings } from '#lib/settings.svelte.js';
 	import { sessionStore } from '#lib/session.svelte.js';
+	import { myCapabilities } from '#lib/banto/myAuthz.svelte.js';
 	import { narrowViewport } from '#lib/narrowViewport.svelte.js';
 	import { IconButton } from '@banto/ui';
 	import { PanelLeftClose, PanelLeftOpen } from '@lucide/svelte';
@@ -40,7 +41,11 @@
 
 	// RBAC hiding + viewer-public allowlist: see navSections() in #lib/navigation.ts.
 	const sections = $derived(
-		navSections({ publicViewer: sessionStore.publicViewer, role: sessionStore.role })
+		navSections({
+			publicViewer: sessionStore.publicViewer,
+			role: sessionStore.role,
+			capabilities: myCapabilities()
+		})
 	);
 	// banto-cost: the main entries under their work-order headings (review D-3).
 	const mainGroups = $derived(navGroups(sections.main));

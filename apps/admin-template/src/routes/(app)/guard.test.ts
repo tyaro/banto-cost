@@ -37,6 +37,7 @@ vi.mock('#lib/banto/locale.js', () => ({ syncLocaleFromProvider: vi.fn(async () 
 vi.mock('#lib/banto/businessCalendar.svelte.js', () => ({
 	loadBusinessCalendar: vi.fn(async () => {})
 }));
+vi.mock('#lib/banto/myAuthz.svelte.js', () => ({ loadMyAuthz: vi.fn(async () => {}) }));
 vi.mock('#lib/settings.svelte.js', () => ({
 	settings: { syncFromProvider: vi.fn(async () => {}) }
 }));
