@@ -17,7 +17,11 @@
 --
 -- revenue_plan and pipeline_revenue_plan hold one line per month (month
 -- NULL = timing undecided, one such line at most); the services already
--- refuse duplicates (duplicate_plan_month), the indexes make it a rule.
+-- refuse duplicates (duplicate_plan_month). A trigger refuses an insert or
+-- an update that would make a second line for the same project (pipeline
+-- version) and month. It is not a unique index because duplicates already
+-- stored (hand-written SQL) would make creating the index fail and stop the
+-- app from starting; like the date checks, existing rows are not re-checked.
 
 -- TG_ARGV holds (kind, column) pairs, kind 'date' or 'month'. On UPDATE a
 -- column whose value did not change is not checked, so a row stored before
@@ -129,7 +133,40 @@ CREATE TRIGGER fixed_cost_postings_dates BEFORE INSERT OR UPDATE OF month, booke
 CREATE TRIGGER recurring_revenues_dates BEFORE INSERT OR UPDATE OF from_month, to_month ON recurring_revenues
     FOR EACH ROW EXECUTE FUNCTION banto_cost_check_dates('month', 'from_month', 'month', 'to_month');
 
-CREATE UNIQUE INDEX revenue_plan_month ON revenue_plan (project_id, COALESCE(month, ''));
+-- TG_ARGV[0] is the key column (project_id or pipeline_version_id). The
+-- services write a project's revenue plan after updating the project row
+-- (revenue_version), which holds that row's lock, so two writers of the
+-- same project's plan do not both pass this check.
+CREATE OR REPLACE FUNCTION banto_cost_check_plan_month() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    new_row jsonb := to_jsonb(NEW);
+    old_row jsonb;
+    key text := TG_ARGV[0];
+    taken boolean;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        old_row := to_jsonb(OLD);
+        IF new_row -> key IS NOT DISTINCT FROM old_row -> key
+            AND new_row -> 'month' IS NOT DISTINCT FROM old_row -> 'month' THEN
+            RETURN NEW;
+        END IF;
+    END IF;
+    EXECUTE format(
+        'SELECT EXISTS (SELECT 1 FROM %I WHERE %I = $1 AND month IS NOT DISTINCT FROM $2 AND id <> $3)',
+        TG_TABLE_NAME, key)
+        INTO taken
+        USING (new_row ->> key)::bigint, new_row ->> 'month', (new_row ->> 'id')::bigint;
+    IF taken THEN
+        RAISE EXCEPTION '%: one line per % and month', TG_TABLE_NAME, key
+            USING ERRCODE = 'unique_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
 
-CREATE UNIQUE INDEX pipeline_revenue_plan_month
-    ON pipeline_revenue_plan (pipeline_version_id, COALESCE(month, ''));
+CREATE TRIGGER revenue_plan_month BEFORE INSERT OR UPDATE OF project_id, month ON revenue_plan
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_plan_month('project_id');
+
+CREATE TRIGGER pipeline_revenue_plan_month BEFORE INSERT OR UPDATE OF pipeline_version_id, month ON pipeline_revenue_plan
+    FOR EACH ROW EXECUTE FUNCTION banto_cost_check_plan_month('pipeline_version_id');

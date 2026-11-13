@@ -517,7 +517,8 @@ mod tests {
     }
 
     /// Review §8-16 (M-5): one revenue plan line per project and month, and
-    /// one undecided-timing line at most.
+    /// one undecided-timing line at most (a trigger, so that duplicates
+    /// already stored do not make the migration fail).
     #[tokio::test]
     async fn revenue_plan_allows_one_line_per_project_and_month() {
         let db = migrate_memory().await.unwrap();
@@ -547,6 +548,28 @@ mod tests {
             refused(
                 pool,
                 "UPDATE revenue_plan SET month = '2026-06' WHERE month = '2026-07'"
+            )
+            .await
+        );
+        assert!(
+            !refused(
+                pool,
+                "UPDATE revenue_plan SET amount = 70 WHERE month = '2026-07'"
+            )
+            .await
+        );
+
+        // Duplicates stored before 0027 do not stop the migration; their
+        // other columns stay writable.
+        sqlx::query("DROP TRIGGER revenue_plan_month_insert")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(!refused(pool, &insert(2, "'2026-06'")).await);
+        assert!(
+            !refused(
+                pool,
+                "UPDATE revenue_plan SET amount = 0, month = month WHERE project_id = 2"
             )
             .await
         );

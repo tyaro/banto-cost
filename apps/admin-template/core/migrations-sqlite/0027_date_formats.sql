@@ -19,7 +19,11 @@
 --
 -- revenue_plan and pipeline_revenue_plan hold one line per month (month
 -- NULL = timing undecided, one such line at most); the services already
--- refuse duplicates (duplicate_plan_month), the indexes make it a rule.
+-- refuse duplicates (duplicate_plan_month). A trigger refuses an insert or
+-- an update that would make a second line for the same project (pipeline
+-- version) and month. It is not a unique index because duplicates already
+-- stored (hand-written SQL) would make creating the index fail and stop the
+-- app from starting; like the date checks, existing rows are not re-checked.
 
 CREATE TRIGGER projects_dates_insert BEFORE INSERT ON projects
 WHEN (NEW.planned_start IS NOT NULL AND date(NEW.planned_start) IS NOT NEW.planned_start)
@@ -307,7 +311,40 @@ BEGIN
     SELECT RAISE(ABORT, 'recurring_revenues: dates must be YYYY-MM-DD and months YYYY-MM');
 END;
 
-CREATE UNIQUE INDEX revenue_plan_month ON revenue_plan (project_id, COALESCE(month, ''));
+CREATE TRIGGER revenue_plan_month_insert BEFORE INSERT ON revenue_plan
+WHEN EXISTS (
+    SELECT 1 FROM revenue_plan p
+    WHERE p.project_id = NEW.project_id AND p.month IS NEW.month
+)
+BEGIN
+    SELECT RAISE(ABORT, 'revenue_plan: one line per project_id and month');
+END;
 
-CREATE UNIQUE INDEX pipeline_revenue_plan_month
-    ON pipeline_revenue_plan (pipeline_version_id, COALESCE(month, ''));
+CREATE TRIGGER revenue_plan_month_update BEFORE UPDATE OF project_id, month ON revenue_plan
+WHEN (NEW.project_id IS NOT OLD.project_id OR NEW.month IS NOT OLD.month)
+    AND EXISTS (
+    SELECT 1 FROM revenue_plan p
+    WHERE p.project_id = NEW.project_id AND p.month IS NEW.month AND p.id <> NEW.id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'revenue_plan: one line per project_id and month');
+END;
+
+CREATE TRIGGER pipeline_revenue_plan_month_insert BEFORE INSERT ON pipeline_revenue_plan
+WHEN EXISTS (
+    SELECT 1 FROM pipeline_revenue_plan p
+    WHERE p.pipeline_version_id = NEW.pipeline_version_id AND p.month IS NEW.month
+)
+BEGIN
+    SELECT RAISE(ABORT, 'pipeline_revenue_plan: one line per pipeline_version_id and month');
+END;
+
+CREATE TRIGGER pipeline_revenue_plan_month_update BEFORE UPDATE OF pipeline_version_id, month ON pipeline_revenue_plan
+WHEN (NEW.pipeline_version_id IS NOT OLD.pipeline_version_id OR NEW.month IS NOT OLD.month)
+    AND EXISTS (
+    SELECT 1 FROM pipeline_revenue_plan p
+    WHERE p.pipeline_version_id = NEW.pipeline_version_id AND p.month IS NEW.month AND p.id <> NEW.id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'pipeline_revenue_plan: one line per pipeline_version_id and month');
+END;
