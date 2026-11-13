@@ -28,10 +28,22 @@
 	interface Props {
 		projectId: number;
 		canWrite: boolean;
+		/**
+		 * The items the person may override here (the server's answer), or
+		 * `null` when unknown: then every overridable item is offered and the
+		 * server decides on saving.
+		 */
+		overridable: ReadonlySet<string> | null;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, canWrite, onPendingChange }: Props = $props();
+	let { projectId, canWrite, overridable, onPendingChange }: Props = $props();
+
+	function mayOverride(item: { key: string; projectOverridable: boolean }): boolean {
+		return (
+			canWrite && item.projectOverridable && (overridable === null || overridable.has(item.key))
+		);
+	}
 
 	const available = isPipelineAvailable();
 	let on = $state(todayIso());
@@ -166,7 +178,7 @@
 											{m['calcBasis.showHistory']()}
 										</button>
 									{/if}
-									{#if canWrite && row.item.projectOverridable}
+									{#if mayOverride(row.item)}
 										<button
 											type="button"
 											class="banto-btn banto-btn--secondary"
@@ -227,7 +239,7 @@
 					</table>
 				</div>
 			{/if}
-			{#if editing && canWrite}
+			{#if editing && mayOverride(selected.item)}
 				{#key `${selected.item.key}:${editing}`}
 					<CalcBasisForm
 						item={selected.item}

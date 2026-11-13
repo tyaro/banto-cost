@@ -43,13 +43,14 @@
 		projectId: number;
 		/** The project code, shown in confirmation dialogs. */
 		code: string;
-		canWrite: boolean;
+		/** May settle and reopen (the project's manager or accounting). */
+		canSettle: boolean;
 		/** The project's status changed (settled): the page reloads it. */
 		onProjectChanged?: () => void;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, code, canWrite, onProjectChanged, onPendingChange }: Props = $props();
+	let { projectId, code, canSettle, onProjectChanged, onPendingChange }: Props = $props();
 
 	const available = isPipelineAvailable();
 	let check = $state<CloseoutCheck | null>(null);
@@ -304,29 +305,31 @@
 		{#each errors as message, i (i)}
 			<p class="error" role="alert">{message}</p>
 		{/each}
-		<label class="field">
-			<span class="label">{m['closeout.reopenReason']()}</span>
-			<input
-				type="text"
-				class="banto-input"
-				placeholder={m['closeout.reopenReasonPlaceholder']()}
-				disabled={!canWrite || busy}
-				bind:value={reopenReason}
-			/>
-			{#if reopenMissing && !reopenReason.trim()}
-				<span class="error">{m['closeout.reasonRequired']()}</span>
-			{/if}
-		</label>
-		<div class="actions">
-			<button
-				type="button"
-				class="banto-btn banto-btn--secondary"
-				disabled={!canWrite || busy}
-				onclick={reopen}
-			>
-				{m['closeout.reopen']()}
-			</button>
-		</div>
+		{#if canSettle}
+			<label class="field">
+				<span class="label">{m['closeout.reopenReason']()}</span>
+				<input
+					type="text"
+					class="banto-input"
+					placeholder={m['closeout.reopenReasonPlaceholder']()}
+					disabled={busy}
+					bind:value={reopenReason}
+				/>
+				{#if reopenMissing && !reopenReason.trim()}
+					<span class="error">{m['closeout.reasonRequired']()}</span>
+				{/if}
+			</label>
+			<div class="actions">
+				<button
+					type="button"
+					class="banto-btn banto-btn--secondary"
+					disabled={busy}
+					onclick={reopen}
+				>
+					{m['closeout.reopen']()}
+				</button>
+			</div>
+		{/if}
 	{:else if !check.settleable}
 		<p class="note">{m['closeout.notYet']()}</p>
 	{:else}
@@ -356,7 +359,7 @@
 											class="banto-input"
 											aria-label={`${m['closeout.colReason']()} ${label(b)}`}
 											placeholder={m['closeout.reasonPlaceholder']()}
-											disabled={!canWrite || busy}
+											disabled={!canSettle || busy}
 											bind:value={reasons[key]}
 										/>
 										{#if missing.has(key) && !reasons[key]?.trim()}
@@ -375,19 +378,23 @@
 		{#each errors as message, i (i)}
 			<p class="error" role="alert">{message}</p>
 		{/each}
-		<label class="field">
-			<span class="label">{m['closeout.note']()}</span>
-			<input type="text" class="banto-input" disabled={!canWrite || busy} bind:value={note} />
-		</label>
+		{#if canSettle}
+			<label class="field">
+				<span class="label">{m['closeout.note']()}</span>
+				<input type="text" class="banto-input" disabled={busy} bind:value={note} />
+			</label>
+		{/if}
 		<div class="actions">
-			<button
-				type="button"
-				class="banto-btn banto-btn--primary"
-				disabled={!canWrite || busy || blocked}
-				onclick={settle}
-			>
-				{m['closeout.settle']()}
-			</button>
+			{#if canSettle}
+				<button
+					type="button"
+					class="banto-btn banto-btn--primary"
+					disabled={busy || blocked}
+					onclick={settle}
+				>
+					{m['closeout.settle']()}
+				</button>
+			{/if}
 			<button
 				type="button"
 				class="banto-btn banto-btn--secondary"

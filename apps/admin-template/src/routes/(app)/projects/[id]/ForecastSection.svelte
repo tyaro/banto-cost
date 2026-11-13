@@ -53,11 +53,14 @@
 		projectId: number;
 		/** The project code, shown in confirmation dialogs. */
 		code: string;
-		canWrite: boolean;
+		/** May start, edit, save and discard the draft (the project's manager). */
+		canEdit: boolean;
+		/** May adopt the draft (the manager or accounting). */
+		canApprove: boolean;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, code, canWrite, onPendingChange }: Props = $props();
+	let { projectId, code, canEdit, canApprove, onPendingChange }: Props = $props();
 
 	interface InputRow {
 		phaseId: string;
@@ -548,7 +551,7 @@
 		<h3>{m['forecast.draftTitle']()}</h3>
 		{#if !draft}
 			<p class="note">{m['forecast.noDraft']()}</p>
-			{#if canWrite && midway}
+			{#if canEdit && midway}
 				<div class="actions">
 					<button
 						type="button"
@@ -587,7 +590,7 @@
 						type="date"
 						max={todayIso()}
 						bind:value={baseDate}
-						disabled={!canWrite || busy}
+						disabled={!canEdit || busy}
 						aria-invalid={errors.baseDate !== undefined}
 					/>
 					{#if errors.baseDate}<span class="error">{errors.baseDate}</span>{/if}
@@ -598,7 +601,7 @@
 						class="banto-input"
 						type="date"
 						bind:value={plannedEnd}
-						disabled={!canWrite || busy}
+						disabled={!canEdit || busy}
 						aria-invalid={errors.plannedEnd !== undefined}
 					/>
 					{#if errors.plannedEnd}<span class="error">{errors.plannedEnd}</span>{/if}
@@ -624,7 +627,7 @@
 									<select
 										class="banto-input"
 										bind:value={row.phaseId}
-										disabled={!canWrite || busy}
+										disabled={!canEdit || busy}
 										aria-label={m['budget.colPhase']()}
 									>
 										<option value="">{m['budget.noPhase']()}</option>
@@ -637,7 +640,7 @@
 									<select
 										class="banto-input"
 										bind:value={row.costType}
-										disabled={!canWrite || busy}
+										disabled={!canEdit || busy}
 										aria-label={m['budget.colCostType']()}
 									>
 										{#each COST_TYPES as t (t)}
@@ -651,7 +654,7 @@
 											class="banto-input short"
 											inputmode="decimal"
 											bind:value={row.hours}
-											disabled={!canWrite || busy}
+											disabled={!canEdit || busy}
 											aria-label={m['forecast.colRemainingHours']()}
 										/>
 									{:else}
@@ -666,13 +669,13 @@
 											class="banto-input short"
 											inputmode="numeric"
 											bind:value={row.amount}
-											disabled={!canWrite || busy}
+											disabled={!canEdit || busy}
 											aria-label={m['forecast.colOtherRemaining']()}
 										/>
 									{/if}
 								</td>
 								<td>
-									{#if canWrite}
+									{#if canEdit}
 										<button
 											type="button"
 											class="banto-btn banto-btn--ghost"
@@ -708,45 +711,51 @@
 					class="banto-input"
 					rows="2"
 					bind:value={reason}
-					disabled={!canWrite || busy}
+					disabled={!canEdit || busy}
 					aria-invalid={errors.reason !== undefined}></textarea>
 				{#if errors.reason}<span class="error">{errors.reason}</span>{/if}
 			</label>
-			{#if canWrite}
+			{#if canEdit || canApprove}
 				<div class="actions">
-					<button
-						type="button"
-						class="banto-btn banto-btn--ghost"
-						disabled={busy}
-						onclick={addLine}
-					>
-						{m['budget.addLine']()}
-					</button>
-					<button
-						type="button"
-						class="banto-btn banto-btn--primary"
-						disabled={busy || !dirty}
-						onclick={save}
-					>
-						{m['common.save']()}
-					</button>
-					<button
-						type="button"
-						class="banto-btn banto-btn--secondary"
-						disabled={busy || dirty}
-						title={dirty ? m['budget.saveFirst']() : undefined}
-						onclick={adopt}
-					>
-						{m['forecast.adopt']()}
-					</button>
-					<button
-						type="button"
-						class="banto-btn banto-btn--ghost"
-						disabled={busy}
-						onclick={discard}
-					>
-						{m['forecast.discard']()}
-					</button>
+					{#if canEdit}
+						<button
+							type="button"
+							class="banto-btn banto-btn--ghost"
+							disabled={busy}
+							onclick={addLine}
+						>
+							{m['budget.addLine']()}
+						</button>
+						<button
+							type="button"
+							class="banto-btn banto-btn--primary"
+							disabled={busy || !dirty}
+							onclick={save}
+						>
+							{m['common.save']()}
+						</button>
+					{/if}
+					{#if canApprove}
+						<button
+							type="button"
+							class="banto-btn banto-btn--secondary"
+							disabled={busy || dirty}
+							title={dirty ? m['budget.saveFirst']() : undefined}
+							onclick={adopt}
+						>
+							{m['forecast.adopt']()}
+						</button>
+					{/if}
+					{#if canEdit}
+						<button
+							type="button"
+							class="banto-btn banto-btn--ghost"
+							disabled={busy}
+							onclick={discard}
+						>
+							{m['forecast.discard']()}
+						</button>
+					{/if}
 				</div>
 			{/if}
 		{/if}

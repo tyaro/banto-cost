@@ -41,7 +41,8 @@
 		projectId: number;
 		/** Ordered-side projects keep their history but take no new versions. */
 		ordered: boolean;
-		canWrite: boolean;
+		/** May save and adopt versions (the sales owner with `pipeline.edit`). */
+		canEdit: boolean;
 		/**
 		 * Reports whether the new-version form has unsaved input and whether a
 		 * save or adoption is in flight, for the page's leave guard.
@@ -49,7 +50,7 @@
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, ordered, canWrite, onPendingChange }: Props = $props();
+	let { projectId, ordered, canEdit, onPendingChange }: Props = $props();
 
 	const available = isPipelineAvailable();
 
@@ -237,7 +238,7 @@
 	}
 
 	async function save(adopt: boolean) {
-		if (!canWrite || saving) return;
+		if (!canEdit || saving) return;
 		const input = buildInput(adopt);
 		if (!input) return;
 		saving = true;
@@ -259,7 +260,7 @@
 	}
 
 	async function adopt(version: PipelineVersion) {
-		if (!canWrite || adoptingId !== null) return;
+		if (!canEdit || adoptingId !== null) return;
 		const ok = await confirmAction({
 			title: m['pipeline.adoptConfirmTitle'](),
 			body: m['pipeline.adoptConfirm']({ no: version.versionNo }),
@@ -347,7 +348,7 @@
 							<th scope="col">{m['pipeline.colIssues']()}</th>
 							<th scope="col">{m['pipeline.colCreated']()}</th>
 							<th scope="col">{m['pipeline.colAdopted']()}</th>
-							{#if canWrite && !ordered}
+							{#if canEdit && !ordered}
 								<th scope="col"><span class="sr-only">{m['cost.colActions']()}</span></th>
 							{/if}
 						</tr>
@@ -390,7 +391,7 @@
 										<div class="sub">{version.adoptedAt}</div>
 									{/if}
 								</td>
-								{#if canWrite && !ordered}
+								{#if canEdit && !ordered}
 									<td>
 										{#if version.kind === 'draft'}
 											<button
@@ -413,7 +414,7 @@
 
 		{#if ordered}
 			<p class="note">{m['pipeline.orderedNotice']()}</p>
-		{:else if canWrite}
+		{:else if canEdit}
 			<h3>{m['pipeline.newVersionTitle']()}</h3>
 			<p class="note">{m['pipeline.newVersionDesc']()}</p>
 			{#each otherErrors as message, i (i)}

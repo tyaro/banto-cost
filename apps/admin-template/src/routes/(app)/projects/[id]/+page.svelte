@@ -23,6 +23,10 @@
 	 * An ordered project's status moves only between 受注・進行中・作業完了.
 	 * Viewing needs admin or `ViewProject` on this project (design 第2章);
 	 * `forbidden` shows a no-access state.
+	 * What the person may do here (review D-4, §8-15) is read from the server
+	 * (projectActions.ts) and hides the buttons of the actions it refuses -
+	 * display only, every write is still decided by the server. Unknown (a
+	 * failed read, demo mode) leaves only the role floor, as before.
 	 *
 	 * As with every detail page, the (app) layout keys this page on its route params,
 	 * so reading `page.params.id` once at setup is enough.
@@ -40,6 +44,16 @@
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
+	import {
+		allows,
+		getProjectActions,
+		overridableItems,
+		PROJECT_ACTIONS_WAIT_MS,
+		type ProjectActionKey,
+		type ProjectActions
+	} from '#lib/banto/projectActions.js';
+	import { reloadMyAuthz } from '#lib/banto/myAuthz.svelte.js';
+	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { untrack } from 'svelte';
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import ProjectSummary, { type TocEntry } from './ProjectSummary.svelte';
@@ -56,11 +70,21 @@
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
-
 	// Tauri's `projects_get` takes `id: i64`: convert the route param first.
 	const rawId = page.params.id ?? '';
 	const parsedId = Number(rawId);
 	const idValid = rawId !== '' && Number.isInteger(parsedId);
+
+	/** The server's answer for this project, or `null` while unknown. */
+	let actions = $state.raw<ProjectActions | null>(null);
+	/**
+	 * A read is in flight: nothing is offered until it answers (PR #61
+	 * review), at most `PROJECT_ACTIONS_WAIT_MS`.
+	 */
+	let actionsPending = $state(idValid && isPipelineAvailable());
+	let actionsToken = 0;
+	const may = (key: ProjectActionKey) => allows(actions, canWrite, key, actionsPending);
+	const canEditProject = $derived(may('editProject'));
 
 	const formResource = idValid ? createFormResource(resource.name, parsedId) : null;
 	// `.raw`: the schema carries lazy label getters a deep proxy would not need.
@@ -166,6 +190,47 @@
 		void loadForm();
 	});
 
+	/**
+	 * Read what the person may do here. Until it answers, no action is
+	 * offered; past `PROJECT_ACTIONS_WAIT_MS` the buttons follow the role
+	 * floor, and a late answer still replaces that. The previous answer is
+	 * forgotten when a read starts (the members may have changed it, PR #61
+	 * review), so a failure also leaves the role floor; the server still
+	 * refuses what it must. An answer
+	 * to an older read is dropped.
+	 */
+	async function loadActions() {
+		if (!idValid || !isPipelineAvailable()) return;
+		const token = ++actionsToken;
+		// The previous answer may be out of date (the members changed): never
+		// fall back to it past the wait (PR #61 review).
+		actions = null;
+		actionsPending = true;
+		const timer = setTimeout(() => {
+			if (token === actionsToken) actionsPending = false;
+		}, PROJECT_ACTIONS_WAIT_MS);
+		try {
+			const read = await getProjectActions(parsedId);
+			if (token === actionsToken) actions = read;
+		} catch {
+			// Unknown: leave it to the role floor and the server.
+			if (token === actionsToken) actions = null;
+		} finally {
+			clearTimeout(timer);
+			if (token === actionsToken) actionsPending = false;
+		}
+	}
+
+	$effect(() => {
+		void loadActions();
+	});
+
+	/** Members changed: the page's actions and the nav's memberships may have. */
+	function membersChanged() {
+		void loadActions();
+		void reloadMyAuthz();
+	}
+
 	const isNotFound = $derived.by(() => {
 		if (!idValid) return true;
 		const err = formResource?.error;
@@ -202,7 +267,7 @@
 	);
 
 	async function handleSubmit(values: Record<string, unknown>) {
-		if (!formResource || !canWrite || !schema || !store) return;
+		if (!formResource || !canEditProject || !schema || !store) return;
 		formErrors = [];
 		const result = await formResource.submit(values);
 		if (result.ok) {
@@ -211,6 +276,9 @@
 			// changed, and the sections follow the status (review D-2).
 			await loadForm();
 			membersKey++;
+			// The manager may have changed with the basic information: the
+			// page's actions and the nav's memberships too (PR #61 review).
+			membersChanged();
 		} else {
 			store.setServerErrors(result.fieldErrors);
 			formErrors = unmatchedFieldErrors(
@@ -274,6 +342,9 @@
 			{#if ordered}
 				<p class="hint">{m['projects.orderedStatusHint']()}</p>
 			{/if}
+			{#if canWrite && !actionsPending && !canEditProject}
+				<p class="hint">{m['projects.readOnlyHint']()}</p>
+			{/if}
 			{#if !managerIsSelect}
 				<p class="hint">{m['projects.managerIdHint']()}</p>
 			{/if}
@@ -285,7 +356,7 @@
 				{schema}
 				{store}
 				onSubmit={handleSubmit}
-				submitting={(formResource?.saving ?? false) || !canWrite}
+				submitting={(formResource?.saving ?? false) || !canEditProject}
 				submitLabel={m['common.save']()}
 			>
 				<UnsavedChangesNotice pending={guard.pending} label={m['unsaved.notice']()} />
@@ -297,14 +368,16 @@
 	</div>
 
 	{#if schema && idValid}
-		<MembersSection projectId={parsedId} reloadKey={membersKey} />
+		<MembersSection projectId={parsedId} reloadKey={membersKey} onMembersChanged={membersChanged} />
 		{#key sectionStatus}
 			<OrderSection
 				projectId={parsedId}
 				code={projectCode}
 				status={sectionStatus}
 				rowVersion={projectRowVersion}
-				{canWrite}
+				canEditOrder={may('editOrder')}
+				canDecideChange={may('decideOrderChange')}
+				canRecognize={may('recognizeRevenue')}
 				onProjectChanged={() => void loadForm()}
 				onPendingChange={(pending) => {
 					ordersDirty = pending.dirty;
@@ -315,7 +388,7 @@
 		<PipelineSection
 			projectId={parsedId}
 			{ordered}
-			{canWrite}
+			canEdit={may('editPipeline')}
 			onPendingChange={(pending) => {
 				pipelineDirty = pending.dirty;
 				pipelineBusy = pending.busy;
@@ -324,6 +397,7 @@
 		<CalcBasisSection
 			projectId={parsedId}
 			{canWrite}
+			overridable={overridableItems(actions, canWrite, actionsPending)}
 			onPendingChange={(pending) => {
 				calcDirty = pending.dirty;
 				calcBusy = pending.busy;
@@ -332,7 +406,8 @@
 		<BudgetSection
 			projectId={parsedId}
 			code={projectCode}
-			{canWrite}
+			canEdit={may('manageProject')}
+			canApprove={may('approveBudget')}
 			onPendingChange={(pending) => {
 				budgetDirty = pending.dirty;
 				budgetBusy = pending.busy;
@@ -342,7 +417,8 @@
 			<ForecastSection
 				projectId={parsedId}
 				code={projectCode}
-				{canWrite}
+				canEdit={may('manageProject')}
+				canApprove={may('adoptForecast')}
 				onPendingChange={(pending) => {
 					forecastDirty = pending.dirty;
 					forecastBusy = pending.busy;
@@ -354,7 +430,7 @@
 				<CloseoutSection
 					projectId={parsedId}
 					code={projectCode}
-					{canWrite}
+					canSettle={may('settle')}
 					onProjectChanged={() => void loadForm()}
 					onPendingChange={(pending) => {
 						closeoutDirty = pending.dirty;
@@ -367,7 +443,8 @@
 		<CostsSection
 			projectId={parsedId}
 			projectLabel={`${projectCode} ${projectName}`.trim()}
-			{canWrite}
+			canEnter={may('enterCost')}
+			canEditOrders={may('editPurchaseOrder')}
 			onPendingChange={(pending) => {
 				costsDirty = pending.dirty;
 				costsBusy = pending.busy;

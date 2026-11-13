@@ -778,6 +778,7 @@
   "projects.fieldUpdatedAt": "Updated at",
   "projects.inactiveCustomer": "{name} (inactive)",
   "projects.managerIdHint": "The manager is given by user ID (a new project starts with your own).",
+  "projects.readOnlyHint": "You may not change this project's basic information (its sales owner or manager can).",
   "projects.orderedStatusHint": "An ordered project's status moves only between ordered, in progress and work done (settling goes through the close-out check).",
   "projects.status.lead": "Lead",
   "projects.status.quoting": "Quoting",

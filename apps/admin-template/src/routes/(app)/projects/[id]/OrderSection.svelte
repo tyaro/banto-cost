@@ -57,14 +57,31 @@
 		/** The project's status as the page loaded it. */
 		status: string;
 		rowVersion: number;
-		canWrite: boolean;
+		/**
+		 * May convert, cancel or correct the conversion, request changes and
+		 * re-plan the revenue (the sales owner or the manager, `EditOrder`).
+		 */
+		canEditOrder: boolean;
+		/** May approve or reject a change request (the manager or accounting). */
+		canDecideChange: boolean;
+		/** May record and cancel revenue recognitions (accounting). */
+		canRecognize: boolean;
 		/** The project changed (conversion): the page reloads its form. */
 		onProjectChanged: () => void;
 		onPendingChange?: (pending: { dirty: boolean; busy: boolean }) => void;
 	}
 
-	let { projectId, code, status, rowVersion, canWrite, onProjectChanged, onPendingChange }: Props =
-		$props();
+	let {
+		projectId,
+		code,
+		status,
+		rowVersion,
+		canEditOrder,
+		canDecideChange,
+		canRecognize,
+		onProjectChanged,
+		onPendingChange
+	}: Props = $props();
 
 	const available = isPipelineAvailable();
 	const CONVERTIBLE = ['lead', 'quoting', 'negotiating', 'on_hold'];
@@ -461,7 +478,7 @@
 				/>
 			{:else}
 				<p class="note">{m['orders.beforeOrder']()}</p>
-				{#if canWrite}
+				{#if canEditOrder}
 					<button
 						type="button"
 						class="banto-btn banto-btn--primary convert"
@@ -563,7 +580,7 @@
 				</div>
 			{/if}
 
-			{#if canWrite}
+			{#if canEditOrder}
 				<details
 					class="cancel-conversion"
 					open={correctOpen}
@@ -715,7 +732,7 @@
 						</tbody>
 					</table>
 				</div>
-				{#if canWrite}
+				{#if canEditOrder}
 					<button
 						type="button"
 						class="banto-btn banto-btn--secondary inline"
@@ -741,7 +758,7 @@
 								<th scope="col">{m['orders.fieldBasis']()}</th>
 								<th scope="col">{m['orders.colRequested']()}</th>
 								<th scope="col">{m['orders.colDecided']()}</th>
-								{#if canWrite}
+								{#if canDecideChange}
 									<th scope="col"><span class="sr-only">{m['cost.colActions']()}</span></th>
 								{/if}
 							</tr>
@@ -776,7 +793,7 @@
 												</div>{/if}
 										{/if}
 									</td>
-									{#if canWrite}
+									{#if canDecideChange}
 										<td>
 											{#if change.status === 'pending'}
 												<div class="row-actions">
@@ -806,7 +823,7 @@
 					</table>
 				</div>
 			{/if}
-			{#if canWrite}
+			{#if canEditOrder}
 				<form
 					class="inline-form"
 					novalidate
@@ -871,7 +888,7 @@
 								<th scope="col">{m['orders.fieldBasis']()}</th>
 								<th scope="col">{m['orders.colRecorded']()}</th>
 								<th scope="col">{m['orders.colStatus']()}</th>
-								{#if canWrite}
+								{#if canRecognize}
 									<th scope="col"><span class="sr-only">{m['cost.colActions']()}</span></th>
 								{/if}
 							</tr>
@@ -900,7 +917,7 @@
 											<StatusBadge variant="success" label={m['orders.active']()} />
 										{/if}
 									</td>
-									{#if canWrite}
+									{#if canRecognize}
 										<td>
 											{#if !row.cancelledAt}
 												<button
@@ -920,7 +937,7 @@
 					</table>
 				</div>
 			{/if}
-			{#if canWrite}
+			{#if canRecognize}
 				<form
 					class="inline-form"
 					novalidate

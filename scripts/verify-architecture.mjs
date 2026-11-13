@@ -610,6 +610,7 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'user_names_list', rest: 'GET /api/user-names', role: 'Viewer' },
 		{ tauri: 'projects_list', rest: 'POST /api/projects/list', role: 'Viewer' },
 		{ tauri: 'projects_get', rest: 'GET /api/projects/{id}', role: 'Viewer' },
+		{ tauri: 'project_actions', rest: 'GET /api/projects/{id}/actions', role: 'Viewer' },
 		{
 			tauri: 'pipeline_versions_list',
 			rest: 'GET /api/projects/{id}/pipeline-versions',
@@ -772,6 +773,7 @@ const isAllowedPackageImport = (spec) =>
 		'project_calc_basis_preview',
 		'project_members_list',
 		'projects_get',
+		'project_actions',
 		'projects_list',
 		'project_time_summary',
 		'project_budget',
@@ -822,6 +824,7 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/customers/{id}',
 		'GET /api/user-names',
 		'GET /api/projects/{id}',
+		'GET /api/projects/{id}/actions',
 		'GET /api/projects/{id}/pipeline-versions',
 		'GET /api/pipeline/overview',
 		'GET /api/projects/{id}/order',

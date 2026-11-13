@@ -3468,6 +3468,25 @@ async fn projects_get_body(state: &AppState, id: i64) -> Result<Project, BantoEr
     ops::projects::projects_get(&gate, &state.projects, id).await
 }
 
+/// Twin of `GET /api/projects/{id}/actions` (review D-4, §8-15): what the
+/// caller may do on the project's page, display only.
+#[tauri::command]
+async fn project_actions(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<ops::projects::ProjectActions, BantoError> {
+    project_actions_body(&state, id).await
+}
+
+async fn project_actions_body(
+    state: &AppState,
+    id: i64,
+) -> Result<ops::projects::ProjectActions, BantoError> {
+    let identity = require_role(state, Role::Viewer, "projects").await?;
+    let gate = tauri_gate(state, &identity).await?;
+    ops::projects::project_actions(&gate, &state.projects, &state.calc_basis, id).await
+}
+
 #[tauri::command]
 async fn projects_create(
     state: State<'_, AppState>,
@@ -5816,6 +5835,7 @@ pub fn run() {
             customers_update,
             projects_list,
             projects_get,
+            project_actions,
             projects_create,
             projects_update,
             pipeline_versions_list,

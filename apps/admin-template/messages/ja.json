@@ -778,6 +778,7 @@
   "projects.fieldUpdatedAt": "更新日時",
   "projects.inactiveCustomer": "{name}（使用中止）",
   "projects.managerIdHint": "責任者は利用者のユーザーIDで指定します（新規登録では自分のIDが入ります）。",
+  "projects.readOnlyHint": "この案件の基本情報を変更する権限がありません（案件の担当営業・責任者が変更できます）。",
   "projects.orderedStatusHint": "受注済みの案件は、受注・進行中・作業完了の間だけ状態を変えられます（精算完了は精算完了の検査で扱います）。",
   "projects.status.lead": "引合",
   "projects.status.quoting": "見積中",
