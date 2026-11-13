@@ -2591,6 +2591,18 @@ pub(crate) mod tests {
             .unwrap()
     }
 
+    /// Drop the 0027 date triggers of `direct_costs` (SQLite) so a test can
+    /// store a malformed date, as a row written before that migration.
+    async fn drop_date_triggers(db: &Db) {
+        for sql in [
+            "DROP TRIGGER direct_costs_dates_insert",
+            "DROP TRIGGER direct_costs_dates_update",
+        ] {
+            let sql = sql.to_string();
+            on_pool!(db, pool => execute!(pool, sql)).unwrap();
+        }
+    }
+
     async fn submitted(svc: &DirectCostsService, input: DirectCostInput) -> DirectCost {
         let c = svc.create(1, input).await.unwrap().cost;
         svc.submit(1, c.id, c.row_version).await.unwrap()
@@ -2913,7 +2925,9 @@ pub(crate) mod tests {
             },
         )
         .await;
-        // The adjustment loses its own project and its date.
+        // The adjustment loses its own project and its date (a row stored
+        // before migration 0027 began refusing malformed dates).
+        drop_date_triggers(&db).await;
         let sql = placeholders(
             db.dialect(),
             "UPDATE direct_costs SET project_id = NULL, booked_on = '2026-11-99' WHERE id = ?",
@@ -2967,7 +2981,9 @@ pub(crate) mod tests {
             },
         )
         .await;
-        // A hand-written SQL update leaves a date the ledger cannot read.
+        // A hand-written SQL update leaves a date the ledger cannot read (a
+        // row stored before migration 0027 began refusing malformed dates).
+        drop_date_triggers(&db).await;
         let sql = placeholders(
             db.dialect(),
             "UPDATE direct_costs SET booked_on = '2026-11-31' WHERE id = ?",
