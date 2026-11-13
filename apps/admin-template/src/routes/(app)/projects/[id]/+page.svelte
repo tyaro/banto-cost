@@ -185,9 +185,10 @@
 	});
 
 	/**
-	 * Read what the person may do here. A failure keeps the previous answer
-	 * (or none): the buttons then follow the role floor and the server still
-	 * refuses what it must. A late answer to an older read is dropped.
+	 * Read what the person may do here. A failure forgets the previous answer
+	 * (the members may have changed it, PR #61 review): the buttons then
+	 * follow the role floor and the server still refuses what it must. A late
+	 * answer to an older read is dropped.
 	 */
 	async function loadActions() {
 		if (!idValid || !isPipelineAvailable()) return;
@@ -197,6 +198,7 @@
 			if (token === actionsToken) actions = read;
 		} catch {
 			// Unknown: leave it to the role floor and the server.
+			if (token === actionsToken) actions = null;
 		}
 	}
 
