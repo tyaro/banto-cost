@@ -23,7 +23,9 @@
 	 * - 月額固定 / 定期売上の未計上: this month's unposted / unrecognized
 	 *   contracts, with last month's in the note (`dueCount`).
 	 * Each source loads on its own, so one the caller may not read only marks
-	 * its tiles 権限がありません.
+	 * its tiles 権限がありません. The amount sources and the approval lists answer
+	 * a caller without the capability with an empty scope, so those tiles go by
+	 * the person's capabilities as well (§8-15, `dashboardAccess`).
 	 *
 	 * Below: links to each business screen, and the メモ workspace.
 	 */
@@ -69,9 +71,13 @@
 		combineCounts,
 		currentAndNextMonth,
 		outlookMonthTotal,
+		dashboardAccess,
 		previousMonth,
+		withAccess,
+		withAccessCombined,
 		type Source
 	} from '#lib/banto/dashboardSummary.js';
+	import { myCapabilities } from '#lib/banto/myAuthz.svelte.js';
 	import { NAV_ICONS } from '#lib/components/navIcons.js';
 	import { PANEL_DEFS } from '#lib/banto/panels.js';
 	import { getUiSettings, isTauri } from '#lib/banto/setup.js';
@@ -101,10 +107,20 @@
 	// the new month after 再読み込み (the tiles read it together with the outlook).
 	let months = $state(currentAndNextMonth(todayIso()));
 
-	let overview = $state<Source<PipelineOverview>>({ state: 'loading' });
-	let outlook = $state<Source<OutlookView>>({ state: 'loading' });
+	let overviewRead = $state<Source<PipelineOverview>>({ state: 'loading' });
+	let outlookRead = $state<Source<OutlookView>>({ state: 'loading' });
 
-	let portfolio = $state<Source<Portfolio>>({ state: 'loading' });
+	let portfolioRead = $state<Source<Portfolio>>({ state: 'loading' });
+
+	/**
+	 * §8-15: tiles the person's capabilities rule out read 権限がありません, not
+	 * the ¥0 / 0件 of the empty scope the server answers them with
+	 * (`dashboardAccess`). Unknown capabilities change nothing.
+	 */
+	const access = $derived(dashboardAccess(myCapabilities()));
+	const overview = $derived(withAccess(overviewRead, access.amounts));
+	const outlook = $derived(withAccess(outlookRead, access.amounts));
+	const portfolio = $derived(withAccess(portfolioRead, access.amounts));
 
 	/**
 	 * The three lists /approvals shows, read one by one (PR #48 review): one the
@@ -159,18 +175,18 @@
 		if (!available) return;
 		const token = ++loadToken;
 		const range = currentAndNextMonth(todayIso());
-		overview = { state: 'loading' };
-		outlook = { state: 'loading' };
-		portfolio = { state: 'loading' };
+		overviewRead = { state: 'loading' };
+		outlookRead = { state: 'loading' };
+		portfolioRead = { state: 'loading' };
 		approvalLists = [{ state: 'loading' }, { state: 'loading' }, { state: 'loading' }];
 		fixedDue = dueLoading();
 		recurringDue = dueLoading();
 		const previous = previousMonth(range.current);
 		months = range;
 		await Promise.all([
-			track(token, getPipelineOverview(), (s) => (overview = s)),
-			track(token, getOutlook({ from: range.current, to: range.next }), (s) => (outlook = s)),
-			track(token, getPortfolio(), (s) => (portfolio = s)),
+			track(token, getPipelineOverview(), (s) => (overviewRead = s)),
+			track(token, getOutlook({ from: range.current, to: range.next }), (s) => (outlookRead = s)),
+			track(token, getPortfolio(), (s) => (portfolioRead = s)),
 			track(token, length(listApprovals()), (s) => (approvalLists[0] = s)),
 			track(token, length(listCostApprovals()), (s) => (approvalLists[1] = s)),
 			track(token, length(listPendingCorrections()), (s) => (approvalLists[2] = s)),
@@ -315,7 +331,7 @@
 	const okCount = (source: Source<number>) => (source.state === 'ok' ? source.value : 0);
 	const dueActive = (due: DueSources) => okCount(due.current) + okCount(due.previous) > 0;
 
-	const approvals = $derived(combineCounts(approvalLists));
+	const approvals = $derived(withAccessCombined(combineCounts(approvalLists), access.approvals));
 
 	function approvalsValue(): string {
 		if (approvals.state === 'ok')
