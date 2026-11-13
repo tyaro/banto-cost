@@ -29,7 +29,7 @@ use cost_domain::{FiscalCalendar, YearMonth, Yen};
 use serde::{Deserialize, Serialize};
 
 use crate::customers::field_error;
-use crate::direct_costs::DirectCostsService;
+use crate::direct_costs::{DirectCostsService, Ledger};
 use crate::orders::{fetch_all, on_pool, placeholders};
 use crate::portfolio::PortfolioService;
 use crate::time_entries::COUNTS;
@@ -177,6 +177,7 @@ fn alert_label(code: &str) -> &str {
         "forecast_update_needed" => "見込更新要",
         "no_forecast" => "完了見込なし",
         "open_commitment" => "未精算発注残",
+        "ledger_review" => "直接費要確認",
         other => other,
     }
 }
@@ -214,8 +215,10 @@ impl ReportsService {
         crate::business_date::now_local()
     }
 
-    /// Each project's figures by month (`project` = one project only).
-    async fn figures(&self, project: Option<i64>) -> Result<Figures, BantoError> {
+    /// Each project's figures by month (`project` = one project only)
+    /// without the projects whose direct costs wait for review (T39; for
+    /// one project, that is an error instead), and the ledger read.
+    async fn figures(&self, project: Option<i64>) -> Result<(Figures, Ledger), BantoError> {
         let filter = if project.is_some() {
             " AND project_id = ?"
         } else {
@@ -265,6 +268,9 @@ impl ReportsService {
         // the ledger, then the month-to-month differences. A monthly fixed
         // cost of an employee is labor (P7b, T37), kept in its own series.
         let ledger = DirectCostsService::new(self.db.clone()).ledger().await?;
+        if let Some(id) = project {
+            ledger.check(id)?;
+        }
         let mut series: BTreeMap<(i64, bool), BTreeMap<YearMonth, Yen>> = BTreeMap::new();
         let mut seen: BTreeSet<(i64, bool)> = BTreeSet::new();
         for m in ledger.months() {
@@ -297,7 +303,10 @@ impl ReportsService {
                 }
             }
         }
-        Ok(out)
+        // A project whose direct costs cannot be settled is left out, never
+        // shown short (T39).
+        out.retain(|id, _| ledger.is_clean(*id));
+        Ok((out, ledger))
     }
 
     fn view(project_id: i64, report: &MonthlyReport) -> ProjectMonthly {
@@ -322,7 +331,7 @@ impl ReportsService {
     }
 
     async fn report(&self, project_id: i64) -> Result<MonthlyReport, BantoError> {
-        let figures = self.figures(Some(project_id)).await?;
+        let (figures, _) = self.figures(Some(project_id)).await?;
         Ok(monthly(
             &CAL,
             &figures.get(&project_id).cloned().unwrap_or_default(),
@@ -394,7 +403,7 @@ impl ReportsService {
                 field_errors: vec![field_error("period", "期番号は1〜999で指定してください")],
             });
         }
-        let figures = self.figures(None).await?;
+        let (figures, ledger) = self.figures(None).await?;
         let labels_sql = "SELECT p.id, p.code, p.name, c.name FROM projects p \
                           JOIN customers c ON c.id = p.customer_id ORDER BY p.code, p.id"
             .to_string();
@@ -405,8 +414,13 @@ impl ReportsService {
         header.extend(MONTHLY_HEADER);
         let mut t = CsvTable::new(&generated_at, &header);
         let mut projects = 0;
+        let mut left_out = Vec::new();
         for (id, code, name, customer) in labels {
             if !amounts.contains(id) {
+                continue;
+            }
+            if !ledger.is_clean(id) {
+                left_out.push(code);
                 continue;
             }
             let Some(months) = figures.get(&id) else {
@@ -434,6 +448,16 @@ impl ReportsService {
                 format!("金額を閲覧できる案件のうち、この期に数値がある {projects}件"),
             )
             .condition("累計", "案件累計は期をまたいで最初の月から数える");
+        if !left_out.is_empty() {
+            t.condition(
+                "除いた案件",
+                format!(
+                    "直接費の台帳に要確認の明細があるため除いた {}件（{}）",
+                    left_out.len(),
+                    left_out.join("、")
+                ),
+            );
+        }
         Ok(CsvExport {
             file_name: format!("period-{period}-monthly-{}.csv", file_stamp(&generated_at)),
             row_count: t.rows.len(),
@@ -719,10 +743,13 @@ mod tests {
             // The close totals every project: take out the other project's
             // May hours.
             let other_labor = if line.month == "2027-05" { 9_999 } else { 0 };
-            assert_eq!(m.total.labor_cost - other_labor, line.amounts.labor);
-            assert_eq!(m.total.labor_missing, line.amounts.labor_missing);
-            assert_eq!(m.total.direct_cost, line.amounts.direct);
-            assert_eq!(m.total.revenue, line.amounts.revenue);
+            assert_eq!(
+                m.total.unwrap().labor_cost - other_labor,
+                line.amounts.labor
+            );
+            assert_eq!(m.total.unwrap().labor_missing, line.amounts.labor_missing);
+            assert_eq!(m.total.unwrap().direct_cost, line.amounts.direct);
+            assert_eq!(m.total.unwrap().revenue, line.amounts.revenue);
         }
     }
 

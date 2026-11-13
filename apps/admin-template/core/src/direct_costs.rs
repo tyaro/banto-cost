@@ -48,7 +48,7 @@ use cost_domain::direct_cost::{
 };
 use cost_domain::forecast::CostType;
 use cost_domain::ledger::{
-    self, AdjustmentKind, Allocation, CostEntry, EntryKind, LedgerIssue, Posting,
+    self, AdjustmentKind, Allocation, CostEntry, EntryKind, LedgerIssue, Posting, Unreadable,
 };
 use cost_domain::purchase::PurchaseError;
 use cost_domain::time::TimeStatus;
@@ -373,19 +373,84 @@ pub struct ProjectCosts {
     pub committed: i64,
 }
 
+/// An approved record the ledger could not take (要確認, T39): unreadable,
+/// inconsistent, or in the same chain (確定・調整) as one that is. It is
+/// left out of every total and reported, never dropped silently; the
+/// projects it lands on cannot show their direct costs until it is fixed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerProblem {
+    /// `direct_cost` (直接費の明細) | `fixed_cost` (月額固定の計上).
+    pub source: String,
+    /// The record's id in its own table.
+    pub id: i64,
+    /// The projects of the record's chain (確定・調整 and their original):
+    /// the rows' projects and allocations (empty: none readable).
+    pub project_ids: Vec<i64>,
+    /// `unreadable` (a column could not be read: see `column`), a
+    /// `cost_domain::ledger::LedgerIssue` code, or `related` (left out with
+    /// a record of its chain).
+    pub code: String,
+    /// The unreadable column (`entry_kind`, `ref_id`, `adjustment_kind`,
+    /// `cost_type`, `booked_on`) when `code` is `unreadable`.
+    pub column: Option<String>,
+}
+
 /// The approved ledger of the company, read once ([`DirectCostsService::ledger`]).
 pub struct Ledger {
     rows: Vec<LedgerRow>,
     allocs: Vec<(i64, i64, i64)>,
     all: Vec<Posting>,
+    /// Ledger ids (a fixed-cost posting's negated) left out (T39).
+    excluded: std::collections::BTreeSet<String>,
+    /// Projects whose direct costs cannot be settled (T39).
+    review: std::collections::BTreeSet<i64>,
+    /// A confirmation or adjustment whose project cannot be told was left
+    /// out: every project waits for review (T39).
+    review_all: bool,
+    problems: Vec<LedgerProblem>,
     /// As-of views already resolved, by cutoff date.
     cache: std::sync::Mutex<BTreeMap<Date, Vec<Posting>>>,
 }
 
 impl Ledger {
-    /// Every approved record, resolved (today's ledger).
+    /// Every approved record, resolved (today's ledger), without the records
+    /// left out for review ([`Self::problems`]).
     pub fn all(&self) -> &[Posting] {
         &self.all
+    }
+
+    /// The records left out of the ledger, oldest id first (T39).
+    pub fn problems(&self) -> &[LedgerProblem] {
+        &self.problems
+    }
+
+    /// Whether the project's direct costs are settled: no record left out
+    /// lands on it (T39).
+    pub fn is_clean(&self, project_id: i64) -> bool {
+        !self.review_all && !self.review.contains(&project_id)
+    }
+
+    /// The project's direct costs, or an error naming the records to review
+    /// (要確認) when one left out lands on it. Other projects are unaffected
+    /// (T39, review M-2 (c)).
+    pub fn check(&self, project_id: i64) -> Result<(), BantoError> {
+        if self.is_clean(project_id) {
+            return Ok(());
+        }
+        let ids: Vec<String> = self
+            .problems
+            .iter()
+            .filter(|p| {
+                p.project_ids.contains(&project_id) || (self.review_all && p.project_ids.is_empty())
+            })
+            .map(LedgerProblem::label)
+            .collect();
+        Err(BantoError::Other(format!(
+            "この案件の直接費の台帳に要確認の明細があるため、直接費を集計できません（{}）。\
+             全体一覧の「直接費の台帳の要確認」で内容を確かめてください",
+            ids.join("、")
+        )))
     }
 
     /// The months of the approved records' booked dates (company-wide),
@@ -422,6 +487,12 @@ impl Ledger {
             .filter(|r| r.2.is_none_or(|target| kept.contains(&target)))
             .cloned()
             .collect();
+        // The records left out of today's ledger stay out of every earlier
+        // view too (T39).
+        let rows: Vec<LedgerRow> = rows
+            .into_iter()
+            .filter(|r| !self.excluded.contains(&r.0.to_string()))
+            .collect();
         let kept: std::collections::BTreeSet<i64> = rows.iter().map(|r| r.0).collect();
         let allocs: Vec<(i64, i64, i64)> = self
             .allocs
@@ -429,10 +500,7 @@ impl Ledger {
             .filter(|(src, _, _)| kept.contains(src))
             .copied()
             .collect();
-        let (entries, allocations) = ledger_of(&rows, &allocs);
-        let out = ledger::postings(&entries, &allocations).map_err(|issues| {
-            BantoError::Other(format!("直接費の台帳に不整合があります: {issues:?}"))
-        })?;
+        let out = resolve_rows(&rows, &allocs).postings;
         if let Ok(mut c) = self.cache.lock() {
             c.insert(until, out.clone());
         }
@@ -511,7 +579,7 @@ const SELECT: &str = "SELECT c.id, c.user_id, u.display_name AS user_name, c.ent
      LEFT JOIN users d ON d.id = c.decided_by";
 
 /// The ledger columns of an approved record.
-type LedgerRow = (
+pub(crate) type LedgerRow = (
     i64,
     String,
     Option<i64>,
@@ -528,44 +596,88 @@ type LedgerRow = (
 /// (月額固定原価, P7b, T37). A posting joins as a normal record under its
 /// negated id, so the two id spaces never meet; it has no phase, order or
 /// reference, and its cost type is labor (an employee) or outsourcing.
-const LEDGER_SQL: &str = "SELECT id, entry_kind, ref_id, adjustment_kind, project_id, phase_id, \
+pub(crate) const LEDGER_SQL: &str =
+    "SELECT id, entry_kind, ref_id, adjustment_kind, project_id, phase_id, \
      cost_type, purchase_order_id, booked_on, amount FROM direct_costs \
      WHERE status = 'approved' \
      UNION ALL SELECT -id, 'normal', NULL, NULL, project_id, NULL, cost_type, NULL, \
      booked_on, amount FROM fixed_cost_postings WHERE status = 'approved' ORDER BY 1";
-const LEDGER_ALLOC_SQL: &str = "SELECT a.direct_cost_id, a.project_id, a.amount \
+pub(crate) const LEDGER_ALLOC_SQL: &str = "SELECT a.direct_cost_id, a.project_id, a.amount \
      FROM cost_allocations a JOIN direct_costs c ON c.id = a.direct_cost_id \
      WHERE c.status = 'approved' ORDER BY a.direct_cost_id, a.line_no";
 
-fn ledger_entry(r: &LedgerRow) -> Option<CostEntry> {
+/// A ledger row as a ledger entry, or the first column that cannot be read.
+fn ledger_entry(r: &LedgerRow) -> Result<CostEntry, &'static str> {
     let (id, kind, ref_id, adj, project, phase, cost_type, order, booked_on, amount) = r;
-    let kind = match RecordKind::parse(kind)? {
+    let target = || ref_id.map(|t| t.to_string()).ok_or("ref_id");
+    let kind = match RecordKind::parse(kind).ok_or("entry_kind")? {
         RecordKind::Normal => EntryKind::Normal,
         RecordKind::Provisional => EntryKind::Provisional,
         RecordKind::Confirms => EntryKind::Confirms {
-            provisional_id: (*ref_id)?.to_string(),
+            provisional_id: target()?,
         },
         RecordKind::Adjustment => EntryKind::Adjustment {
-            corrects_id: (*ref_id)?.to_string(),
-            kind: AdjustmentKind::parse(adj.as_deref()?)?,
+            corrects_id: target()?,
+            kind: adj
+                .as_deref()
+                .and_then(AdjustmentKind::parse)
+                .ok_or("adjustment_kind")?,
         },
     };
-    Some(CostEntry {
+    Ok(CostEntry {
         id: id.to_string(),
         project: project.map(|p| p.to_string()),
         phase: *phase,
         purchase_order: order.map(|o| o.to_string()),
-        cost_type: CostType::parse(cost_type)?,
-        booked_on: Date::parse(booked_on)?,
+        cost_type: CostType::parse(cost_type).ok_or("cost_type")?,
+        booked_on: Date::parse(booked_on).ok_or("booked_on")?,
         amount: *amount,
         kind,
     })
 }
 
-fn ledger_of(rows: &[LedgerRow], allocs: &[(i64, i64, i64)]) -> (Vec<CostEntry>, Vec<Allocation>) {
-    (
-        rows.iter().filter_map(ledger_entry).collect(),
-        allocs
+/// Whether the row may belong to an original's project: a confirmation, an
+/// adjustment, or a row whose kind cannot be read. A normal or provisional
+/// row lands on its own project.
+fn may_refer(r: &LedgerRow) -> bool {
+    RecordKind::parse(&r.1)
+        .is_none_or(|k| matches!(k, RecordKind::Confirms | RecordKind::Adjustment))
+}
+
+/// The original the row is chained to (T39): its `ref_id` only when the row
+/// may refer ([`may_refer`]), the same links `ledger::resolve` follows.
+fn chain_ref(r: &LedgerRow) -> Option<i64> {
+    r.2.filter(|_| may_refer(r))
+}
+
+/// The rows as ledger entries and allocations; a row that cannot be read is
+/// kept aside with its column (T39), never dropped.
+struct LedgerInput {
+    entries: Vec<CostEntry>,
+    allocations: Vec<Allocation>,
+    unreadable: Vec<(Unreadable, &'static str)>,
+}
+
+fn ledger_of(rows: &[LedgerRow], allocs: &[(i64, i64, i64)]) -> LedgerInput {
+    let mut entries = Vec::with_capacity(rows.len());
+    let mut unreadable = Vec::new();
+    for r in rows {
+        match ledger_entry(r) {
+            Ok(e) => entries.push(e),
+            Err(column) => unreadable.push((
+                Unreadable {
+                    id: r.0.to_string(),
+                    project: r.4.map(|p| p.to_string()),
+                    refers_to: chain_ref(r).map(|t| t.to_string()),
+                    may_refer: may_refer(r),
+                },
+                column,
+            )),
+        }
+    }
+    LedgerInput {
+        entries,
+        allocations: allocs
             .iter()
             .map(|(src, project, amount)| Allocation {
                 source_id: src.to_string(),
@@ -573,7 +685,132 @@ fn ledger_of(rows: &[LedgerRow], allocs: &[(i64, i64, i64)]) -> (Vec<CostEntry>,
                 amount: *amount,
             })
             .collect(),
-    )
+        unreadable,
+    }
+}
+
+/// The rows resolved: what cannot be read or is inconsistent is left out
+/// with its chain, and the rest is posted (T39).
+fn resolve_rows(rows: &[LedgerRow], allocs: &[(i64, i64, i64)]) -> ledger::Resolved {
+    let input = ledger_of(rows, allocs);
+    let unreadable: Vec<Unreadable> = input.unreadable.into_iter().map(|(u, _)| u).collect();
+    ledger::resolve(&input.entries, &input.allocations, &unreadable)
+}
+
+/// The records left out, as reported: each with its own reason (the
+/// unreadable column, the inconsistency found on it, or `related`).
+fn problems_of(
+    rows: &[LedgerRow],
+    allocs: &[(i64, i64, i64)],
+    resolved: &ledger::Resolved,
+) -> Vec<LedgerProblem> {
+    let input = ledger_of(rows, allocs);
+    let columns: BTreeMap<String, &'static str> = input
+        .unreadable
+        .iter()
+        .map(|(u, c)| (u.id.clone(), *c))
+        .collect();
+    // A confirmation or adjustment may carry no project of its own: it
+    // lands where its original does. Each record therefore names the
+    // projects of its whole chain (its rows and their allocations), so a
+    // caller scoped to those projects sees the record that holds them back.
+    let mut links: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for r in rows {
+        if let Some(t) = chain_ref(r) {
+            links.entry(r.0).or_default().push(t);
+            links.entry(t).or_default().push(r.0);
+        }
+    }
+    let own = |id: i64| -> Vec<i64> {
+        let mut p: Vec<i64> = rows
+            .iter()
+            .filter(|r| r.0 == id)
+            .filter_map(|r| r.4)
+            .collect();
+        p.extend(allocs.iter().filter(|a| a.0 == id).map(|a| a.1));
+        p
+    };
+    let chain_projects = |start: i64| -> Vec<i64> {
+        let mut seen = std::collections::BTreeSet::from([start]);
+        let mut stack = vec![start];
+        while let Some(id) = stack.pop() {
+            for next in links.get(&id).into_iter().flatten() {
+                if seen.insert(*next) {
+                    stack.push(*next);
+                }
+            }
+        }
+        let mut p: Vec<i64> = seen.into_iter().flat_map(&own).collect();
+        p.sort_unstable();
+        p.dedup();
+        p
+    };
+    let mut out: Vec<LedgerProblem> = rows
+        .iter()
+        .filter(|r| resolved.excluded.contains(&r.0.to_string()))
+        .map(|r| {
+            let key = r.0.to_string();
+            let project_ids = chain_projects(r.0);
+            let (code, column) = match columns.get(&key) {
+                Some(c) => ("unreadable".to_string(), Some((*c).to_string())),
+                None => (
+                    resolved
+                        .issues
+                        .iter()
+                        .find(|i| i.subject() == key)
+                        .map_or("related", LedgerIssue::code)
+                        .to_string(),
+                    None,
+                ),
+            };
+            LedgerProblem {
+                source: if r.0 < 0 { "fixed_cost" } else { "direct_cost" }.to_string(),
+                id: r.0.abs(),
+                project_ids,
+                code,
+                column,
+            }
+        })
+        .collect();
+    out.sort_by_key(|p| (p.source.clone(), p.id));
+    out
+}
+
+/// How many approved records the ledger leaves out for review (T39), from
+/// rows read by the caller (in its transaction).
+pub(crate) fn problem_count(rows: &[LedgerRow], allocs: &[(i64, i64, i64)]) -> usize {
+    let resolved = resolve_rows(rows, allocs);
+    rows.iter()
+        .filter(|r| resolved.excluded.contains(&r.0.to_string()))
+        .count()
+}
+
+/// The orders whose approved records were left out (T39): their
+/// remainders cannot be settled, so a write on them is refused.
+fn excluded_orders(
+    rows: &[LedgerRow],
+    resolved: &ledger::Resolved,
+) -> std::collections::BTreeSet<i64> {
+    rows.iter()
+        .filter(|r| resolved.excluded.contains(&r.0.to_string()))
+        .filter_map(|r| r.7)
+        .collect()
+}
+
+impl LedgerProblem {
+    /// `明細ID 12` / `月額固定の計上ID 3`, for messages.
+    pub fn label(&self) -> String {
+        match self.source.as_str() {
+            "fixed_cost" => format!("月額固定の計上ID {}", self.id),
+            _ => format!("明細ID {}", self.id),
+        }
+    }
+}
+
+fn ledger_review_error(field: &str, message: &str) -> BantoError {
+    BantoError::Validation {
+        field_errors: vec![field_error(field, message)],
+    }
 }
 
 fn validation(errors: Vec<FieldError>) -> Result<(), BantoError> {
@@ -1575,8 +1812,9 @@ impl DirectCostsService {
             cost.booked_on.clone(),
             cost.amount,
         );
-        let candidate = ledger_entry(&candidate_row)
-            .ok_or_else(|| BantoError::Other(format!("直接費 {id} を台帳に変換できません")))?;
+        let candidate = ledger_entry(&candidate_row).map_err(|column| {
+            BantoError::Other(format!("直接費 {id} を台帳に変換できません（{column}）"))
+        })?;
         let candidate_allocs: Vec<Allocation> = cost
             .allocations
             .iter()
@@ -1623,7 +1861,32 @@ impl DirectCostsService {
                 let others: Vec<LedgerRow> = rows.into_iter().filter(|r| r.0 != id).collect();
                 let other_allocs: Vec<(i64, i64, i64)> =
                     allocs.into_iter().filter(|a| a.0 != id).collect();
-                let (entries, allocations) = ledger_of(&others, &other_allocs);
+                // Records left out for review (T39) do not block unrelated
+                // approvals; one this record would build on does.
+                let resolved = resolve_rows(&others, &other_allocs);
+                if ref_id.is_some_and(|r| resolved.excluded.contains(&r.to_string())) {
+                    return Err(ledger_review_error(
+                        "refId",
+                        "元の明細が直接費の台帳で要確認のため承認できません",
+                    ));
+                }
+                if order_id.is_some_and(|o| excluded_orders(&others, &resolved).contains(&o)) {
+                    return Err(ledger_review_error(
+                        "purchaseOrderId",
+                        "この発注の承認済み明細に直接費の台帳で要確認のものがあるため承認できません",
+                    ));
+                }
+                let input = ledger_of(&others, &other_allocs);
+                let entries: Vec<CostEntry> = input
+                    .entries
+                    .into_iter()
+                    .filter(|e| !resolved.excluded.contains(&e.id))
+                    .collect();
+                let allocations: Vec<Allocation> = input
+                    .allocations
+                    .into_iter()
+                    .filter(|a| !resolved.excluded.contains(&a.source_id))
+                    .collect();
                 // The order the record (or its original) realizes.
                 let terms = match order_id {
                     Some(o) => {
@@ -1660,18 +1923,6 @@ impl DirectCostsService {
         self.get(id).await
     }
 
-    /// Every approved record as ledger postings (company-wide).
-    pub async fn postings(&self) -> Result<Vec<Posting>, BantoError> {
-        let sql = LEDGER_SQL.to_string();
-        let asql = LEDGER_ALLOC_SQL.to_string();
-        let rows: Vec<LedgerRow> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
-        let allocs: Vec<(i64, i64, i64)> = on_pool!(&self.db, pool => fetch_all!(pool, asql))?;
-        let (entries, allocations) = ledger_of(&rows, &allocs);
-        ledger::postings(&entries, &allocations).map_err(|issues| {
-            BantoError::Other(format!("直接費の台帳に不整合があります: {issues:?}"))
-        })
-    }
-
     /// The approved ledger read once, for computing several as-of views of
     /// it in memory ([`Ledger::until`]) without reading the company ledger
     /// again per project (the overall list).
@@ -1680,14 +1931,23 @@ impl DirectCostsService {
         let asql = LEDGER_ALLOC_SQL.to_string();
         let rows: Vec<LedgerRow> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
         let allocs: Vec<(i64, i64, i64)> = on_pool!(&self.db, pool => fetch_all!(pool, asql))?;
-        let (entries, allocations) = ledger_of(&rows, &allocs);
-        let all = ledger::postings(&entries, &allocations).map_err(|issues| {
-            BantoError::Other(format!("直接費の台帳に不整合があります: {issues:?}"))
-        })?;
+        // Unreadable or inconsistent records are left out with their chain
+        // and reported; only the projects they land on wait for review (T39).
+        let resolved = resolve_rows(&rows, &allocs);
+        let problems = problems_of(&rows, &allocs, &resolved);
+        let review = resolved
+            .review_projects
+            .iter()
+            .filter_map(|p| p.parse::<i64>().ok())
+            .collect();
         Ok(Ledger {
             rows,
             allocs,
-            all,
+            all: resolved.postings,
+            excluded: resolved.excluded,
+            review,
+            review_all: resolved.unattributed,
+            problems,
             cache: std::sync::Mutex::new(BTreeMap::new()),
         })
     }
@@ -1733,10 +1993,11 @@ impl DirectCostsService {
     /// What the budget comparison needs: approved actuals by phase × cost
     /// type, and whether they are final.
     pub async fn project_actuals(&self, project_id: i64) -> Result<ProjectActuals, BantoError> {
-        let postings = self.postings().await?;
+        let ledger = self.ledger().await?;
+        ledger.check(project_id)?;
         let (pending, provisional) = self.tallies(project_id).await?;
         Ok(ProjectActuals {
-            by_key: project_actuals(&postings, &project_id.to_string()),
+            by_key: project_actuals(ledger.all(), &project_id.to_string()),
             complete: pending.count == 0 && provisional.count == 0,
         })
     }
@@ -1753,6 +2014,7 @@ impl DirectCostsService {
         until: Date,
         ledger: &Ledger,
     ) -> Result<CostSnapshot, BantoError> {
+        ledger.check(project_id)?;
         let until_postings = ledger.until(until)?;
         let postings = ledger.all();
         let key = project_id.to_string();
@@ -1831,6 +2093,7 @@ impl DirectCostsService {
             .map(|c| scoped_to(c, project_id))
             .collect();
         let ledger = self.ledger().await?;
+        ledger.check(project_id)?;
         let postings = ledger.all().to_vec();
         let key = project_id.to_string();
         let cal = crate::business_date::FISCAL;
@@ -2007,8 +2270,9 @@ impl DirectCostsService {
     /// One order with its remainder. The wiring authorizes against its project.
     pub async fn order(&self, id: i64) -> Result<PurchaseOrderView, BantoError> {
         let row = self.order_row(id).await?;
-        let postings = self.postings().await?;
-        Ok(self.order_views(vec![row], &postings).await?.remove(0))
+        let ledger = self.ledger().await?;
+        ledger.check(row.project_id)?;
+        Ok(self.order_views(vec![row], ledger.all()).await?.remove(0))
     }
 
     async fn order_by_request(
@@ -2243,10 +2507,16 @@ impl DirectCostsService {
             refuse_settled!(&mut *tx, settled, project_id, "projectId", SETTLED_MESSAGE);
             let rows: Vec<LedgerRow> = fetch_all!(&mut *tx, ledger_sql)?;
             let allocs: Vec<(i64, i64, i64)> = fetch_all!(&mut *tx, alloc_sql)?;
-            let (entries, allocations) = ledger_of(&rows, &allocs);
-            let posted = ledger::postings(&entries, &allocations).map_err(|issues| {
-                BantoError::Other(format!("直接費の台帳に不整合があります: {issues:?}"))
-            })?;
+            // The order's remainder cannot be settled while one of its
+            // records is left out for review (T39).
+            let resolved = resolve_rows(&rows, &allocs);
+            if excluded_orders(&rows, &resolved).contains(&id) {
+                return Err(ledger_review_error(
+                    "amount",
+                    "この発注の承認済み明細に直接費の台帳で要確認のものがあるため変更できません",
+                ));
+            }
+            let posted = resolved.postings;
             let next = if is_cancel {
                 check_cancel(terms, &posted, &key, input.amount)
             } else {
@@ -2533,7 +2803,14 @@ pub(crate) mod tests {
         assert!(pb.entries[0].allocations.iter().all(|x| x.project_id == b));
         assert_eq!(pb.entries[0].id, c.id);
         // The postings total the original once.
-        let all: i64 = svc.postings().await.unwrap().iter().map(|p| p.amount).sum();
+        let all: i64 = svc
+            .ledger()
+            .await
+            .unwrap()
+            .all()
+            .iter()
+            .map(|p| p.amount)
+            .sum();
         assert_eq!(all, 30_000);
         // A split record cannot be adjusted (cancel and split again).
         let err = svc
@@ -2552,6 +2829,229 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert_eq!(field_errors(err), vec!["refId"]);
+    }
+
+    #[test]
+    fn t39_an_adjustment_whose_original_cannot_be_told_holds_back_every_project() {
+        let row = |id: i64, kind: &str, ref_id: Option<i64>, project: Option<i64>| -> LedgerRow {
+            (
+                id,
+                kind.to_string(),
+                ref_id,
+                (kind == "adjustment").then(|| "return".to_string()),
+                project,
+                None,
+                "material".to_string(),
+                None,
+                "2026-11-20".to_string(),
+                1_000,
+            )
+        };
+        // An adjustment with neither its original nor its project readable,
+        // and one naming an original that is not in the ledger.
+        // A normal row's stray ref_id chains nothing: the record names only
+        // its own project, so a caller scoped to it sees the record.
+        let mut stray_ref = row(3, "normal", Some(99_999), Some(10));
+        stray_ref.8 = "2026-11-99".into();
+        let rows = vec![
+            row(1, "normal", None, Some(10)),
+            row(99_999, "normal", None, Some(20)),
+            stray_ref,
+        ];
+        let resolved = resolve_rows(&rows, &[]);
+        assert!(!resolved.is_clean("10") && resolved.is_clean("20"));
+        let problems = problems_of(&rows, &[], &resolved);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].project_ids, vec![10]);
+        // A normal row with no project and an unreadable date belongs to no
+        // original: it is reported, and no project waits for it.
+        let mut stray = row(3, "normal", None, None);
+        stray.8 = "2026-11-99".into();
+        let rows = vec![row(1, "normal", None, Some(10)), stray];
+        let resolved = resolve_rows(&rows, &[]);
+        assert!(!resolved.unattributed);
+        assert!(resolved.is_clean("10"));
+        assert_eq!(problems_of(&rows, &[], &resolved).len(), 1);
+        for bad in [
+            row(3, "adjustment", None, None),
+            row(3, "adjustment", Some(99), None),
+            row(3, "bogus", None, None),
+        ] {
+            let rows = vec![
+                row(1, "normal", None, Some(10)),
+                row(2, "normal", None, Some(20)),
+                bad,
+            ];
+            let resolved = resolve_rows(&rows, &[]);
+            assert!(resolved.unattributed, "{:?}", rows[2]);
+            assert!(!resolved.is_clean("10") && !resolved.is_clean("20"));
+            let problems = problems_of(&rows, &[], &resolved);
+            assert_eq!(problems.len(), 1);
+            assert_eq!(problems[0].id, 3);
+            assert!(problems[0].project_ids.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn t39_an_unreadable_adjustment_without_a_project_is_shown_to_its_originals_scope() {
+        let db = fixture().await;
+        let svc = DirectCostsService::new(db.clone());
+        let a = ordered_project(&db, "P-D93").await;
+        let b = ordered_project(&db, "P-D94").await;
+        let original = approved(&svc, cost(a, "material", 100_000)).await;
+        approved(&svc, cost(b, "material", 50_000)).await;
+        let ret = approved(
+            &svc,
+            DirectCostInput {
+                entry_kind: Some("adjustment".into()),
+                adjustment_kind: Some("return".into()),
+                ref_id: Some(original.id),
+                booked_on: "2026-11-25".into(),
+                amount: 10_000,
+                reason: Some("返品".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        // The adjustment loses its own project and its date.
+        let sql = placeholders(
+            db.dialect(),
+            "UPDATE direct_costs SET project_id = NULL, booked_on = '2026-11-99' WHERE id = ?",
+        );
+        on_pool!(&db, pool => execute!(pool, sql, ret.id)).unwrap();
+
+        let ledger = svc.ledger().await.unwrap();
+        // Both records name A through the chain, and B is unaffected.
+        let ids: Vec<(i64, Vec<i64>)> = ledger
+            .problems()
+            .iter()
+            .map(|p| (p.id, p.project_ids.clone()))
+            .collect();
+        assert_eq!(ids, vec![(original.id, vec![a]), (ret.id, vec![a])]);
+        assert!(!ledger.is_clean(a) && ledger.is_clean(b));
+        // The error names the unreadable adjustment, not only the original.
+        let err = svc.project_costs(a).await.unwrap_err();
+        assert!(
+            matches!(&err, BantoError::Other(m) if m.contains(&format!("明細ID {}", ret.id))),
+            "{err:?}"
+        );
+        // A caller who sees only A's amounts sees both records.
+        let only_a = ProjectScope::Only([a].into());
+        let p = crate::portfolio::PortfolioService::new(db.clone())
+            .overview(&only_a, &only_a)
+            .await
+            .unwrap();
+        let listed: Vec<i64> = p.ledger_problems.iter().map(|p| p.id).collect();
+        assert_eq!(listed, vec![original.id, ret.id]);
+    }
+
+    #[tokio::test]
+    async fn t39_an_unreadable_row_is_reported_and_holds_back_only_its_project() {
+        let db = fixture().await;
+        let svc = DirectCostsService::new(db.clone());
+        let a = ordered_project(&db, "P-D91").await;
+        let b = ordered_project(&db, "P-D92").await;
+        let bad = approved(&svc, cost(a, "material", 100_000)).await;
+        approved(&svc, cost(a, "material", 20_000)).await;
+        approved(&svc, cost(b, "material", 50_000)).await;
+        let adjust = submitted(
+            &svc,
+            DirectCostInput {
+                entry_kind: Some("adjustment".into()),
+                adjustment_kind: Some("return".into()),
+                ref_id: Some(bad.id),
+                booked_on: "2026-11-25".into(),
+                amount: 10_000,
+                reason: Some("返品".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        // A hand-written SQL update leaves a date the ledger cannot read.
+        let sql = placeholders(
+            db.dialect(),
+            "UPDATE direct_costs SET booked_on = '2026-11-31' WHERE id = ?",
+        );
+        on_pool!(&db, pool => execute!(pool, sql, bad.id)).unwrap();
+
+        // Reported, not dropped: the row, its project and the column.
+        let ledger = svc.ledger().await.unwrap();
+        assert_eq!(
+            ledger.problems(),
+            [LedgerProblem {
+                source: "direct_cost".into(),
+                id: bad.id,
+                project_ids: vec![a],
+                code: "unreadable".into(),
+                column: Some("booked_on".into()),
+            }]
+        );
+        assert!(!ledger.is_clean(a));
+        assert!(ledger.is_clean(b));
+        // A's direct costs are not shown as the 20,000 left: they say so.
+        let err = svc.project_costs(a).await.unwrap_err();
+        assert!(
+            matches!(&err, BantoError::Other(m) if m.contains(&format!("明細ID {}", bad.id))),
+            "{err:?}"
+        );
+        assert!(svc.project_actuals(a).await.is_err());
+        // B is shown, and unrelated approvals go on.
+        assert_eq!(svc.project_costs(b).await.unwrap().total, 50_000);
+        approved(&svc, cost(b, "travel", 1_000)).await;
+        assert_eq!(svc.project_costs(b).await.unwrap().total, 51_000);
+        // An adjustment of the unreadable record is refused at approval.
+        let err = svc
+            .decide(&adjust, approve()(adjust.row_version), Some(1))
+            .await
+            .unwrap_err();
+        assert_eq!(field_errors(err), vec!["refId"]);
+
+        // The overall list marks A only, and lists the record.
+        let all = ProjectScope::All;
+        let p = crate::portfolio::PortfolioService::new(db.clone())
+            .overview(&all, &all)
+            .await
+            .unwrap();
+        let row = |id: i64| p.rows.iter().find(|r| r.project_id == id).unwrap();
+        assert_eq!(row(a).alerts, vec!["ledger_review".to_string()]);
+        assert_eq!(row(a).actual_cost, None);
+        assert_eq!(row(b).actual_cost, Some(51_000));
+        assert!(!row(b).alerts.contains(&"ledger_review".to_string()));
+        assert_eq!(p.ledger_problems.len(), 1);
+        let only_b = ProjectScope::Only([b].into());
+        let p = crate::portfolio::PortfolioService::new(db.clone())
+            .overview(&only_b, &only_b)
+            .await
+            .unwrap();
+        assert!(p.ledger_problems.is_empty());
+
+        // The month cannot be closed while a record waits for review.
+        let closing = crate::closing::ClosingService::new(db.clone());
+        let month = closing.get("2026-11").await.unwrap();
+        assert_eq!(month.ledger_review_entries, 1);
+        assert!(!month.can_close);
+        // Its figures would be short: they are not shown as settled.
+        assert_eq!(month.total, None);
+        let err = closing
+            .close(
+                "2026-11",
+                crate::closing::CloseInput {
+                    row_version: month.row_version,
+                },
+                Some(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(field_errors(err), vec!["status"]);
+
+        // Fixed, the project is back.
+        let sql = placeholders(
+            db.dialect(),
+            "UPDATE direct_costs SET booked_on = '2026-11-20' WHERE id = ?",
+        );
+        on_pool!(&db, pool => execute!(pool, sql, bad.id)).unwrap();
+        assert_eq!(svc.project_costs(a).await.unwrap().total, 120_000);
+        assert!(svc.ledger().await.unwrap().problems().is_empty());
     }
 
     #[tokio::test]

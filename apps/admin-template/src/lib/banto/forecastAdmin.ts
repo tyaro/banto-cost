@@ -203,6 +203,20 @@ export interface Portfolio {
 	lowMarginPct: number | null;
 	rows: PortfolioRow[];
 	totals: PortfolioTotals;
+	/** Approved direct-cost records left out of the ledger for review (T39). */
+	ledgerProblems: LedgerProblem[];
+}
+
+/** Mirrors `admin_template_core::direct_costs::LedgerProblem`. */
+export interface LedgerProblem {
+	/** `direct_cost` | `fixed_cost`. */
+	source: string;
+	id: number;
+	projectIds: number[];
+	/** `unreadable` | a `LedgerIssue` code | `related`. */
+	code: string;
+	/** The unreadable column when `code` is `unreadable`. */
+	column: string | null;
 }
 
 function guard(): void {

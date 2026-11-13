@@ -205,12 +205,19 @@ pub struct MonthClosing {
     pub row_version: i64,
     pub unapproved_time_entries: usize,
     pub unapproved_costs: usize,
-    /// Unapproved records block the close.
+    /// Approved direct-cost records left out of the ledger for review
+    /// (company-wide, T39): they block the close too.
+    pub ledger_review_entries: usize,
+    /// Unapproved records and records to review block the close.
     pub can_close: bool,
     pub warnings: Vec<WarningView>,
-    /// The month's figures now (all projects).
-    pub total: FiguresView,
+    /// The month's figures now (all projects). `None` while a direct-cost
+    /// record waits for review (T39): the ledger leaves it out, so the
+    /// figures would be short, and they are not shown as settled.
+    pub total: Option<FiguresView>,
     pub history: Vec<ClosingEvent>,
+    /// The latest close against now; `None` without a close, or while a
+    /// record waits for review (the current side would be short, T39).
     pub comparison: Option<Comparison>,
 }
 
@@ -453,6 +460,15 @@ impl ClosingService {
             .collect())
     }
 
+    /// Approved direct-cost records left out of the ledger (T39).
+    async fn ledger_review_entries(&self) -> Result<usize, BantoError> {
+        Ok(DirectCostsService::new(self.db.clone())
+            .ledger()
+            .await?
+            .problems()
+            .len())
+    }
+
     async fn project_labels(&self) -> Result<BTreeMap<i64, (String, String)>, BantoError> {
         let sql = "SELECT id, code, name FROM projects".to_string();
         let rows: Vec<(i64, String, String)> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
@@ -478,6 +494,7 @@ impl ClosingService {
             unposted_fixed_costs: crate::fixed_costs::unposted_count(&self.db, m).await?,
             unrecognized_recurring: crate::recurring_revenue::unrecognized_count(&self.db, m)
                 .await?,
+            ledger_review_entries: self.ledger_review_entries().await?,
         };
         let current = self.figures(m).await?;
         let total = |f: &BTreeMap<i64, MonthFigures>| {
@@ -490,8 +507,10 @@ impl ClosingService {
                 })
         };
         let history = self.history(&key).await?;
+        let settled = state.ledger_review_entries == 0;
         let comparison = match history.iter().find(|e| e.action == "close") {
             None => None,
+            Some(_) if !settled => None,
             Some(e) => {
                 let at = self.snapshot(e.id).await?;
                 let labels = self.project_labels().await?;
@@ -527,9 +546,11 @@ impl ClosingService {
             row_version,
             unapproved_time_entries: state.unapproved_time_entries,
             unapproved_costs: state.unapproved_costs,
+            ledger_review_entries: state.ledger_review_entries,
             can_close: status != MonthStatus::Closed
                 && state.unapproved_time_entries == 0
-                && state.unapproved_costs == 0,
+                && state.unapproved_costs == 0
+                && state.ledger_review_entries == 0,
             warnings: warnings(&state)
                 .iter()
                 .map(|w| WarningView {
@@ -537,7 +558,7 @@ impl ClosingService {
                     count: w.count(),
                 })
                 .collect(),
-            total: total(&current).into(),
+            total: settled.then(|| total(&current).into()),
             history,
             comparison,
         })
@@ -567,6 +588,10 @@ impl ClosingService {
         let un: Vec<String> = UNAPPROVED_SQL.iter().map(|s| self.sql(s)).collect();
         let (before, _) = on_pool!(&self.db, pool => month_reads!(pool, fp, un, &from, &to));
         let figures = self.figures(m).await?;
+        // The ledger is read again in the close's transaction, so a record
+        // approved or written after the figures cannot slip past (T39).
+        let ledger_sql = crate::direct_costs::LEDGER_SQL.to_string();
+        let ledger_alloc_sql = crate::direct_costs::LEDGER_ALLOC_SQL.to_string();
         let gate = MonthGate::new(self.db.dialect());
         let lock = self.lock_sql();
         let set = self.sql(&format!(
@@ -594,12 +619,27 @@ impl ClosingService {
             let state = MonthState {
                 unapproved_time_entries: count(time),
                 unapproved_costs: count(costs),
+                ledger_review_entries: {
+                    let rows: Vec<crate::direct_costs::LedgerRow> =
+                        fetch_all!(&mut *tx, ledger_sql)?;
+                    let allocs: Vec<(i64, i64, i64)> = fetch_all!(&mut *tx, ledger_alloc_sql)?;
+                    crate::direct_costs::problem_count(&rows, &allocs)
+                },
                 ..Default::default()
             };
             match check_close(status, &state) {
                 Ok(_) => {}
                 Err(CloseIssue::AlreadyClosed) => {
                     return Err(validation("status", "この月は既に締め済みです"));
+                }
+                Err(CloseIssue::LedgerReview { entries }) => {
+                    return Err(validation(
+                        "status",
+                        format!(
+                            "直接費の台帳に要確認の明細が{entries}件あり、月の直接費を確定できません。\
+                             全体一覧の「直接費の台帳の要確認」を直してから締めてください"
+                        ),
+                    ));
                 }
                 Err(CloseIssue::Unapproved { time_entries, costs }) => {
                     return Err(validation(
@@ -753,7 +793,7 @@ mod tests {
             .unwrap();
         assert_eq!(closed.status, "closed");
         assert_eq!(closed.history[0].action, "close");
-        assert_eq!(closed.total.labor_cost, 3_000);
+        assert_eq!(closed.total.unwrap().labor_cost, 3_000);
         let err = time.create(1, hours("2026-10-07", p)).await.unwrap_err();
         assert_eq!(fields(err)[0].0, "workDate");
         assert!(
@@ -916,7 +956,7 @@ mod tests {
             .close("2026-10", CloseInput { row_version: 1 }, Some(1))
             .await
             .unwrap();
-        assert_eq!(closed.total.direct_cost, 300_000);
+        assert_eq!(closed.total.unwrap().direct_cost, 300_000);
 
         // The invoice (320,000) is booked in November (翌月調整): October
         // keeps the provisional, November carries only the difference.
@@ -933,9 +973,12 @@ mod tests {
         )
         .await;
         let oct = svc.get("2026-10").await.unwrap();
-        assert_eq!(oct.total.direct_cost, 300_000);
+        assert_eq!(oct.total.unwrap().direct_cost, 300_000);
         assert!(oct.comparison.unwrap().changed.is_empty());
-        assert_eq!(svc.get("2026-11").await.unwrap().total.direct_cost, 20_000);
+        assert_eq!(
+            svc.get("2026-11").await.unwrap().total.unwrap().direct_cost,
+            20_000
+        );
     }
 
     #[tokio::test]

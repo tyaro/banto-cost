@@ -328,6 +328,206 @@ pub fn postings<'a>(
     }
 }
 
+impl LedgerIssue {
+    /// 不整合の原因になった記録（配分の不整合は元費用）。系列ごと外す起点にする（T39）。
+    pub fn subject(&self) -> &str {
+        match self {
+            Self::InvalidAmount { id }
+            | Self::DuplicateId { id }
+            | Self::InvalidTarget { id, .. }
+            | Self::Unassigned { id } => id,
+            Self::UnknownReference { id, target } => {
+                if id.starts_with("allocation:") {
+                    target
+                } else {
+                    id
+                }
+            }
+            Self::ProvisionalConfirmedTwice { provisional_id } => provisional_id,
+            Self::AdjustmentExceedsOriginal { target, .. } => target,
+            Self::AllocationMismatch { source_id, .. }
+            | Self::AllocationOfInvalidSource { source_id } => source_id,
+        }
+    }
+
+    /// 画面・API で使う不整合の種類。
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidAmount { .. } => "invalid_amount",
+            Self::DuplicateId { .. } => "duplicate_id",
+            Self::UnknownReference { .. } => "unknown_reference",
+            Self::InvalidTarget { .. } => "invalid_target",
+            Self::ProvisionalConfirmedTwice { .. } => "confirmed_twice",
+            Self::AdjustmentExceedsOriginal { .. } => "adjustment_exceeds_original",
+            Self::AllocationMismatch { .. } => "allocation_mismatch",
+            Self::AllocationOfInvalidSource { .. } => "allocation_of_invalid_source",
+            Self::Unassigned { .. } => "unassigned",
+        }
+    }
+}
+
+/// 台帳に渡せなかった記録（種別・費目・管理計上日などが読めない行）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreadable {
+    pub id: String,
+    /// 行に書かれた案件（読めれば）。
+    pub project: Option<String>,
+    /// 行に書かれた参照先（確定・調整の元明細。読めれば）。
+    pub refers_to: Option<String>,
+    /// 確定・調整の行、または種別が読めない行（元明細に帰属するかもしれない）。種別が読めて
+    /// 通常・仮計上なら `false`。
+    pub may_refer: bool,
+}
+
+/// 要確認の記録を系列ごと外して解決した台帳（T39）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Resolved {
+    /// 外した記録を除いた計上行。
+    pub postings: Vec<Posting>,
+    /// 見つかった不整合（読めない行は含まない）。
+    pub issues: Vec<LedgerIssue>,
+    /// 外した記録：読めない行・不整合の記録と、参照（確定・調整）でつながる同じ系列の記録。
+    pub excluded: BTreeSet<String>,
+    /// 外した記録が帰属・配分される案件。これらの案件の直接費は確定できない（要確認）。
+    pub review_projects: BTreeSet<String>,
+    /// 帰属先の案件を特定できない確定・調整（または読めない行）を外した。元明細がどの案件の
+    /// ものか分からないので、すべての案件を要確認にする。
+    pub unattributed: bool,
+}
+
+impl Resolved {
+    /// 案件の直接費を確定できるか（外した記録が帰属・配分されておらず、帰属先の分からない
+    /// 確定・調整もない）。
+    pub fn is_clean(&self, project: &str) -> bool {
+        !self.unattributed && !self.review_projects.contains(project)
+    }
+}
+
+/// 台帳を解決する。[`postings`] と違い、不整合や読めない行があっても全体を止めない：
+/// その記録を参照でつながる系列ごと外して残りを計上し、外した記録の案件を要確認として返す。
+/// 読めない行を黙って落とさない（T39）。
+pub fn resolve(
+    entries: &[CostEntry],
+    allocations: &[Allocation],
+    unreadable: &[Unreadable],
+) -> Resolved {
+    // 参照（確定・調整 → 元明細）を無向の辺にする。系列は連結成分。
+    let mut links: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let refs = entries
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntryKind::Confirms { provisional_id: t }
+            | EntryKind::Adjustment { corrects_id: t, .. } => Some((e.id.as_str(), t.as_str())),
+            _ => None,
+        })
+        .chain(
+            unreadable
+                .iter()
+                .filter_map(|u| u.refers_to.as_deref().map(|t| (u.id.as_str(), t))),
+        );
+    for (a, b) in refs {
+        links.entry(a).or_default().push(b);
+        links.entry(b).or_default().push(a);
+    }
+    let close = |excluded: &mut BTreeSet<String>| {
+        let mut stack: Vec<String> = excluded.iter().cloned().collect();
+        while let Some(id) = stack.pop() {
+            for next in links.get(id.as_str()).into_iter().flatten() {
+                if excluded.insert((*next).to_string()) {
+                    stack.push((*next).to_string());
+                }
+            }
+        }
+    };
+
+    let mut excluded: BTreeSet<String> = unreadable.iter().map(|u| u.id.clone()).collect();
+    let mut issues = Vec::new();
+    let mut out = Vec::new();
+    // 1回ごとに少なくとも1件外れるので、記録数＋配分元の数で必ず終わる。
+    for _ in 0..=entries.len() + allocations.len() + 1 {
+        close(&mut excluded);
+        let kept: Vec<CostEntry> = entries
+            .iter()
+            .filter(|e| !excluded.contains(&e.id))
+            .cloned()
+            .collect();
+        let kept_allocs: Vec<Allocation> = allocations
+            .iter()
+            .filter(|a| !excluded.contains(&a.source_id))
+            .cloned()
+            .collect();
+        match postings(&kept, &kept_allocs) {
+            Ok(p) => {
+                out = p;
+                break;
+            }
+            Err(found) => {
+                let before = excluded.len();
+                excluded.extend(found.iter().map(|i| i.subject().to_string()));
+                issues.extend(found);
+                if excluded.len() == before {
+                    // 起点が増えない不整合（想定外）は、台帳全体を要確認にする。
+                    excluded.extend(entries.iter().map(|e| e.id.clone()));
+                    excluded.extend(allocations.iter().map(|a| a.source_id.clone()));
+                }
+            }
+        }
+    }
+
+    let mut review_projects = BTreeSet::new();
+    for e in entries.iter().filter(|e| excluded.contains(&e.id)) {
+        review_projects.extend(e.project.clone());
+    }
+    for u in unreadable {
+        review_projects.extend(u.project.clone());
+    }
+    for a in allocations
+        .iter()
+        .filter(|a| excluded.contains(&a.source_id))
+    {
+        review_projects.insert(a.project.clone());
+    }
+
+    // 外した系列のうち、確定・調整（または種別の読めない行）を含むのに、どの記録にも案件・配分
+    // がないもの：参照先が読めない・存在しないため元明細の案件が分からない。どの案件の原価が
+    // 欠けたか特定できないので、すべての案件を要確認にする。
+    let has_project = |id: &str| {
+        entries.iter().any(|e| e.id == id && e.project.is_some())
+            || unreadable.iter().any(|u| u.id == id && u.project.is_some())
+            || allocations.iter().any(|a| a.source_id == id)
+    };
+    let refers = |id: &str| {
+        unreadable.iter().any(|u| u.id == id && u.may_refer)
+            || entries.iter().any(|e| {
+                e.id == id
+                    && matches!(
+                        e.kind,
+                        EntryKind::Confirms { .. } | EntryKind::Adjustment { .. }
+                    )
+            })
+    };
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut unattributed = false;
+    for start in &excluded {
+        if seen.contains(start) {
+            continue;
+        }
+        let mut family = BTreeSet::from([start.clone()]);
+        close(&mut family);
+        if family.iter().any(|id| refers(id)) && !family.iter().any(|id| has_project(id)) {
+            unattributed = true;
+        }
+        seen.extend(family);
+    }
+    Resolved {
+        postings: out,
+        issues,
+        excluded,
+        review_projects,
+        unattributed,
+    }
+}
+
 /// 案件の原価集計（当月・当期・案件累計）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CostSummary {
@@ -627,5 +827,160 @@ mod tests {
         assert_eq!(period_total, line_total);
         assert_eq!(s.cumulative.total(), line_total);
         assert_eq!(s.cumulative.material, 190_000);
+    }
+
+    #[test]
+    fn t39_問題がなければ台帳の計上行と同じで要確認なし() {
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            adjust("R1", "M1", "2026-11-20", 10_000, AdjustmentKind::Return),
+        ];
+        let r = resolve(&entries, &[], &[]);
+        assert_eq!(r.postings, postings(&entries, &[]).unwrap());
+        assert!(r.excluded.is_empty() && r.review_projects.is_empty() && r.issues.is_empty());
+        assert!(r.is_clean("P-A"));
+    }
+
+    #[test]
+    fn t39_読めない行は落とさず系列ごと外してその案件だけ要確認にする() {
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            // 読めない調整 X9 が M1 を参照している。
+            entry("M2", Some("P-B"), CostType::Material, "2026-11-05", 50_000),
+        ];
+        let unreadable = [Unreadable {
+            id: "X9".into(),
+            project: None,
+            refers_to: Some("M1".into()),
+            may_refer: true,
+        }];
+        let r = resolve(&entries, &[], &unreadable);
+        // M1 は X9 と同じ系列なので外し、P-A は要確認。P-B はそのまま計上する。
+        assert_eq!(
+            r.excluded,
+            ["M1", "X9"].into_iter().map(String::from).collect()
+        );
+        assert!(!r.is_clean("P-A"));
+        assert!(r.is_clean("P-B"));
+        assert_eq!(total_of(&r.postings, "P-B"), 50_000);
+        assert_eq!(total_of(&r.postings, "P-A"), 0);
+    }
+
+    #[test]
+    fn t39_不整合は全体を止めず配分先の案件も要確認にする() {
+        let entries = [
+            entry("E1", None, CostType::Travel, "2026-12-10", 30_000),
+            entry("M1", Some("P-C"), CostType::Material, "2026-11-05", 100_000),
+            adjust("R1", "M1", "2026-11-20", 120_000, AdjustmentKind::Return),
+            entry("M2", Some("P-D"), CostType::Material, "2026-11-05", 70_000),
+        ];
+        // 配分の合計が元費用と合わない。
+        let allocs = [alloc("E1", "P-A", 18_000), alloc("E1", "P-B", 10_000)];
+        assert!(postings(&entries, &allocs).is_err());
+        let r = resolve(&entries, &allocs, &[]);
+        assert_eq!(
+            r.review_projects,
+            ["P-A", "P-B", "P-C"]
+                .into_iter()
+                .map(String::from)
+                .collect()
+        );
+        assert_eq!(
+            r.excluded,
+            ["E1", "M1", "R1"].into_iter().map(String::from).collect()
+        );
+        assert_eq!(total_of(&r.postings, "P-D"), 70_000);
+        assert_eq!(r.postings.len(), 1);
+        assert!(r.issues.iter().any(|i| i.code() == "allocation_mismatch"));
+        assert!(r
+            .issues
+            .iter()
+            .any(|i| i.code() == "adjustment_exceeds_original"));
+    }
+
+    #[test]
+    fn t39_外した結果で参照先を失う記録も同じ系列として外す() {
+        let mut prov = entry(
+            "V1",
+            Some("P-A"),
+            CostType::Outsource,
+            "2026-11-30",
+            300_000,
+        );
+        prov.kind = EntryKind::Provisional;
+        let mut conf = entry("F1", None, CostType::Outsource, "2026-12-05", 280_000);
+        conf.kind = EntryKind::Confirms {
+            provisional_id: "V1".into(),
+        };
+        // 確定 F1 への調整が元明細を超える → V1・F1・R1 の系列ごと外す。
+        let entries = [
+            prov,
+            conf,
+            adjust("R1", "F1", "2026-12-10", 300_000, AdjustmentKind::Discount),
+            entry("N1", None, CostType::Material, "2026-12-01", 1_000),
+        ];
+        let r = resolve(&entries, &[], &[]);
+        assert!(r.excluded.contains("V1") && r.excluded.contains("F1"));
+        assert!(r.excluded.contains("R1"));
+        // 案件のない N1 は外すが、どの案件も要確認にはならない（一覧で報告する）。
+        assert!(r.excluded.contains("N1"));
+        assert_eq!(
+            r.review_projects,
+            ["P-A"].into_iter().map(String::from).collect()
+        );
+        assert!(r.postings.is_empty());
+    }
+
+    #[test]
+    fn t39_参照先が読めず案件もない調整はすべての案件を要確認にする() {
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            entry("M2", Some("P-B"), CostType::Material, "2026-11-05", 50_000),
+        ];
+        // 読めない行：案件も参照先も読めない（M1 の調整だったかもしれない）。
+        let unreadable = [Unreadable {
+            id: "X9".into(),
+            project: None,
+            refers_to: None,
+            may_refer: true,
+        }];
+        let r = resolve(&entries, &[], &unreadable);
+        assert!(r.unattributed);
+        assert!(!r.is_clean("P-A"));
+        assert!(!r.is_clean("P-B"));
+        // 通常の明細と読めた行は、案件がなくても元明細に帰属しないので、全体は要確認にしない。
+        let unreadable = [Unreadable {
+            id: "X9".into(),
+            project: None,
+            refers_to: None,
+            may_refer: false,
+        }];
+        let r = resolve(&entries, &[], &unreadable);
+        assert!(r.excluded.contains("X9"));
+        assert!(!r.unattributed);
+        assert!(r.is_clean("P-A") && r.is_clean("P-B"));
+    }
+
+    #[test]
+    fn t39_存在しない元明細を参照する案件なしの調整はすべての案件を要確認にする() {
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            adjust("R1", "GONE", "2026-11-20", 10_000, AdjustmentKind::Return),
+        ];
+        let r = resolve(&entries, &[], &[]);
+        assert!(r.excluded.contains("R1"));
+        assert!(r.unattributed);
+        assert!(!r.is_clean("P-A"));
+        // 案件のある系列の不整合や、案件のない通常の明細だけなら、全体は要確認にしない。
+        let entries = [
+            entry("M1", Some("P-A"), CostType::Material, "2026-11-05", 100_000),
+            entry("N1", None, CostType::Material, "2026-12-01", 1_000),
+            entry("M2", Some("P-B"), CostType::Material, "2026-11-05", 1_000),
+            adjust("R2", "M2", "2026-11-20", 5_000, AdjustmentKind::Return),
+        ];
+        let r = resolve(&entries, &[], &[]);
+        assert!(!r.unattributed);
+        assert!(r.is_clean("P-A"));
+        assert!(!r.is_clean("P-B"));
     }
 }
