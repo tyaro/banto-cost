@@ -293,7 +293,7 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 		const row = page.getByRole('row', { name: new RegExp(COST_NOTE) });
 		await expect(row).toContainText('下書き');
 		const before = await expectedCounts(page, month, previousOf(month));
-		await page.getByRole('button', { name: /この月の下書きを申請/ }).click();
+		await page.getByRole('button', { name: /^この月の下書きを申請（\d+件）$/ }).click();
 		await expect(row).toContainText('申請中');
 
 		// P8g §8-10: the dashboard counts it, and the tile leads to the list.

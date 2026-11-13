@@ -5311,6 +5311,37 @@ async fn t05_t12_t14_rest_direct_costs_and_orders_follow_scope_and_do_not_double
     assert_eq!(revised["remaining"], 0);
     assert_eq!(revised["changes"][0]["reason"], "残りは不要");
 
+    // The owner's list says whether a draft could be approved by the owner
+    // too (review U-2: 申請して承認): the manager may, on their project.
+    // Approved records carry no such flag.
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/direct-costs",
+            &editor,
+            json!({ "projectId": id, "costType": "travel", "bookedOn": "2026-11-20", "amount": 1_000 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let draft = body_json(response).await["cost"]["id"].as_i64().unwrap();
+    let response = router
+        .clone()
+        .oneshot(get_auth(
+            "/api/direct-costs?from=2026-11-01&to=2026-11-30",
+            &editor,
+        ))
+        .await
+        .unwrap();
+    let own = body_json(response).await;
+    for row in own.as_array().unwrap() {
+        if row["id"] == draft {
+            assert_eq!(row["canApprove"], true, "{own}");
+        } else {
+            assert!(row.get("canApprove").is_none(), "{own}");
+        }
+    }
+
     // Audit: approvals carry the self-approval flag and no amounts.
     let writes: Vec<_> = audit
         .list(ListParams::default())

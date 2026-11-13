@@ -18,7 +18,7 @@ use serde_json::json;
 
 use super::Gate;
 use crate::approval::APPROVAL_POLICY;
-use crate::cost_access::{approve_ops, entry_ops, order_create_op, own_ops};
+use crate::cost_access::{approve_ops, entry_ops, order_create_op, own_ops, shown_own};
 use crate::direct_costs::{
     DirectCost, DirectCostInput, DirectCostSaved, DirectCostsService, OrderRevisionInput,
     ProjectCosts, PurchaseOrderInput, PurchaseOrderSaved, PurchaseOrderView, ORDER_RESOURCE,
@@ -44,15 +44,17 @@ async fn own_cost(
     Ok((cost, user_id))
 }
 
-/// The caller's own records in `from..=to`.
+/// The caller's own records in `from..=to`; drafts and returned records
+/// carry `canApprove` (`cost_access::shown_own`).
 pub async fn list_own(
     gate: &Gate<'_>,
     costs: &DirectCostsService,
     from: &str,
     to: &str,
 ) -> Result<Vec<DirectCost>, BantoError> {
-    gate.check(Operation::ViewMasters, RESOURCE).await?;
-    costs.list_own(gate.person()?, from, to).await
+    let subject = gate.check(Operation::ViewMasters, RESOURCE).await?;
+    let rows = costs.list_own(gate.person()?, from, to).await?;
+    Ok(rows.into_iter().map(|c| shown_own(&subject, c)).collect())
 }
 
 pub async fn create(

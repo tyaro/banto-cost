@@ -7,10 +7,11 @@
 //! A record lands on its project, or on each project it is split over, so
 //! every one of them must allow the operation (T10, T12).
 
-use banto_admin_services::authz::Operation;
+use banto_admin_services::authz::{authorize, Operation, Subject};
 use banto_core::BantoError;
 use cost_domain::direct_cost::RecordKind;
 
+use crate::approval::APPROVAL_POLICY;
 use crate::customers::field_error;
 use crate::direct_costs::{DirectCost, DirectCostInput, DirectCostsService};
 
@@ -86,6 +87,25 @@ pub fn approve_ops(cost: &DirectCost) -> Vec<Operation> {
             submitted_by: cost.user_id,
         })
         .collect()
+}
+
+/// One of the caller's own records for their list: for a draft or returned
+/// record, whether the caller may approve it once submitted - the same
+/// decision the approval makes (`approve_ops` with `APPROVAL_POLICY`, every
+/// project allowing it), so 申請して承認 is offered only when it would pass
+/// (review U-2, as `time_access::shown_own`). The role check stays with the
+/// approval itself.
+pub fn shown_own(subject: &Subject, mut cost: DirectCost) -> DirectCost {
+    if matches!(cost.status.as_str(), "draft" | "returned") {
+        let ops = approve_ops(&cost);
+        cost.can_approve = Some(
+            !ops.is_empty()
+                && ops
+                    .into_iter()
+                    .all(|op| authorize(subject, op, APPROVAL_POLICY).is_ok()),
+        );
+    }
+    cost
 }
 
 /// The order-registration decision for a create input naming `project_id`.
