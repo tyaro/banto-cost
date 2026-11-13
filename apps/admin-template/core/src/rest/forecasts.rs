@@ -1,9 +1,9 @@
 //! `/api/projects/{id}/forecast*`, `/api/forecast-versions/*` and
 //! `/api/portfolio`, `/api/projects/{id}/summary` (banto-cost P5, spec §6.6・§9,
 //! T06・T28・T30). The Tauri twins are the `project_forecast` /
-//! `forecast_draft_*` / `portfolio_overview` / `project_summary` commands in `src-tauri`; both sides authorize through
-//! `AuthzService::authorize_audited` with the same `Operation`s (ADR-0028,
-//! conventions §1).
+//! `forecast_draft_*` / `portfolio_overview` / `project_summary` commands in `src-tauri`; both sides call the same
+//! authorized operation in `crate::ops::forecasts` (decision, service, audit;
+//! review §8-13, ADR-0028, conventions §1).
 //!
 //! | Route | Decision |
 //! |-------|----------|
@@ -16,18 +16,17 @@
 //! Audit details carry the project, version number, status, base date and
 //! line count, never amounts (`ForecastVersion::audit_detail`).
 
-use super::projects::{is_admin, BusinessServices, BusinessState};
+use super::projects::{BusinessServices, BusinessState};
 use super::*;
 use axum::extract::Query;
 use axum::Extension;
-use banto_admin_services::authz::{amount_projects, visible_projects, Operation, ProjectScope};
 use banto_server::AuthenticatedSession;
 
-use crate::approval::APPROVAL_POLICY;
 use crate::forecasts::{
     ForecastDraftCreated, ForecastDraftInput, ForecastOverview, ForecastVersion,
-    ForecastVersionInput, RESOURCE,
+    ForecastVersionInput,
 };
+use crate::ops::forecasts as ops;
 use crate::portfolio::{Portfolio, ProjectSummary};
 
 async fn project_forecast(
@@ -35,14 +34,8 @@ async fn project_forecast(
     Extension(session): Extension<AuthenticatedSession>,
     Path(id): Path<i64>,
 ) -> Result<Json<ForecastOverview>, ApiError> {
-    state
-        .guard(
-            &session,
-            Operation::ViewProjectAmounts { project_id: id },
-            RESOURCE,
-        )
-        .await?;
-    Ok(Json(state.forecasts.overview(id).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::overview(&gate, &state.forecasts, id).await?))
 }
 
 /// The summary at the top of the project's page (review D-1): the overall
@@ -52,94 +45,37 @@ async fn project_summary(
     Extension(session): Extension<AuthenticatedSession>,
     Path(id): Path<i64>,
 ) -> Result<Json<ProjectSummary>, ApiError> {
-    state
-        .guard(
-            &session,
-            Operation::ViewProjectAmounts { project_id: id },
-            RESOURCE,
-        )
-        .await?;
-    Ok(Json(state.forecasts.portfolio().project(id).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::summary(&gate, &state.forecasts, id).await?))
 }
 
 async fn portfolio(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
 ) -> Result<Json<Portfolio>, ApiError> {
-    let subject = state.subject(&session).await?;
-    let visible = if is_admin(&session) {
-        ProjectScope::All
-    } else {
-        visible_projects(&subject)
-    };
-    let amounts = amount_projects(&subject);
-    Ok(Json(
-        state
-            .forecasts
-            .portfolio()
-            .overview(&visible, &amounts)
-            .await?,
-    ))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::portfolio(&gate, &state.forecasts).await?))
 }
 
 async fn draft_create(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<ForecastDraftCreated>, ApiError> {
-    let (_, user_id) = state
-        .guard(
-            &session,
-            Operation::ManageProject { project_id: id },
-            RESOURCE,
-        )
-        .await?;
-    let created = state.forecasts.create_draft(id, user_id).await?;
-    if !created.replayed {
-        record_write(
-            &state.audit,
-            &state.auth,
-            &headers,
-            "create",
-            RESOURCE,
-            Some(&created.draft.id.to_string()),
-            Some(created.draft.audit_detail()),
-        )
-        .await;
-    }
-    Ok(Json(created))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::create_draft(&gate, &state.forecasts, id).await?))
 }
 
 async fn draft_update(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ForecastDraftInput>,
 ) -> Result<Json<ForecastVersion>, ApiError> {
-    let version = state.forecasts.get(id).await?;
-    let (_, user_id) = state
-        .guard(
-            &session,
-            Operation::ManageProject {
-                project_id: version.project_id,
-            },
-            RESOURCE,
-        )
-        .await?;
-    let saved = state.forecasts.update_draft(id, input, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "update",
-        RESOURCE,
-        Some(&id.to_string()),
-        Some(saved.audit_detail()),
-    )
-    .await;
-    Ok(Json(saved))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::update_draft(&gate, &state.forecasts, id, input).await?,
+    ))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -151,70 +87,22 @@ struct RowVersionQuery {
 async fn draft_delete(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Query(query): Query<RowVersionQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let version = state.forecasts.get(id).await?;
-    state
-        .guard(
-            &session,
-            Operation::ManageProject {
-                project_id: version.project_id,
-            },
-            RESOURCE,
-        )
-        .await?;
-    state.forecasts.delete_draft(id, query.row_version).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "delete",
-        RESOURCE,
-        Some(&id.to_string()),
-        Some(version.audit_detail()),
-    )
-    .await;
+    let gate = state.gate(&session).await?;
+    ops::delete_draft(&gate, &state.forecasts, id, query.row_version).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn draft_adopt(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ForecastVersionInput>,
 ) -> Result<Json<ForecastVersion>, ApiError> {
-    let version = state.forecasts.get(id).await?;
-    let (_, user_id, allowed) = state
-        .guard_with(
-            &session,
-            Operation::AdoptForecast {
-                project_id: version.project_id,
-                submitted_by: version.updated_by.unwrap_or(0),
-            },
-            APPROVAL_POLICY,
-            RESOURCE,
-        )
-        .await?;
-    let adopted = state
-        .forecasts
-        .adopt(&version, input.row_version, user_id)
-        .await?;
-    let mut detail = adopted.audit_detail();
-    detail["selfApproval"] = json!(allowed.self_approval_exception);
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "adopt",
-        RESOURCE,
-        Some(&id.to_string()),
-        Some(detail),
-    )
-    .await;
-    Ok(Json(adopted))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::adopt(&gate, &state.forecasts, id, input).await?))
 }
 
 /// Reads (session only; the decision is in each handler).

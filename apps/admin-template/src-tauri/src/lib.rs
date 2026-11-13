@@ -4717,10 +4717,10 @@ async fn project_time_summary_body(
 
 // --- banto-cost P4c: budget versions -----------------------------------------
 // Twins of `/api/projects/{id}/budget*` and `/api/budget-versions/*`
-// (`admin_template_core::rest::budgets`): the same role floors, the same
-// `Operation`s through `authorize_audited` (`ViewProjectAmounts`,
-// `ManageProject`, `ApproveBudget` with `APPROVAL_POLICY`), the same audit
-// actions and detail (`BudgetVersion::audit_detail`, no amounts).
+// (`admin_template_core::rest::budgets`): the same role floors here, then
+// the same authorized operation (`admin_template_core::ops::budgets`:
+// `ViewProjectAmounts`, `ManageProject`, `ApproveBudget` with
+// `APPROVAL_POLICY`, the audit with `BudgetVersion::audit_detail`).
 
 #[tauri::command]
 async fn project_budget(
@@ -4735,14 +4735,8 @@ async fn project_budget_body(
     project_id: i64,
 ) -> Result<BudgetOverview, BantoError> {
     let identity = require_role(state, Role::Viewer, BUDGET_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        BUDGET_RESOURCE,
-    )
-    .await?;
-    state.budgets.overview(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::budgets::overview(&gate, &state.budgets, project_id).await
 }
 
 #[tauri::command]
@@ -4758,26 +4752,8 @@ async fn budget_draft_create_body(
     project_id: i64,
 ) -> Result<DraftCreated, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageProject { project_id },
-        BUDGET_RESOURCE,
-    )
-    .await?;
-    let created = state.budgets.create_draft(project_id, user_id).await?;
-    if !created.replayed {
-        record_ok(
-            &state.audit,
-            &actor,
-            "create",
-            BUDGET_RESOURCE,
-            Some(&created.draft.id.to_string()),
-            Some(created.draft.audit_detail()),
-        )
-        .await;
-    }
-    Ok(created)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::budgets::create_draft(&gate, &state.budgets, project_id).await
 }
 
 #[tauri::command]
@@ -4795,27 +4771,8 @@ async fn budget_draft_update_body(
     values: BudgetDraftInput,
 ) -> Result<BudgetVersion, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let version = state.budgets.get(id).await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageProject {
-            project_id: version.project_id,
-        },
-        BUDGET_RESOURCE,
-    )
-    .await?;
-    let saved = state.budgets.update_draft(id, values, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        BUDGET_RESOURCE,
-        Some(&id.to_string()),
-        Some(saved.audit_detail()),
-    )
-    .await;
-    Ok(saved)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::budgets::update_draft(&gate, &state.budgets, id, values).await
 }
 
 #[tauri::command]
@@ -4833,27 +4790,8 @@ async fn budget_draft_delete_body(
     row_version: i64,
 ) -> Result<(), BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let version = state.budgets.get(id).await?;
-    business_guard(
-        state,
-        &actor,
-        Operation::ManageProject {
-            project_id: version.project_id,
-        },
-        BUDGET_RESOURCE,
-    )
-    .await?;
-    state.budgets.delete_draft(id, row_version).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "delete",
-        BUDGET_RESOURCE,
-        Some(&id.to_string()),
-        Some(version.audit_detail()),
-    )
-    .await;
-    Ok(())
+    let gate = tauri_gate(state, &actor).await?;
+    ops::budgets::delete_draft(&gate, &state.budgets, id, row_version).await
 }
 
 #[tauri::command]
@@ -4871,45 +4809,18 @@ async fn budget_draft_approve_body(
     values: BudgetVersionInput,
 ) -> Result<BudgetVersion, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let version = state.budgets.get(id).await?;
-    let (_, user_id, allowed) = business_guard_with(
-        state,
-        &actor,
-        Operation::ApproveBudget {
-            project_id: version.project_id,
-            submitted_by: version.updated_by.unwrap_or(0),
-        },
-        admin_template_core::approval::APPROVAL_POLICY,
-        BUDGET_RESOURCE,
-    )
-    .await?;
-    let approved = state
-        .budgets
-        .approve(&version, values.row_version, user_id)
-        .await?;
-    let mut detail = approved.audit_detail();
-    detail["selfApproval"] = serde_json::json!(allowed.self_approval_exception);
-    record_ok(
-        &state.audit,
-        &actor,
-        "approve",
-        BUDGET_RESOURCE,
-        Some(&id.to_string()),
-        Some(detail),
-    )
-    .await;
-    Ok(approved)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::budgets::approve(&gate, &state.budgets, id, values).await
 }
 
 // --- banto-cost P5: completion forecasts and the overall list ---------------
 // Twins of `/api/projects/{id}/forecast*`, `/api/forecast-versions/*` and
 // `/api/portfolio`, `/api/projects/{id}/summary`
-// (`admin_template_core::rest::forecasts`): the same role
-// floors, the same `Operation`s through `authorize_audited`
-// (`ViewProjectAmounts`, `ManageProject`, `AdoptForecast` with
-// `APPROVAL_POLICY`), the same scopes for the overall list (rows: admin all,
-// others `visible_projects`; amounts: `amount_projects`), the same audit
-// actions and detail (`ForecastVersion::audit_detail`, no amounts).
+// (`admin_template_core::rest::forecasts`): the same role floors here, then
+// the same authorized operation (`admin_template_core::ops::forecasts`:
+// `ViewProjectAmounts`, `ManageProject`, `AdoptForecast` with
+// `APPROVAL_POLICY`, the overall list's scopes from `Gate::portfolio_scopes`,
+// the audit with `ForecastVersion::audit_detail`).
 
 #[tauri::command]
 async fn project_forecast(
@@ -4924,14 +4835,8 @@ async fn project_forecast_body(
     project_id: i64,
 ) -> Result<ForecastOverview, BantoError> {
     let identity = require_role(state, Role::Viewer, FORECAST_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        FORECAST_RESOURCE,
-    )
-    .await?;
-    state.forecasts.overview(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::forecasts::overview(&gate, &state.forecasts, project_id).await
 }
 
 #[tauri::command]
@@ -4947,14 +4852,8 @@ async fn project_summary_body(
     project_id: i64,
 ) -> Result<ProjectSummary, BantoError> {
     let identity = require_role(state, Role::Viewer, FORECAST_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        FORECAST_RESOURCE,
-    )
-    .await?;
-    state.forecasts.portfolio().project(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::forecasts::summary(&gate, &state.forecasts, project_id).await
 }
 
 #[tauri::command]
@@ -4964,18 +4863,8 @@ async fn portfolio_overview(state: State<'_, AppState>) -> Result<Portfolio, Ban
 
 async fn portfolio_overview_body(state: &AppState) -> Result<Portfolio, BantoError> {
     let identity = require_role(state, Role::Viewer, "projects").await?;
-    let subject = caller_subject(state).await?;
-    let visible = if identity.role.is_admin() {
-        ProjectScope::All
-    } else {
-        visible_projects(&subject)
-    };
-    let amounts = amount_projects(&subject);
-    state
-        .forecasts
-        .portfolio()
-        .overview(&visible, &amounts)
-        .await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::forecasts::portfolio(&gate, &state.forecasts).await
 }
 
 #[tauri::command]
@@ -4991,26 +4880,8 @@ async fn forecast_draft_create_body(
     project_id: i64,
 ) -> Result<ForecastDraftCreated, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageProject { project_id },
-        FORECAST_RESOURCE,
-    )
-    .await?;
-    let created = state.forecasts.create_draft(project_id, user_id).await?;
-    if !created.replayed {
-        record_ok(
-            &state.audit,
-            &actor,
-            "create",
-            FORECAST_RESOURCE,
-            Some(&created.draft.id.to_string()),
-            Some(created.draft.audit_detail()),
-        )
-        .await;
-    }
-    Ok(created)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::forecasts::create_draft(&gate, &state.forecasts, project_id).await
 }
 
 #[tauri::command]
@@ -5028,27 +4899,8 @@ async fn forecast_draft_update_body(
     values: ForecastDraftInput,
 ) -> Result<ForecastVersion, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let version = state.forecasts.get(id).await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::ManageProject {
-            project_id: version.project_id,
-        },
-        FORECAST_RESOURCE,
-    )
-    .await?;
-    let saved = state.forecasts.update_draft(id, values, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        FORECAST_RESOURCE,
-        Some(&id.to_string()),
-        Some(saved.audit_detail()),
-    )
-    .await;
-    Ok(saved)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::forecasts::update_draft(&gate, &state.forecasts, id, values).await
 }
 
 #[tauri::command]
@@ -5066,27 +4918,8 @@ async fn forecast_draft_delete_body(
     row_version: i64,
 ) -> Result<(), BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let version = state.forecasts.get(id).await?;
-    business_guard(
-        state,
-        &actor,
-        Operation::ManageProject {
-            project_id: version.project_id,
-        },
-        FORECAST_RESOURCE,
-    )
-    .await?;
-    state.forecasts.delete_draft(id, row_version).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "delete",
-        FORECAST_RESOURCE,
-        Some(&id.to_string()),
-        Some(version.audit_detail()),
-    )
-    .await;
-    Ok(())
+    let gate = tauri_gate(state, &actor).await?;
+    ops::forecasts::delete_draft(&gate, &state.forecasts, id, row_version).await
 }
 
 #[tauri::command]
@@ -5104,34 +4937,8 @@ async fn forecast_draft_adopt_body(
     values: ForecastVersionInput,
 ) -> Result<ForecastVersion, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let version = state.forecasts.get(id).await?;
-    let (_, user_id, allowed) = business_guard_with(
-        state,
-        &actor,
-        Operation::AdoptForecast {
-            project_id: version.project_id,
-            submitted_by: version.updated_by.unwrap_or(0),
-        },
-        admin_template_core::approval::APPROVAL_POLICY,
-        FORECAST_RESOURCE,
-    )
-    .await?;
-    let adopted = state
-        .forecasts
-        .adopt(&version, values.row_version, user_id)
-        .await?;
-    let mut detail = adopted.audit_detail();
-    detail["selfApproval"] = serde_json::json!(allowed.self_approval_exception);
-    record_ok(
-        &state.audit,
-        &actor,
-        "adopt",
-        FORECAST_RESOURCE,
-        Some(&id.to_string()),
-        Some(detail),
-    )
-    .await;
-    Ok(adopted)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::forecasts::adopt(&gate, &state.forecasts, id, values).await
 }
 
 // --- banto-cost P6a: 精算完了 (T17) -------------------------------------------
@@ -5453,11 +5260,10 @@ async fn recurring_revenue_month_recognize_body(
 // --- banto-cost P6c: 月別収支と CSV (T12・T15) -----------------------------------
 // Twins of `/api/projects/{id}/monthly`, `/api/projects/{id}/monthly.csv`,
 // `/api/reports/portfolio.csv` and `/api/reports/period-monthly.csv`
-// (`admin_template_core::rest::reports`): any role, then the same decision
-// (`ViewProjectAmounts` through `authorize_audited`, or the same scopes as the
-// overall list: rows admin all / `visible_projects`, amounts
-// `amount_projects`), the same audit action `export` and detail
-// (`CsvExport::audit_detail`: the kind, its key and the row count).
+// (`admin_template_core::rest::reports`): any role, then the same authorized
+// operation (`admin_template_core::ops::reports`: `ViewProjectAmounts`, or the
+// overall list's scopes; the audit action `export` with
+// `CsvExport::audit_detail`: the kind, its key and the row count).
 
 use admin_template_core::reports::{CsvExport, ProjectMonthly, RESOURCE as REPORTS_RESOURCE};
 
@@ -5474,14 +5280,8 @@ async fn project_monthly_body(
     project_id: i64,
 ) -> Result<ProjectMonthly, BantoError> {
     let identity = require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        REPORTS_RESOURCE,
-    )
-    .await?;
-    state.forecasts.reports().project_monthly(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::reports::project_monthly(&gate, &state.forecasts, project_id).await
 }
 
 #[tauri::command]
@@ -5497,28 +5297,8 @@ async fn project_monthly_csv_body(
     project_id: i64,
 ) -> Result<CsvExport, BantoError> {
     let identity = require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        REPORTS_RESOURCE,
-    )
-    .await?;
-    let csv = state
-        .forecasts
-        .reports()
-        .project_monthly_csv(project_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &identity,
-        "export",
-        REPORTS_RESOURCE,
-        Some(&project_id.to_string()),
-        Some(csv.audit_detail("project_monthly", serde_json::json!(project_id))),
-    )
-    .await;
-    Ok(csv)
+    let gate = tauri_gate(state, &identity).await?;
+    ops::reports::project_monthly_csv(&gate, &state.forecasts, project_id).await
 }
 
 #[tauri::command]
@@ -5528,28 +5308,8 @@ async fn portfolio_csv(state: State<'_, AppState>) -> Result<CsvExport, BantoErr
 
 async fn portfolio_csv_body(state: &AppState) -> Result<CsvExport, BantoError> {
     let identity = require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
-    let subject = caller_subject(state).await?;
-    let visible = if identity.role.is_admin() {
-        ProjectScope::All
-    } else {
-        visible_projects(&subject)
-    };
-    let amounts = amount_projects(&subject);
-    let csv = state
-        .forecasts
-        .reports()
-        .portfolio_csv(&visible, &amounts)
-        .await?;
-    record_ok(
-        &state.audit,
-        &identity,
-        "export",
-        REPORTS_RESOURCE,
-        None,
-        Some(csv.audit_detail("portfolio", serde_json::Value::Null)),
-    )
-    .await;
-    Ok(csv)
+    let gate = tauri_gate(state, &identity).await?;
+    ops::reports::portfolio_csv(&gate, &state.forecasts).await
 }
 
 #[tauri::command]
@@ -5562,23 +5322,8 @@ async fn period_monthly_csv(
 
 async fn period_monthly_csv_body(state: &AppState, period: i32) -> Result<CsvExport, BantoError> {
     let identity = require_role(state, Role::Viewer, REPORTS_RESOURCE).await?;
-    let subject = caller_subject(state).await?;
-    let amounts = amount_projects(&subject);
-    let csv = state
-        .forecasts
-        .reports()
-        .period_monthly_csv(period, &amounts)
-        .await?;
-    record_ok(
-        &state.audit,
-        &identity,
-        "export",
-        REPORTS_RESOURCE,
-        None,
-        Some(csv.audit_detail("period_monthly", serde_json::json!(period))),
-    )
-    .await;
-    Ok(csv)
+    let gate = tauri_gate(state, &identity).await?;
+    ops::reports::period_monthly_csv(&gate, &state.forecasts, period).await
 }
 
 /// Twin of `GET /api/calendar` (P8d): the business date in the company's

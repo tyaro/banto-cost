@@ -16,17 +16,28 @@
 //! only their denials, which `authorize_audited` records.
 //!
 //! Migrated so far: 精算完了 ([`closeouts`]), 月次締め ([`closing`]),
-//! 月額固定原価 ([`fixed_costs`]) and 定期売上 ([`recurring_revenue`]) - the
-//! areas with the fewest operations, as the review proposed.
+//! 月額固定原価 ([`fixed_costs`]), 定期売上 ([`recurring_revenue`]) - the
+//! areas with the fewest operations, as the review proposed - then 予算
+//! ([`budgets`]), 完了見込と全体一覧 ([`forecasts`]) and 帳票 ([`reports`]).
 
+pub mod budgets;
 pub mod closeouts;
 pub mod closing;
 pub mod fixed_costs;
+pub mod forecasts;
 pub mod recurring_revenue;
+pub mod reports;
 
 use banto_admin_services::audit::{AuditEntry, AuditLogService};
-use banto_admin_services::authz::{Actor, Allowed, AuthzService, Operation, Policy, Subject};
+use std::str::FromStr;
+
+use banto_admin_services::authz::{
+    amount_projects, visible_projects, Actor, Allowed, AuthzService, Operation, Policy,
+    ProjectScope, Subject,
+};
 use banto_core::BantoError;
+
+use crate::users::Role;
 
 /// Who calls, as the path resolved it: the `users.id` (`None` for a session
 /// with no user row, e.g. a grant session), the username and role snapshot
@@ -104,6 +115,27 @@ impl Gate<'_> {
 
     pub fn user_id(&self) -> Option<i64> {
         self.caller.user_id
+    }
+
+    /// The scopes of the overall list and the reports built from it
+    /// (全体一覧): the rows are every project for the `admin` role and
+    /// `visible_projects` for the others; amounts and alerts are
+    /// `amount_projects` for everyone (no `Operation`, so nothing is denied
+    /// or audited - the scope only narrows).
+    pub async fn portfolio_scopes(&self) -> Result<(ProjectScope, ProjectScope), BantoError> {
+        let subject = self.authz.subject(self.caller.user_id).await?;
+        let visible = if Role::from_str(self.caller.role).is_ok_and(|role| role.is_admin()) {
+            ProjectScope::All
+        } else {
+            visible_projects(&subject)
+        };
+        Ok((visible, amount_projects(&subject)))
+    }
+
+    /// The projects whose amounts the caller sees (`amount_projects`).
+    pub async fn amount_scope(&self) -> Result<ProjectScope, BantoError> {
+        let subject = self.authz.subject(self.caller.user_id).await?;
+        Ok(amount_projects(&subject))
     }
 }
 
