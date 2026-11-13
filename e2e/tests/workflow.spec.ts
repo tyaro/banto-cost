@@ -23,7 +23,14 @@
  * names are fictional and carry the run's timestamp.
  */
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test';
+import {
+	expect,
+	test,
+	type BrowserContext,
+	type Locator,
+	type Page,
+	type Route
+} from '@playwright/test';
 
 // Same administrator as smoke.spec.ts (first-run setup there).
 const ADMIN_USERNAME = 'public';
@@ -320,32 +327,49 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 		await expect(page.getByText(PROJECT_NAME).first()).toBeVisible();
 	});
 
-	test('9b. ダッシュボード: each source shows when it answers; a failed previous month only marks the note', async () => {
+	test('9b. ダッシュボード: each source shows when it answers; a failed or slow part only marks its note', async () => {
 		const previous = (() => {
 			const [y, m] = month.split('-').map(Number);
 			return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
 		})();
 		let release!: () => void;
 		const held = new Promise<void>((resolve) => (release = resolve));
-		await page.route('**/api/portfolio', async (route) => {
+		const hold = async (route: Route) => {
 			await held;
 			await route.continue();
-		});
+		};
+		// Still on its way: the overall list, and the previous month of 定期売上.
+		await page.route('**/api/portfolio', hold);
+		await page.route(`**/api/recurring-revenue/months/${previous}`, hold);
+		// Failed: the previous month of 月額固定, and one of the three approval lists.
 		await page.route(`**/api/fixed-costs/months/${previous}`, (route) =>
 			route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
 		);
+		await page.route('**/api/direct-costs/approvals', (route) =>
+			route.fulfill({
+				status: 403,
+				contentType: 'application/json',
+				body: JSON.stringify({ code: 'forbidden', message: 'forbidden' })
+			})
+		);
+		const note = (id: string) => page.locator(`[data-tile="${id}"] .stat-note`);
 		try {
 			await page.goto('/dashboard');
-			// The overall list is still on its way; the other tiles do not wait for it.
-			await expect(tile(page, 'approvals')).toHaveText('0 件');
+			// The tiles already read do not wait for the slow ones.
 			await expect(tile(page, 'forecast-loss')).toHaveText('読み込み中…');
+			await expect(tile(page, 'recurring-revenue-due')).toHaveText('0 件');
+			await expect(note('recurring-revenue-due')).toContainText(`前月（${previous}）を確認中`);
 			// This month's count stays; only the note says the previous month failed.
 			await expect(tile(page, 'fixed-costs-due')).toHaveText('0 件');
-			await expect(page.locator('[data-tile="fixed-costs-due"] .stat-note')).toContainText(
+			await expect(note('fixed-costs-due')).toContainText(
 				`前月（${previous}）の件数は取得できません`
 			);
+			// The readable approval lists are counted, and the tile says a part is missing.
+			await expect(tile(page, 'approvals')).toHaveText('0 件');
+			await expect(note('approvals')).toContainText('一部の一覧を取得できない');
 			release();
 			await expect(tile(page, 'forecast-loss')).toHaveText('1 件');
+			await expect(note('recurring-revenue-due')).toContainText(`前月（${previous}）の未計上 0 件`);
 		} finally {
 			release();
 			await page.unrouteAll({ behavior: 'wait' });

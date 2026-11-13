@@ -66,9 +66,11 @@
 	import {
 		alertCount,
 		attentionProjectIds,
+		combineCounts,
 		currentAndNextMonth,
 		outlookMonthTotal,
-		previousMonth
+		previousMonth,
+		type Source
 	} from '#lib/banto/dashboardSummary.js';
 	import { NAV_ICONS } from '#lib/components/navIcons.js';
 	import { PANEL_DEFS } from '#lib/banto/panels.js';
@@ -99,26 +101,37 @@
 	// the new month after 再読み込み (the tiles read it together with the outlook).
 	let months = $state(currentAndNextMonth(todayIso()));
 
-	type Source<T> =
-		{ state: 'loading' } | { state: 'ok'; value: T } | { state: 'error'; error: unknown };
-
 	let overview = $state<Source<PipelineOverview>>({ state: 'loading' });
 	let outlook = $state<Source<OutlookView>>({ state: 'loading' });
 
+	let portfolio = $state<Source<Portfolio>>({ state: 'loading' });
+
 	/**
-	 * Unposted / unrecognized contracts of this month and the previous one.
-	 * `previous` is `null` when only that read failed: this month's count still
-	 * shows, and the note says the previous month could not be read.
+	 * The three lists /approvals shows, read one by one (PR #48 review): one the
+	 * caller may not read never hides the others (`combineCounts`).
 	 */
-	interface DueMonths {
-		current: number;
-		previous: number | null;
+	let approvalLists = $state<Source<number>[]>([
+		{ state: 'loading' },
+		{ state: 'loading' },
+		{ state: 'loading' }
+	]);
+
+	/**
+	 * Unposted / unrecognized contracts: this month (the tile) and the previous
+	 * month (its note), read apart so neither waits on or fails the other.
+	 */
+	interface DueSources {
+		current: Source<number>;
+		previous: Source<number>;
 	}
 
-	let portfolio = $state<Source<Portfolio>>({ state: 'loading' });
-	let approvals = $state<Source<number>>({ state: 'loading' });
-	let fixedDue = $state<Source<DueMonths>>({ state: 'loading' });
-	let recurringDue = $state<Source<DueMonths>>({ state: 'loading' });
+	const dueLoading = (): DueSources => ({
+		current: { state: 'loading' },
+		previous: { state: 'loading' }
+	});
+
+	let fixedDue = $state<DueSources>(dueLoading());
+	let recurringDue = $state<DueSources>(dueLoading());
 	let loadToken = 0;
 
 	/**
@@ -139,28 +152,8 @@
 		if (token === loadToken) apply(source);
 	}
 
-	/** This month's count fails the tile; the previous month's only its note. */
-	async function dueMonths(
-		read: (month: string) => Promise<{ dueCount: number }>,
-		month: string
-	): Promise<DueMonths> {
-		const [current, previous] = await Promise.allSettled([read(month), read(previousMonth(month))]);
-		if (current.status === 'rejected') throw current.reason;
-		return {
-			current: current.value.dueCount,
-			previous: previous.status === 'fulfilled' ? previous.value.dueCount : null
-		};
-	}
-
-	/** Every list /approvals shows: time entries, direct costs, corrections. */
-	async function approvalCount(): Promise<number> {
-		const [time, costs, corrections] = await Promise.all([
-			listApprovals(),
-			listCostApprovals(),
-			listPendingCorrections()
-		]);
-		return time.length + costs.length + corrections.length;
-	}
+	const dueCount = (view: Promise<{ dueCount: number }>) => view.then((v) => v.dueCount);
+	const length = (list: Promise<unknown[]>) => list.then((rows) => rows.length);
 
 	async function load(): Promise<void> {
 		if (!available) return;
@@ -169,17 +162,22 @@
 		overview = { state: 'loading' };
 		outlook = { state: 'loading' };
 		portfolio = { state: 'loading' };
-		approvals = { state: 'loading' };
-		fixedDue = { state: 'loading' };
-		recurringDue = { state: 'loading' };
+		approvalLists = [{ state: 'loading' }, { state: 'loading' }, { state: 'loading' }];
+		fixedDue = dueLoading();
+		recurringDue = dueLoading();
+		const previous = previousMonth(range.current);
 		months = range;
 		await Promise.all([
 			track(token, getPipelineOverview(), (s) => (overview = s)),
 			track(token, getOutlook({ from: range.current, to: range.next }), (s) => (outlook = s)),
 			track(token, getPortfolio(), (s) => (portfolio = s)),
-			track(token, approvalCount(), (s) => (approvals = s)),
-			track(token, dueMonths(getFixedCostMonth, range.current), (s) => (fixedDue = s)),
-			track(token, dueMonths(getRecurringMonth, range.current), (s) => (recurringDue = s))
+			track(token, length(listApprovals()), (s) => (approvalLists[0] = s)),
+			track(token, length(listCostApprovals()), (s) => (approvalLists[1] = s)),
+			track(token, length(listPendingCorrections()), (s) => (approvalLists[2] = s)),
+			track(token, dueCount(getFixedCostMonth(range.current)), (s) => (fixedDue.current = s)),
+			track(token, dueCount(getFixedCostMonth(previous)), (s) => (fixedDue.previous = s)),
+			track(token, dueCount(getRecurringMonth(range.current)), (s) => (recurringDue.current = s)),
+			track(token, dueCount(getRecurringMonth(previous)), (s) => (recurringDue.previous = s))
 		]);
 	}
 
@@ -298,20 +296,41 @@
 		};
 	}
 
-	function dueNote(source: Source<DueMonths>): string {
-		if (source.state !== 'ok') return '';
+	/** The previous month's count, or that it is still loading / could not be read. */
+	function dueNote(due: DueSources): string {
+		if (!available) return '';
 		const previous = previousMonth(months.current);
-		return source.value.previous === null
-			? m['dashboard.dueNotePreviousFailed']({ month: months.current, previous })
-			: m['dashboard.dueNote']({
+		const p = due.previous;
+		return p.state === 'ok'
+			? m['dashboard.dueNote']({
 					month: months.current,
 					previous,
-					count: source.value.previous.toLocaleString()
-				});
+					count: p.value.toLocaleString()
+				})
+			: p.state === 'loading'
+				? m['dashboard.dueNotePreviousLoading']({ month: months.current, previous })
+				: m['dashboard.dueNotePreviousFailed']({ month: months.current, previous });
 	}
 
-	const dueActive = (source: Source<DueMonths>) =>
-		source.state === 'ok' && source.value.current + (source.value.previous ?? 0) > 0;
+	const okCount = (source: Source<number>) => (source.state === 'ok' ? source.value : 0);
+	const dueActive = (due: DueSources) => okCount(due.current) + okCount(due.previous) > 0;
+
+	const approvals = $derived(combineCounts(approvalLists));
+
+	function approvalsValue(): string {
+		if (approvals.state === 'ok')
+			return m['dashboard.countValue']({ count: approvals.total.toLocaleString() });
+		return pending(approvals);
+	}
+
+	function approvalsNote(): string {
+		if (approvals.state !== 'ok') return '';
+		return approvals.missing === 'failed'
+			? m['dashboard.approvalsNotePartial']()
+			: approvals.missing === 'loading'
+				? m['dashboard.approvalsNoteLoading']()
+				: m['dashboard.approvalsNote']();
+	}
 
 	const checks = $derived<CheckTile[]>([
 		alertTile('forecast-loss', TrendingDown, 'forecast_loss', m['dashboard.forecastLoss']()),
@@ -331,16 +350,16 @@
 			id: 'approvals',
 			icon: ClipboardCheck,
 			label: m['dashboard.approvals'](),
-			value: count(approvals, (n) => n),
-			note: approvals.state === 'ok' ? m['dashboard.approvalsNote']() : '',
+			value: approvalsValue(),
+			note: approvalsNote(),
 			path: '/approvals',
-			active: approvals.state === 'ok' && approvals.value > 0
+			active: approvals.state === 'ok' && approvals.total > 0
 		},
 		{
 			id: 'fixed-costs-due',
 			icon: NAV_ICONS['fixed-costs'],
 			label: m['dashboard.fixedCostsDue'](),
-			value: count(fixedDue, (d) => d.current),
+			value: count(fixedDue.current, (n) => n),
 			note: dueNote(fixedDue),
 			path: '/fixed-costs',
 			active: dueActive(fixedDue)
@@ -349,7 +368,7 @@
 			id: 'recurring-revenue-due',
 			icon: NAV_ICONS['recurring-revenue'],
 			label: m['dashboard.recurringRevenueDue'](),
-			value: count(recurringDue, (d) => d.current),
+			value: count(recurringDue.current, (n) => n),
 			note: dueNote(recurringDue),
 			path: '/recurring-revenue',
 			active: dueActive(recurringDue)
