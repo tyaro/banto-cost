@@ -29,7 +29,7 @@
  *
  * No `waitForTimeout`/`sleep`: every wait is a locator auto-retry.
  */
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Frame, type Page, type Route } from '@playwright/test';
 import { expectCheckOutageKeepsTheSession } from '../tests/session-check-outage';
 
 // #209: a normal account may share the synthetic identity's string ID.
@@ -229,13 +229,7 @@ test.describe.serial('Banto viewer-public mode', () => {
 
 		// Restoring an ordinary "public" account must keep its normal UI
 		// while anonymous public viewing is enabled on the same server.
-		const restoredIdentity = page.waitForResponse(
-			(response) => new URL(response.url()).pathname === '/api/auth/identity'
-		);
-		await page.reload();
-		const identity = await restoredIdentity;
-		expect(identity.ok()).toBe(true);
-		expect(await identity.json()).toMatchObject({
+		expect(await reloadAndReadIdentity(page)).toMatchObject({
 			id: 'public',
 			role: 'admin',
 			kind: 'account'
@@ -279,13 +273,7 @@ test.describe.serial('Banto viewer-public mode', () => {
 		await expect(loginButton(page)).toBeVisible();
 		await expect(page.getByRole('banner').getByText('閲覧者')).toBeVisible();
 
-		const restoredIdentity = page.waitForResponse(
-			(response) => new URL(response.url()).pathname === '/api/auth/identity'
-		);
-		await page.reload();
-		const identity = await restoredIdentity;
-		expect(identity.ok()).toBe(true);
-		expect(await identity.json()).toMatchObject({
+		expect(await reloadAndReadIdentity(page)).toMatchObject({
 			id: 'public',
 			role: 'viewer',
 			kind: 'publicViewer'
@@ -412,3 +400,32 @@ test.describe.serial('Banto viewer-public mode', () => {
 		}
 	});
 });
+
+/**
+ * Reload and return the body of the identity check the reloaded document
+ * makes. Responses that arrive before the reload commits are ignored: the page
+ * being left may still have its own check in flight, and the reload discards
+ * that response's body ("No resource with given identifier found"). The body is
+ * read inside the predicate, before anything else can navigate away from it.
+ */
+async function reloadAndReadIdentity(page: Page): Promise<unknown> {
+	let reloaded = false;
+	let body: unknown;
+	const markReloaded = (frame: Frame) => {
+		if (frame === page.mainFrame()) reloaded = true;
+	};
+	page.on('framenavigated', markReloaded);
+	try {
+		const identity = page.waitForResponse(async (response) => {
+			if (!reloaded || new URL(response.url()).pathname !== '/api/auth/identity') return false;
+			expect(response.ok()).toBe(true);
+			body = await response.json();
+			return true;
+		});
+		await page.reload();
+		await identity;
+		return body;
+	} finally {
+		page.off('framenavigated', markReloaded);
+	}
+}
