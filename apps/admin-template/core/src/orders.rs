@@ -184,6 +184,11 @@ pub struct CancelledConversion {
     pub previous_status: String,
     pub converted_on: String,
     pub confirmed_amount: i64,
+    /// `whole` | `partial`.
+    pub scope: String,
+    /// A partial order's remainder project (set to 中止 by the cancellation).
+    pub remainder_project_id: Option<i64>,
+    pub remainder_code: Option<String>,
     pub basis: String,
     pub created_by_name: Option<String>,
     /// The business date of the cancellation.
@@ -417,12 +422,14 @@ struct RecordCounts(i64, i64, i64, i64, i64, i64, i64, i64);
 fn cancel_issues(
     status: ProjectStatus,
     conversion: &OrderConversion,
+    remainder: Option<ProjectStatus>,
     records: RecordCounts,
 ) -> Vec<ConversionCancelIssue> {
     check_conversion_cancel(&ConversionCancelFacts {
         status: Some(status),
         previous: ProjectStatus::parse(&conversion.previous_status),
         scope: ConversionScope::parse(&conversion.scope),
+        remainder,
         has_order_changes: records.0 > 0,
         has_recognitions: records.1 > 0,
         has_budgets: records.2 > 0,
@@ -439,7 +446,9 @@ fn cancel_issue_label(issue: ConversionCancelIssue) -> &'static str {
     match issue {
         ConversionCancelIssue::NotOrdered => "進行中・作業完了・精算完了の案件",
         ConversionCancelIssue::PreviousUnknown => "転換前の状態が読めない",
-        ConversionCancelIssue::Partial => "一部受注（残りの範囲の案件がある）",
+        ConversionCancelIssue::ScopeUnknown => "受注の範囲が読めない",
+        ConversionCancelIssue::RemainderUnknown => "残りの範囲の案件が見つからない",
+        ConversionCancelIssue::RemainderOrdered => "残りの範囲の案件が受注転換済み",
         ConversionCancelIssue::OrderChanges => "受注変更",
         ConversionCancelIssue::Recognitions => "売上計上（取消済みを含む）",
         ConversionCancelIssue::Budgets => "予算",
@@ -621,6 +630,7 @@ pub fn conversion_cancel_audit_detail(summary: &OrderSummary) -> serde_json::Val
     serde_json::json!({
         "conversionId": cancelled.map(|c| c.id),
         "confirmedAmount": cancelled.map(|c| c.confirmed_amount),
+        "remainderProjectId": cancelled.and_then(|c| c.remainder_project_id),
         "status": summary.status,
     })
 }
@@ -931,9 +941,11 @@ impl OrdersService {
              WHERE c.project_id = ? AND c.cancelled_at IS NULL",
         );
         let cancelled_sql = self.sql(
-            "SELECT c.id, c.previous_status, c.converted_on, c.confirmed_amount, c.basis, \
+            "SELECT c.id, c.previous_status, c.converted_on, c.confirmed_amount, c.scope, \
+             c.remainder_project_id, rp.code AS remainder_code, c.basis, \
              u.display_name AS created_by_name, c.cancelled_on, c.cancel_reason, \
              cu.display_name AS cancelled_by_name, c.cancelled_at FROM order_conversions c \
+             LEFT JOIN projects rp ON rp.id = c.remainder_project_id \
              LEFT JOIN users u ON u.id = c.created_by \
              LEFT JOIN users cu ON cu.id = c.cancelled_by \
              WHERE c.project_id = ? AND c.cancelled_at IS NOT NULL \
@@ -979,7 +991,8 @@ impl OrdersService {
                     fetch_optional!(pool, records_sql, project_id, project_id, project_id,
                         project_id, project_id, project_id, project_id, project_id,
                         project_id, project_id, project_id))?;
-                cancel_issues(status, c, records.unwrap_or_default())
+                let remainder = self.remainder_status(c).await?;
+                cancel_issues(status, c, remainder, records.unwrap_or_default())
             }
             None => Vec::new(),
         };
@@ -995,6 +1008,20 @@ impl OrdersService {
             cancel_blockers,
             cancelled_conversions,
         })
+    }
+
+    /// The current status of a partial order's remainder project (`None` for a
+    /// whole order, or when the project cannot be read).
+    async fn remainder_status(
+        &self,
+        conversion: &OrderConversion,
+    ) -> Result<Option<ProjectStatus>, BantoError> {
+        let Some(id) = conversion.remainder_project_id else {
+            return Ok(None);
+        };
+        let sql = self.sql("SELECT status FROM projects WHERE id = ?");
+        let row: Option<(String,)> = on_pool!(&self.db, pool => fetch_optional!(pool, sql, id))?;
+        Ok(row.and_then(|(s,)| ProjectStatus::parse(&s)))
     }
 
     /// How many records of each kind that block a conversion cancellation the
@@ -1293,9 +1320,11 @@ impl OrdersService {
         self.summary(project_id).await
     }
 
-    /// Cancel the project's conversion (受注転換の取消, T40, review U-3): only a
-    /// whole-scope order on which nothing has been recorded yet
-    /// (`cost_domain::order::check_conversion_cancel`). The project goes back to
+    /// Cancel the project's conversion (受注転換の取消, T40, review U-3): only an
+    /// order on which nothing has been recorded yet, and for a partial order only
+    /// while its remainder project is not ordered itself
+    /// (`cost_domain::order::check_conversion_cancel`). A partial order's
+    /// remainder becomes 中止 (`ProjectStatus::remainder_closed_to`). The project goes back to
     /// its status before the conversion, the unrecognized revenue plan the
     /// conversion made is removed, and the conversion row stays as history with
     /// the business date, the reason and who. Planned dates and the order
@@ -1351,6 +1380,13 @@ impl OrdersService {
             self.now()
         ));
         let delete_plan = self.sql("DELETE FROM revenue_plan WHERE project_id = ?");
+        let remainder_sql = self.sql("SELECT status FROM projects WHERE id = ?");
+        let close_remainder = self.sql(&format!(
+            "UPDATE projects SET status = ?, row_version = row_version + 1, updated_at = {} \
+             WHERE id = ? AND status = ?",
+            self.now()
+        ));
+        let remainder_id = conversion.remainder_project_id;
         let revenue_version = state.project.revenue_version;
         in_tx!(&self.db, tx => {
             let affected = execute!(&mut *tx, update_project, previous.as_str(), project_id,
@@ -1361,13 +1397,31 @@ impl OrdersService {
             let records: Option<RecordCounts> = fetch_optional!(&mut *tx, records_sql,
                 project_id, project_id, project_id, project_id, project_id, project_id,
                 project_id, project_id, project_id, project_id, project_id)?;
+            let remainder: Option<ProjectStatus> = match remainder_id {
+                Some(id) => {
+                    let row: Option<(String,)> = fetch_optional!(&mut *tx, remainder_sql, id)?;
+                    row.and_then(|(s,)| ProjectStatus::parse(&s))
+                }
+                None => None,
+            };
             let issues = cancel_issues(
                 ProjectStatus::Ordered,
                 conversion,
+                remainder,
                 records.unwrap_or_default(),
             );
             if !issues.is_empty() {
                 return Err(cancel_refused(&issues));
+            }
+            // A partial order's remainder leaves the pipeline as 中止 (lost /
+            // cancelled ones stay as they are), so the original project's
+            // adopted version - the whole scope - is not counted twice.
+            if let (Some(id), Some(from)) = (remainder_id, remainder) {
+                if let Some(to) = from.remainder_closed_to() {
+                    if execute!(&mut *tx, close_remainder, to.as_str(), id, from.as_str())? == 0 {
+                        return Err(stale_version_error());
+                    }
+                }
             }
             if execute!(&mut *tx, cancel, &cancelled_on, &reason, actor_user_id,
                 conversion_id)? == 0 {
@@ -2062,6 +2116,67 @@ pub(crate) mod tests {
         assert!(s.issues.is_empty());
     }
 
+    /// A partial order: 3,000,000 ordered out of a 5,000,000 pipeline version,
+    /// the remaining 2,000,000 as project `{code}-2`.
+    async fn partial_project(db: &Db, code: &str) -> i64 {
+        let id = pipeline_project(db, code, 5_000_000, 50, "2027-01").await;
+        let rv = row_version(db, id).await;
+        let mut req = conversion(rv, 3_000_000, vec![line(Some("2027-01"), 3_000_000)]);
+        req.scope = "partial".into();
+        req.remainder = Some(RemainderInput {
+            code: format!("{code}-2"),
+            name: "二期".into(),
+            version: version(2_000_000, 50, "2027-03"),
+        });
+        OrdersService::new(db.clone())
+            .convert(id, req, Some(1))
+            .await
+            .unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn t40_partial_order_cancel_closes_the_remainder_without_double_counting() {
+        let db = fixture().await;
+        let a = partial_project(&db, "P-001").await;
+        let svc = OrdersService::new(db.clone());
+        let s = svc.summary(a).await.unwrap();
+        assert!(s.cancel_blockers.is_empty(), "{:?}", s.cancel_blockers);
+        let remainder = s.conversion.unwrap().remainder_project_id.unwrap();
+        let rv = row_version(&db, a).await;
+        let s = svc
+            .cancel_conversion(a, cancel_input(rv, Some("範囲の入力誤り")), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(s.status, "lead");
+        let h = &s.cancelled_conversions[0];
+        assert_eq!(
+            (h.scope.as_str(), h.remainder_code.as_deref()),
+            ("partial", Some("P-001-2"))
+        );
+        // The remainder is 中止 and keeps its history; only the original
+        // project's adopted version (the whole 5,000,000) counts again.
+        assert_eq!(svc.summary(remainder).await.unwrap().status, "cancelled");
+        let pipeline = PipelineService::new(db.clone());
+        assert_eq!(pipeline.versions(remainder).await.unwrap().len(), 1);
+        let o = pipeline.overview(&ProjectScope::All).await.unwrap();
+        let remainder_row = o.rows.iter().find(|r| r.project_id == remainder).unwrap();
+        assert_eq!(remainder_row.stage.as_deref(), Some("cancelled"));
+        assert_eq!((o.totals.total, o.totals.weighted), (5_000_000, 2_500_000));
+        assert_eq!(o.totals.active_count, 1);
+        // The project can be converted again (as a whole order this time).
+        let rv = row_version(&db, a).await;
+        let s = svc
+            .convert(
+                a,
+                conversion(rv, 5_000_000, vec![line(Some("2027-01"), 5_000_000)]),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(s.confirmed_amount, Some(5_000_000));
+    }
+
     #[tokio::test]
     async fn t40_conversion_cancel_is_refused_once_the_order_has_records() {
         let db = fixture().await;
@@ -2106,18 +2221,28 @@ pub(crate) mod tests {
         }
         assert_eq!(svc.summary(a).await.unwrap().status, "ordered");
 
-        // A partial order is not cancelled (the remainder project overlaps).
-        let b = pipeline_project(&db, "P-002", 5_000_000, 50, "2027-01").await;
-        let rv = row_version(&db, b).await;
-        let mut req = conversion(rv, 3_000_000, vec![line(Some("2027-01"), 3_000_000)]);
-        req.scope = "partial".into();
-        req.remainder = Some(RemainderInput {
-            code: "P-002-2".into(),
-            name: "二期".into(),
-            version: version(2_000_000, 50, "2027-03"),
-        });
-        let s = svc.convert(b, req, Some(1)).await.unwrap();
-        assert_eq!(s.cancel_blockers, vec!["partial"]);
+        // A partial order whose remainder has been converted itself stays.
+        let b = partial_project(&db, "P-002").await;
+        let remainder = svc
+            .summary(b)
+            .await
+            .unwrap()
+            .conversion
+            .unwrap()
+            .remainder_project_id
+            .unwrap();
+        let rv = row_version(&db, remainder).await;
+        svc.convert(
+            remainder,
+            conversion(rv, 2_000_000, vec![line(Some("2027-03"), 2_000_000)]),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            svc.summary(b).await.unwrap().cancel_blockers,
+            vec!["remainder_ordered"]
+        );
 
         // Once the project is in progress, the conversion stays.
         let c = ordered_project(&db, "P-003", vec![line(None, 1_000)]).await;

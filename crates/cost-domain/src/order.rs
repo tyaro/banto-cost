@@ -110,6 +110,11 @@ pub fn check_plan_lines(plan: &[RevenuePlanLine]) -> Vec<ConversionIssue> {
 /// 取消は案件の取り違えなど、受注後の業務がまだ始まっていない誤りを直すためのもの。
 /// 受注変更・売上計上（取消済みを含む）・予算・工数・直接費（発注・配分を含む）・
 /// 完了見込・月額固定・定期売上のどれかがあれば取り消さない（レビュー U-3）。
+///
+/// 一部受注は、残りの範囲の案件がまだ受注前（または失注・中止）なら取り消せる。
+/// 取消では残りの案件を中止にし（[`ProjectStatus::remainder_closed_to`]）、元の案件の
+/// 採用版（転換前の全体の見込）だけを未受注の集計に戻すので、見込は重ならない
+/// （2026-11-13 ユーザー決定）。残りの案件が受注転換済みなら取り消さない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ConversionCancelFacts {
     /// 今の案件の状態。
@@ -117,6 +122,8 @@ pub struct ConversionCancelFacts {
     /// 転換前の状態（`order_conversions.previous_status`）。
     pub previous: Option<ProjectStatus>,
     pub scope: Option<ConversionScope>,
+    /// 一部受注の残りの範囲の案件の今の状態（全部受注では `None`）。
+    pub remainder: Option<ProjectStatus>,
     pub has_order_changes: bool,
     pub has_recognitions: bool,
     pub has_budgets: bool,
@@ -134,8 +141,12 @@ pub enum ConversionCancelIssue {
     NotOrdered,
     /// 転換前の状態が受注前の有効な状態として読めない。
     PreviousUnknown,
-    /// 一部受注。残りの範囲の案件が別にあり、戻すと見込が重なる。
-    Partial,
+    /// 受注の範囲（全部・一部）が読めない。
+    ScopeUnknown,
+    /// 一部受注で、残りの範囲の案件が見つからない・状態が読めない。
+    RemainderUnknown,
+    /// 一部受注で、残りの範囲の案件が受注転換済み（受注済みの側）。
+    RemainderOrdered,
     OrderChanges,
     /// 売上計上の記録がある（取消済みを含む。消し込みの履歴が売上予定を参照する）。
     Recognitions,
@@ -153,7 +164,9 @@ impl ConversionCancelIssue {
         match self {
             Self::NotOrdered => "not_ordered",
             Self::PreviousUnknown => "previous_unknown",
-            Self::Partial => "partial",
+            Self::ScopeUnknown => "scope_unknown",
+            Self::RemainderUnknown => "remainder_unknown",
+            Self::RemainderOrdered => "remainder_ordered",
             Self::OrderChanges => "order_changes",
             Self::Recognitions => "recognitions",
             Self::Budgets => "budgets",
@@ -176,8 +189,16 @@ pub fn check_conversion_cancel(facts: &ConversionCancelFacts) -> Vec<ConversionC
     if !facts.previous.is_some_and(|p| p.convertible()) {
         issues.push(ConversionCancelIssue::PreviousUnknown);
     }
-    if facts.scope != Some(ConversionScope::Whole) {
-        issues.push(ConversionCancelIssue::Partial);
+    match (facts.scope, facts.remainder) {
+        (Some(ConversionScope::Whole), _) => {}
+        (Some(ConversionScope::Partial), None) => {
+            issues.push(ConversionCancelIssue::RemainderUnknown)
+        }
+        (Some(ConversionScope::Partial), Some(r)) if r.is_ordered() => {
+            issues.push(ConversionCancelIssue::RemainderOrdered)
+        }
+        (Some(ConversionScope::Partial), Some(_)) => {}
+        (None, _) => issues.push(ConversionCancelIssue::ScopeUnknown),
     }
     let records = [
         (facts.has_order_changes, ConversionCancelIssue::OrderChanges),
@@ -519,6 +540,60 @@ mod tests {
     }
 
     #[test]
+    fn t40_一部受注は残りの案件が受注前なら取り消せ残りは中止にする() {
+        for remainder in [
+            ProjectStatus::Lead,
+            ProjectStatus::Negotiating,
+            ProjectStatus::OnHold,
+            ProjectStatus::Lost,
+            ProjectStatus::Cancelled,
+        ] {
+            let facts = ConversionCancelFacts {
+                scope: Some(ConversionScope::Partial),
+                remainder: Some(remainder),
+                ..cancellable()
+            };
+            assert_eq!(check_conversion_cancel(&facts), vec![], "{remainder:?}");
+        }
+        // 受注前の有効な状態・保留は中止に。失注・中止はそのまま。
+        assert_eq!(
+            ProjectStatus::Negotiating.remainder_closed_to(),
+            Some(ProjectStatus::Cancelled)
+        );
+        assert_eq!(
+            ProjectStatus::OnHold.remainder_closed_to(),
+            Some(ProjectStatus::Cancelled)
+        );
+        assert_eq!(ProjectStatus::Lost.remainder_closed_to(), None);
+        assert_eq!(ProjectStatus::Cancelled.remainder_closed_to(), None);
+    }
+
+    #[test]
+    fn t40_一部受注で残りの案件が受注済みか分からなければ取り消さない() {
+        for remainder in [ProjectStatus::Ordered, ProjectStatus::InProgress] {
+            let facts = ConversionCancelFacts {
+                scope: Some(ConversionScope::Partial),
+                remainder: Some(remainder),
+                ..cancellable()
+            };
+            assert_eq!(
+                check_conversion_cancel(&facts),
+                vec![ConversionCancelIssue::RemainderOrdered]
+            );
+            assert_eq!(remainder.remainder_closed_to(), None);
+        }
+        let missing = ConversionCancelFacts {
+            scope: Some(ConversionScope::Partial),
+            remainder: None,
+            ..cancellable()
+        };
+        assert_eq!(
+            check_conversion_cancel(&missing),
+            vec![ConversionCancelIssue::RemainderUnknown]
+        );
+    }
+
+    #[test]
     fn t40_受注後の記録があれば理由を全部返して取り消さない() {
         let facts = ConversionCancelFacts {
             has_order_changes: true,
@@ -551,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn t40_進行中以降と一部受注は取り消さない() {
+    fn t40_進行中以降と範囲の読めない転換は取り消さない() {
         for status in [
             ProjectStatus::InProgress,
             ProjectStatus::WorkDone,
@@ -569,13 +644,13 @@ mod tests {
             );
             assert_eq!(status.unconverted_to(ProjectStatus::Lead), None);
         }
-        let partial = ConversionCancelFacts {
-            scope: Some(ConversionScope::Partial),
+        let unreadable = ConversionCancelFacts {
+            scope: None,
             ..cancellable()
         };
         assert_eq!(
-            check_conversion_cancel(&partial),
-            vec![ConversionCancelIssue::Partial]
+            check_conversion_cancel(&unreadable),
+            vec![ConversionCancelIssue::ScopeUnknown]
         );
         let unknown = ConversionCancelFacts {
             previous: Some(ProjectStatus::Lost),
