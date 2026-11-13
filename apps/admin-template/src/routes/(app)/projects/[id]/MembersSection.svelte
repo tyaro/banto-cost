@@ -41,7 +41,13 @@
 
 	const available = isPipelineAvailable();
 	const canEdit = $derived(isAdmin(sessionStore.role));
-	let members = $state<ProjectMember[] | null>(null);
+	/**
+	 * The rows with the project they were read for: only the current
+	 * project's rows are shown and acted on, so moving to another project
+	 * never offers the previous one's members (PR #60 review).
+	 */
+	let read = $state<{ projectId: number; rows: ProjectMember[] } | null>(null);
+	const members = $derived(read && read.projectId === projectId ? read.rows : null);
 	let names = $state<UserName[]>([]);
 	let loadError = $state<unknown>(null);
 	let busy = $state(false);
@@ -57,11 +63,11 @@
 		try {
 			const got = await listProjectMembers(id);
 			if (token !== loadToken) return;
-			members = got;
+			read = { projectId: id, rows: got };
 		} catch (err) {
 			if (token !== loadToken) return;
 			loadError = err;
-			members = null;
+			read = null;
 		}
 	}
 
@@ -110,10 +116,14 @@
 	async function add(event: SubmitEvent) {
 		event.preventDefault();
 		const userId = Number(newUser);
-		if (busy || !newUser || !Number.isInteger(userId)) return;
+		if (busy || !newUser || !Number.isInteger(userId) || !members) return;
+		const id = projectId;
 		busy = true;
 		try {
-			members = await addProjectMember(projectId, userId, newKind);
+			const rows = await addProjectMember(id, userId, newKind);
+			// A newer read (or another project) wins over this answer.
+			++loadToken;
+			read = { projectId: id, rows };
 			newUser = '';
 			toastStore.push('success', m['members.added']());
 		} catch (err) {
@@ -124,12 +134,13 @@
 	}
 
 	async function remove(member: ProjectMember) {
-		if (busy) return;
+		// The row names its own project: never send it with another one's id.
+		if (busy || member.projectId !== projectId) return;
 		busy = true;
 		try {
-			await removeProjectMember(projectId, member.userId, member.kind);
+			await removeProjectMember(member.projectId, member.userId, member.kind);
 			toastStore.push('success', m['members.removed']());
-			await load(projectId);
+			await load(member.projectId);
 		} catch (err) {
 			toastStore.push('error', errorText(err));
 		} finally {
