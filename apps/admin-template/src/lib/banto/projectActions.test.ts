@@ -28,6 +28,11 @@ describe('allows', () => {
 		expect(allows(null, false, 'settle')).toBe(false);
 	});
 
+	it('offers nothing while the answer is pending', () => {
+		expect(allows(null, true, 'settle', true)).toBe(false);
+		expect(allows({ ...none, settle: true }, true, 'settle', true)).toBe(false);
+	});
+
 	it('never allows below the role floor', () => {
 		expect(allows({ ...none, settle: true }, false, 'settle')).toBe(false);
 	});
@@ -39,5 +44,6 @@ describe('overridableItems', () => {
 		expect([...(overridableItems(actions, true) ?? [])]).toEqual(['forecast_rate']);
 		expect(overridableItems(null, true)).toBeNull();
 		expect(overridableItems(actions, false)?.size).toBe(0);
+		expect(overridableItems(null, true, true)?.size).toBe(0);
 	});
 });

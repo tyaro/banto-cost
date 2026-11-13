@@ -48,6 +48,7 @@
 		allows,
 		getProjectActions,
 		overridableItems,
+		PROJECT_ACTIONS_WAIT_MS,
 		type ProjectActionKey,
 		type ProjectActions
 	} from '#lib/banto/projectActions.js';
@@ -69,16 +70,21 @@
 
 	const resource = getResource('projects');
 	const canWrite = $derived(canWriteResources(sessionStore.role));
-	/** The server's answer for this project, or `null` while unknown. */
-	let actions = $state.raw<ProjectActions | null>(null);
-	let actionsToken = 0;
-	const may = (key: ProjectActionKey) => allows(actions, canWrite, key);
-	const canEditProject = $derived(may('editProject'));
-
 	// Tauri's `projects_get` takes `id: i64`: convert the route param first.
 	const rawId = page.params.id ?? '';
 	const parsedId = Number(rawId);
 	const idValid = rawId !== '' && Number.isInteger(parsedId);
+
+	/** The server's answer for this project, or `null` while unknown. */
+	let actions = $state.raw<ProjectActions | null>(null);
+	/**
+	 * A read is in flight: nothing is offered until it answers (PR #61
+	 * review), at most `PROJECT_ACTIONS_WAIT_MS`.
+	 */
+	let actionsPending = $state(idValid && isPipelineAvailable());
+	let actionsToken = 0;
+	const may = (key: ProjectActionKey) => allows(actions, canWrite, key, actionsPending);
+	const canEditProject = $derived(may('editProject'));
 
 	const formResource = idValid ? createFormResource(resource.name, parsedId) : null;
 	// `.raw`: the schema carries lazy label getters a deep proxy would not need.
@@ -185,20 +191,29 @@
 	});
 
 	/**
-	 * Read what the person may do here. A failure forgets the previous answer
-	 * (the members may have changed it, PR #61 review): the buttons then
-	 * follow the role floor and the server still refuses what it must. A late
-	 * answer to an older read is dropped.
+	 * Read what the person may do here. Until it answers, no action is
+	 * offered; past `PROJECT_ACTIONS_WAIT_MS` the buttons follow the role
+	 * floor, and a late answer still replaces that. A failure forgets the
+	 * previous answer (the members may have changed it, PR #61 review): the
+	 * role floor again, and the server still refuses what it must. An answer
+	 * to an older read is dropped.
 	 */
 	async function loadActions() {
 		if (!idValid || !isPipelineAvailable()) return;
 		const token = ++actionsToken;
+		actionsPending = true;
+		const timer = setTimeout(() => {
+			if (token === actionsToken) actionsPending = false;
+		}, PROJECT_ACTIONS_WAIT_MS);
 		try {
 			const read = await getProjectActions(parsedId);
 			if (token === actionsToken) actions = read;
 		} catch {
 			// Unknown: leave it to the role floor and the server.
 			if (token === actionsToken) actions = null;
+		} finally {
+			clearTimeout(timer);
+			if (token === actionsToken) actionsPending = false;
 		}
 	}
 
@@ -322,7 +337,7 @@
 			{#if ordered}
 				<p class="hint">{m['projects.orderedStatusHint']()}</p>
 			{/if}
-			{#if canWrite && !canEditProject}
+			{#if canWrite && !actionsPending && !canEditProject}
 				<p class="hint">{m['projects.readOnlyHint']()}</p>
 			{/if}
 			{#if !managerIsSelect}
@@ -377,7 +392,7 @@
 		<CalcBasisSection
 			projectId={parsedId}
 			{canWrite}
-			overridable={overridableItems(actions, canWrite)}
+			overridable={overridableItems(actions, canWrite, actionsPending)}
 			onPendingChange={(pending) => {
 				calcDirty = pending.dirty;
 				calcBusy = pending.busy;
