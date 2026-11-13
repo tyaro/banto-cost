@@ -48,19 +48,15 @@
 	let newUser = $state('');
 	let newKind = $state<MemberKind>('worker');
 	let loadToken = 0;
+	let namesToken = 0;
 
 	async function load(id: number) {
 		if (!available) return;
 		const token = ++loadToken;
 		loadError = null;
 		try {
-			const [got, gotNames] = await Promise.all([
-				listProjectMembers(id),
-				// Names are a convenience: without them the rows show the id.
-				listUserNames().catch(() => [] as UserName[])
-			]);
+			const got = await listProjectMembers(id);
 			if (token !== loadToken) return;
-			names = gotNames;
 			members = got;
 		} catch (err) {
 			if (token !== loadToken) return;
@@ -69,9 +65,26 @@
 		}
 	}
 
+	/**
+	 * Names are a convenience, read apart from the members (PR #60 review): a
+	 * slow or failed read never holds back the list and the form - the rows
+	 * show the id and the form takes one until the names arrive.
+	 */
+	async function loadNames() {
+		if (!available) return;
+		const token = ++namesToken;
+		try {
+			const got = await listUserNames();
+			if (token === namesToken) names = got;
+		} catch {
+			// Keep what is shown (the ids, or names read earlier).
+		}
+	}
+
 	$effect(() => {
 		void reloadKey;
 		void load(projectId);
+		void loadNames();
 	});
 
 	const nameOptions = $derived(userNameOptions(names));
