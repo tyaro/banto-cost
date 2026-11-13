@@ -118,16 +118,13 @@
 		const userId = Number(newUser);
 		if (busy || !newUser || !Number.isInteger(userId) || !members) return;
 		const id = projectId;
-		const startedAt = loadToken;
 		busy = true;
 		try {
-			const rows = await addProjectMember(id, userId, newKind);
-			// Only while still on the same project and no read started since
-			// (that read answers with the added member as well).
-			if (id === projectId && loadToken === startedAt) {
-				++loadToken;
-				read = { projectId: id, rows };
-			}
+			await addProjectMember(id, userId, newKind);
+			// Read the list again after the add, still on the same project: a
+			// read started meanwhile may predate the add, and this one
+			// supersedes it (moved to another project: its own read stands).
+			if (id === projectId) await load(id);
 			newUser = '';
 			toastStore.push('success', m['members.added']());
 		} catch (err) {
