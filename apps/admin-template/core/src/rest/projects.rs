@@ -21,7 +21,7 @@
 //! | pipeline version create/adopt | `EditPipeline` |
 //! | pipeline overview | scope `amount_projects` |
 //! | order get | `ViewProjectAmounts` |
-//! | order convert / conversion cancel / change request / revenue plan | `EditOrder` |
+//! | order convert / conversion cancel (+ `EditProject` on a partial order's remainder) / conversion correct / change request / revenue plan | `EditOrder` |
 //! | order change decide | `ViewProjectAmounts` + `Approve` (self-approval allowed, audited) |
 //! | revenue recognition create/cancel | `FinanceClose` + `ViewProjectAmounts` |
 //! | outlook / snapshot view | scope `amount_projects` |
@@ -61,9 +61,9 @@ use crate::customers::{Customer, CustomerInput, CustomersService};
 use crate::direct_costs::DirectCostsService;
 use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use crate::orders::{
-    conversion_cancel_audit_detail, CancelInput, ChangeDecision, ChangeRequest,
-    ConversionCancelInput, ConversionRequest, OrderSummary, OrdersService, RecognitionInput,
-    ReplanInput,
+    conversion_cancel_audit_detail, conversion_correction_audit_detail, CancelInput,
+    ChangeDecision, ChangeRequest, ConversionCancelInput, ConversionCorrectionInput,
+    ConversionRequest, OrderSummary, OrdersService, RecognitionInput, ReplanInput,
 };
 use crate::pipeline::{PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput};
 use crate::projects::{Project, ProjectInput, ProjectsService};
@@ -462,7 +462,23 @@ async fn order_conversion_cancel(
     let (_, user_id) = state
         .guard(&session, Operation::EditOrder { project_id: id }, "orders")
         .await?;
-    let summary = state.orders.cancel_conversion(id, input, user_id).await?;
+    // A partial order's remainder is set to 中止: editing it is checked too.
+    let remainder = state.orders.conversion_remainder(id).await?;
+    if let Some(remainder_id) = remainder {
+        state
+            .guard(
+                &session,
+                Operation::EditProject {
+                    project_id: remainder_id,
+                },
+                "projects",
+            )
+            .await?;
+    }
+    let summary = state
+        .orders
+        .cancel_conversion(id, input, user_id, remainder)
+        .await?;
     record_write(
         &state.audit,
         &state.auth,
@@ -471,6 +487,32 @@ async fn order_conversion_cancel(
         "orders",
         Some(&id.to_string()),
         Some(conversion_cancel_audit_detail(&summary)),
+    )
+    .await;
+    Ok(Json(summary))
+}
+
+/// 受注日・根拠の訂正 (T41): the audit detail names the conversion, which
+/// values changed and the 受注日 before and after, not the basis or reason.
+async fn order_conversion_correct(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<ConversionCorrectionInput>,
+) -> Result<Json<OrderSummary>, ApiError> {
+    let (_, user_id) = state
+        .guard(&session, Operation::EditOrder { project_id: id }, "orders")
+        .await?;
+    let summary = state.orders.correct_conversion(id, input, user_id).await?;
+    record_write(
+        &state.audit,
+        &state.auth,
+        &headers,
+        "correct_conversion",
+        "orders",
+        Some(&id.to_string()),
+        Some(conversion_correction_audit_detail(&summary)),
     )
     .await;
     Ok(Json(summary))
@@ -936,6 +978,10 @@ pub(super) fn business_write_router(
         .route(
             "/api/projects/{id}/order/conversion/cancel",
             post(order_conversion_cancel),
+        )
+        .route(
+            "/api/projects/{id}/order/conversion/correct",
+            post(order_conversion_correct),
         )
         .route(
             "/api/projects/{id}/order/changes",

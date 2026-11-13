@@ -44,7 +44,8 @@
 //! | GET    | `/api/pipeline/overview` | -          | `PipelineOverview` (any role; scope `amount_projects`) |
 //! | GET    | `/api/projects/{id}/order` | -        | `OrderSummary` (any role + `ViewProjectAmounts`; P3b) |
 //! | POST   | `/api/projects/{id}/order/convert` | `ConversionRequest` | `OrderSummary` (editor+ + `EditOrder`; `rowVersion`) |
-//! | POST   | `/api/projects/{id}/order/conversion/cancel` | `ConversionCancelInput` | `OrderSummary` (editor+ + `EditOrder`; `rowVersion`, reason required; 受注転換の取消, T40) |
+//! | POST   | `/api/projects/{id}/order/conversion/cancel` | `ConversionCancelInput` | `OrderSummary` (editor+ + `EditOrder`, and `EditProject` on a partial order's remainder; `rowVersion`, reason required; 受注転換の取消, T40) |
+//! | POST   | `/api/projects/{id}/order/conversion/correct` | `ConversionCorrectionInput` | `OrderSummary` (editor+ + `EditOrder`; `revenueVersion`, reason required; 受注日・根拠の訂正, T41) |
 //! | POST   | `/api/projects/{id}/order/changes` | `ChangeRequest` | `OrderSummary` (editor+ + `EditOrder`) |
 //! | POST   | `/api/projects/{id}/order/changes/{changeId}/decide` | `ChangeDecision` | `OrderSummary` (editor+ + `ViewProjectAmounts` + `Approve`, self-approval allowed and audited) |
 //! | PUT    | `/api/projects/{id}/order/revenue-plan` | `ReplanInput` | `OrderSummary` (editor+ + `EditOrder`; `revenueVersion`) |

@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::calendar::YearMonth;
+use crate::calendar::{Date, YearMonth};
 use crate::money::Yen;
 use crate::pipeline::RevenuePlanLine;
 use crate::project::ProjectStatus;
@@ -214,6 +214,64 @@ pub fn check_conversion_cancel(facts: &ConversionCancelFacts) -> Vec<ConversionC
         ),
     ];
     issues.extend(records.into_iter().filter(|(has, _)| *has).map(|(_, i)| i));
+    issues
+}
+
+/// 受注日・根拠の訂正の入力（T41）。
+///
+/// 受注転換の取消（T40）と違い、受注変更・売上計上・工数などの記録が付いた後でも直せる。
+/// 受注日と根拠はどの金額・集計にも使わないので、訂正しても数値は変わらない。
+/// 精算完了の案件は直さない（精算完了の取消で再開してから直す。受注変更などと同じ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversionCorrection<'a> {
+    /// 今の案件の状態。
+    pub status: ProjectStatus,
+    pub current_converted_on: &'a str,
+    pub current_basis: &'a str,
+    /// 訂正後の受注日（`None` は日付として読めない）。
+    pub converted_on: Option<Date>,
+    /// 訂正後の根拠（前後の空白を除いたもの）。
+    pub basis: &'a str,
+    /// 訂正の理由（前後の空白を除いたもの）。
+    pub reason: &'a str,
+}
+
+/// 受注日・根拠を訂正できない理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionCorrectionIssue {
+    /// 受注済み（受注・進行中・作業完了）の案件でない。精算完了も含む。
+    NotOpenOrder,
+    /// 受注日が YYYY-MM-DD として読めない。
+    DateInvalid,
+    BasisRequired,
+    ReasonRequired,
+    /// 受注日も根拠も今のままで、直すものがない。
+    NoChange,
+}
+
+/// 受注日・根拠の訂正を検査する（T41）。空なら訂正でき、元の値は訂正履歴に残す。
+pub fn check_conversion_correction(
+    input: &ConversionCorrection<'_>,
+) -> Vec<ConversionCorrectionIssue> {
+    let mut issues = Vec::new();
+    if !input.status.is_ordered_open() {
+        issues.push(ConversionCorrectionIssue::NotOpenOrder);
+    }
+    if input.converted_on.is_none() {
+        issues.push(ConversionCorrectionIssue::DateInvalid);
+    }
+    if input.basis.is_empty() {
+        issues.push(ConversionCorrectionIssue::BasisRequired);
+    }
+    if input.reason.is_empty() {
+        issues.push(ConversionCorrectionIssue::ReasonRequired);
+    }
+    let same_date = input
+        .converted_on
+        .is_some_and(|d| d.to_string() == input.current_converted_on);
+    if same_date && input.basis == input.current_basis {
+        issues.push(ConversionCorrectionIssue::NoChange);
+    }
     issues
 }
 
@@ -663,6 +721,71 @@ mod tests {
         assert_eq!(
             ProjectStatus::Ordered.unconverted_to(ProjectStatus::Lost),
             None
+        );
+    }
+
+    fn correction<'a>(
+        converted_on: &str,
+        basis: &'a str,
+        reason: &'a str,
+    ) -> ConversionCorrection<'a> {
+        ConversionCorrection {
+            status: ProjectStatus::InProgress,
+            current_converted_on: "2026-11-20",
+            current_basis: "注文書 PO-0001",
+            converted_on: Date::parse(converted_on),
+            basis,
+            reason,
+        }
+    }
+
+    #[test]
+    fn t41_記録が付いた進行中の案件でも受注日と根拠を理由つきで直せる() {
+        // 受注日だけ・根拠だけ・両方のどれでも直せる。
+        for c in [
+            correction("2026-11-02", "注文書 PO-0001", "注文書の日付の入力誤り"),
+            correction("2026-11-20", "注文書 PO-0010", "注文書番号の入力誤り"),
+            correction("2026-11-02", "契約書 K-0002", "取り違え"),
+        ] {
+            assert_eq!(check_conversion_correction(&c), vec![], "{c:?}");
+        }
+        for status in [ProjectStatus::Ordered, ProjectStatus::WorkDone] {
+            let c = ConversionCorrection {
+                status,
+                ..correction("2026-11-02", "注文書 PO-0001", "入力誤り")
+            };
+            assert_eq!(check_conversion_correction(&c), vec![], "{status:?}");
+        }
+    }
+
+    #[test]
+    fn t41_精算完了と受注前の案件は直さず_変わらない訂正と空の入力は拒否する() {
+        for status in [
+            ProjectStatus::Settled,
+            ProjectStatus::Negotiating,
+            ProjectStatus::Cancelled,
+        ] {
+            let c = ConversionCorrection {
+                status,
+                ..correction("2026-11-02", "注文書 PO-0001", "入力誤り")
+            };
+            assert_eq!(
+                check_conversion_correction(&c),
+                vec![ConversionCorrectionIssue::NotOpenOrder],
+                "{status:?}"
+            );
+        }
+        assert_eq!(
+            check_conversion_correction(&correction("2026-11-20", "注文書 PO-0001", "同じ")),
+            vec![ConversionCorrectionIssue::NoChange]
+        );
+        assert_eq!(
+            check_conversion_correction(&correction("2026/11/02", "", "")),
+            vec![
+                ConversionCorrectionIssue::DateInvalid,
+                ConversionCorrectionIssue::BasisRequired,
+                ConversionCorrectionIssue::ReasonRequired,
+            ]
         );
     }
 }

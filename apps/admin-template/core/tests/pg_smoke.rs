@@ -1028,7 +1028,7 @@ async fn app_layer_crud_round_trips_on_postgres() {
             serde_json::from_value(serde_json::json!({ "rowVersion": rv, "reason": "取り違え" }))
                 .unwrap();
         let s = orders
-            .cancel_conversion(wrong.id, cancel, Some(manager))
+            .cancel_conversion(wrong.id, cancel, Some(manager), None)
             .await
             .expect("cancel the conversion on Postgres");
         assert_eq!(s.status, "negotiating");
@@ -1039,6 +1039,23 @@ async fn app_layer_crud_round_trips_on_postgres() {
             .await
             .expect("convert again on Postgres");
         assert_eq!(s.confirmed_amount, Some(500_000));
+        // 受注日・根拠の訂正 (T41, 0026) on Postgres.
+        let correct: admin_template_core::orders::ConversionCorrectionInput =
+            serde_json::from_value(serde_json::json!({
+                "revenueVersion": s.revenue_version,
+                "convertedOn": "2026-06-02",
+                "basis": "注文書 PO-0002",
+                "reason": "日付と番号の入力誤り"
+            }))
+            .unwrap();
+        let s = orders
+            .correct_conversion(wrong.id, correct, Some(manager))
+            .await
+            .expect("correct the conversion on Postgres");
+        let c = s.conversion.as_ref().unwrap();
+        assert_eq!(c.converted_on, "2026-06-02");
+        assert_eq!(c.corrections.len(), 1);
+        assert_eq!(c.corrections[0].old_converted_on, "2026-06-01");
 
         let month = closing.get("2026-11").await.unwrap();
         assert!(month

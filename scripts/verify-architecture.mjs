@@ -446,6 +446,11 @@ const isAllowedPackageImport = (spec) =>
 			role: 'Editor'
 		},
 		{
+			tauri: 'order_conversion_correct',
+			rest: 'POST /api/projects/{id}/order/conversion/correct',
+			role: 'Editor'
+		},
+		{
 			tauri: 'order_change_create',
 			rest: 'POST /api/projects/{id}/order/changes',
 			role: 'Editor'
