@@ -26,8 +26,8 @@ mod keyring_store;
 use admin_template_core::assets::FrontendAssets;
 use admin_template_core::audit::{AuditEntry, AuditLogList, AuditLogService};
 use admin_template_core::authz::{
-    amount_projects, approval_projects, cost_approval_projects, visible_projects, Actor, Allowed,
-    AuthzService, Capability, MemberKind, Operation, Policy, ProjectMember, ProjectScope, Subject,
+    amount_projects, approval_projects, cost_approval_projects, Actor, Allowed, AuthzService,
+    Capability, MemberKind, Operation, Policy, ProjectMember, Subject,
 };
 use admin_template_core::backup::{BackupInfo, BackupService, PendingRestoreInfo};
 use admin_template_core::budgets::{
@@ -35,8 +35,7 @@ use admin_template_core::budgets::{
     DraftCreated, RESOURCE as BUDGET_RESOURCE,
 };
 use admin_template_core::calc_basis::{
-    audit_detail as calc_basis_audit_detail, CalcBasisService, CalcValueInput, CalcValueRow,
-    CompanyBasis, ImpactPreview, ProjectBasis,
+    CalcBasisService, CalcValueInput, CalcValueRow, CompanyBasis, ImpactPreview, ProjectBasis,
 };
 use admin_template_core::closeouts::RESOURCE as CLOSEOUT_RESOURCE;
 use admin_template_core::closing::RESOURCE as CLOSING_RESOURCE;
@@ -86,7 +85,7 @@ use admin_template_core::time_entries::{
     CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntriesService,
     TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
 };
-use admin_template_core::user_names::{user_names, UserName};
+use admin_template_core::user_names::UserName;
 use admin_template_core::users::{Role, UserIdentity, UserIdentityView, UserSummary, UsersService};
 use admin_template_core::work_masters::{
     MasterKind, WorkMaster, WorkMasterInput, WorkMastersService,
@@ -3446,14 +3445,20 @@ async fn caller_subject(state: &AppState) -> Result<Subject, BantoError> {
     state.authz.subject(session_user_id(&session)).await
 }
 
+// --- banto-cost P3a: customers, projects, pipeline -------------------------
+// Twins of `/api/customers/*`, `/api/user-names`, `/api/projects/*` and the
+// pipeline routes (`admin_template_core::rest::projects`): the same role
+// floors here, then the same authorized operation
+// (`admin_template_core::ops::projects` / `ops::pipeline`).
+
 #[tauri::command]
 async fn customers_list(
     state: State<'_, AppState>,
     params: ListParams,
 ) -> Result<ListResult<Customer>, BantoError> {
     let identity = require_role(&state, Role::Viewer, "customers").await?;
-    business_guard_or_admin(&state, &identity, Operation::ViewMasters, "customers").await?;
-    state.customers.list(params).await
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::projects::customers_list(&gate, &state.customers, params).await
 }
 
 /// Twin of `GET /api/user-names`: id + display name for the manager /
@@ -3468,15 +3473,15 @@ async fn user_names_list_body(
     state: &AppState,
     identity: &UserIdentity,
 ) -> Result<Vec<UserName>, BantoError> {
-    business_guard_or_admin(state, identity, Operation::ViewMasters, "users").await?;
-    user_names(&state.users).await
+    let gate = tauri_gate(state, identity).await?;
+    ops::projects::user_names_list(&gate, &state.users).await
 }
 
 #[tauri::command]
 async fn customers_get(state: State<'_, AppState>, id: i64) -> Result<Customer, BantoError> {
     let identity = require_role(&state, Role::Viewer, "customers").await?;
-    business_guard_or_admin(&state, &identity, Operation::ViewMasters, "customers").await?;
-    state.customers.get(id).await
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::projects::customers_get(&gate, &state.customers, id).await
 }
 
 #[tauri::command]
@@ -3492,18 +3497,8 @@ async fn customers_create_body(
     values: CustomerInput,
 ) -> Result<Customer, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    business_guard_or_admin(state, &actor, Operation::EditMasters, "customers").await?;
-    let customer = state.customers.create(values).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        "customers",
-        Some(&customer.id.to_string()),
-        Some(serde_json::json!({ "name": customer.name })),
-    )
-    .await;
-    Ok(customer)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::projects::customers_create(&gate, &state.customers, values).await
 }
 
 #[tauri::command]
@@ -3513,18 +3508,8 @@ async fn customers_update(
     values: CustomerInput,
 ) -> Result<Customer, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    business_guard_or_admin(&state, &actor, Operation::EditMasters, "customers").await?;
-    let customer = state.customers.update(id, values).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        "customers",
-        Some(&id.to_string()),
-        Some(serde_json::json!({ "name": customer.name, "active": customer.active })),
-    )
-    .await;
-    Ok(customer)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::projects::customers_update(&gate, &state.customers, id, values).await
 }
 
 #[tauri::command]
@@ -3540,12 +3525,8 @@ async fn projects_list_body(
     params: ListParams,
 ) -> Result<ListResult<Project>, BantoError> {
     let identity = require_role(state, Role::Viewer, "projects").await?;
-    let scope = if identity.role.is_admin() {
-        ProjectScope::All
-    } else {
-        visible_projects(&caller_subject(state).await?)
-    };
-    state.projects.list(params, &scope).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::projects::projects_list(&gate, &state.projects, params).await
 }
 
 #[tauri::command]
@@ -3555,14 +3536,8 @@ async fn projects_get(state: State<'_, AppState>, id: i64) -> Result<Project, Ba
 
 async fn projects_get_body(state: &AppState, id: i64) -> Result<Project, BantoError> {
     let identity = require_role(state, Role::Viewer, "projects").await?;
-    business_guard_or_admin(
-        state,
-        &identity,
-        Operation::ViewProject { project_id: id },
-        "projects",
-    )
-    .await?;
-    state.projects.get(id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::projects::projects_get(&gate, &state.projects, id).await
 }
 
 #[tauri::command]
@@ -3578,21 +3553,8 @@ async fn projects_create_body(
     values: ProjectInput,
 ) -> Result<Project, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (subject, user_id) =
-        business_guard(state, &actor, Operation::CreateProject, "projects").await?;
-    // A sales registrant becomes the project's sales owner (ADR-0028).
-    let sales = user_id.filter(|_| subject.has(Capability::PipelineEdit));
-    let project = state.projects.create(values, sales).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        "projects",
-        Some(&project.id.to_string()),
-        Some(serde_json::json!({ "code": project.code, "status": project.status })),
-    )
-    .await;
-    Ok(project)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::projects::projects_create(&gate, &state.projects, values).await
 }
 
 #[tauri::command]
@@ -3602,24 +3564,8 @@ async fn projects_update(
     values: ProjectInput,
 ) -> Result<Project, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    business_guard(
-        &state,
-        &actor,
-        Operation::EditProject { project_id: id },
-        "projects",
-    )
-    .await?;
-    let project = state.projects.update(id, values).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "update",
-        "projects",
-        Some(&id.to_string()),
-        Some(serde_json::json!({ "code": project.code, "status": project.status })),
-    )
-    .await;
-    Ok(project)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::projects::projects_update(&gate, &state.projects, id, values).await
 }
 
 #[tauri::command]
@@ -3635,14 +3581,8 @@ async fn pipeline_versions_list_body(
     project_id: i64,
 ) -> Result<Vec<PipelineVersion>, BantoError> {
     let identity = require_role(state, Role::Viewer, "pipeline_versions").await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        "pipeline_versions",
-    )
-    .await?;
-    state.pipeline.versions(project_id).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::pipeline::versions(&gate, &state.pipeline, project_id).await
 }
 
 #[tauri::command]
@@ -3660,27 +3600,8 @@ async fn pipeline_versions_create_body(
     values: PipelineVersionInput,
 ) -> Result<PipelineVersion, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        state,
-        &actor,
-        Operation::EditPipeline { project_id },
-        "pipeline_versions",
-    )
-    .await?;
-    let version = state
-        .pipeline
-        .create_version(project_id, values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        "pipeline_versions",
-        Some(&project_id.to_string()),
-        Some(serde_json::json!({ "versionNo": version.version_no, "kind": version.kind })),
-    )
-    .await;
-    Ok(version)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::pipeline::create_version(&gate, &state.pipeline, project_id, values).await
 }
 
 #[tauri::command]
@@ -3690,27 +3611,8 @@ async fn pipeline_versions_adopt(
     version_id: i64,
 ) -> Result<PipelineVersion, BantoError> {
     let actor = require_role(&state, Role::Editor, "business").await?;
-    let (_, user_id) = business_guard(
-        &state,
-        &actor,
-        Operation::EditPipeline { project_id },
-        "pipeline_versions",
-    )
-    .await?;
-    let version = state
-        .pipeline
-        .adopt(project_id, version_id, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "adopt",
-        "pipeline_versions",
-        Some(&project_id.to_string()),
-        Some(serde_json::json!({ "versionNo": version.version_no })),
-    )
-    .await;
-    Ok(version)
+    let gate = tauri_gate(&state, &actor).await?;
+    ops::pipeline::adopt(&gate, &state.pipeline, project_id, version_id).await
 }
 
 #[tauri::command]
@@ -3719,9 +3621,9 @@ async fn pipeline_overview(state: State<'_, AppState>) -> Result<PipelineOvervie
 }
 
 async fn pipeline_overview_body(state: &AppState) -> Result<PipelineOverview, BantoError> {
-    require_role(state, Role::Viewer, "pipeline").await?;
-    let scope = amount_projects(&caller_subject(state).await?);
-    state.pipeline.overview(&scope).await
+    let identity = require_role(state, Role::Viewer, "pipeline").await?;
+    let gate = tauri_gate(state, &identity).await?;
+    ops::pipeline::overview(&gate, &state.pipeline).await
 }
 
 // --- banto-cost P3b: orders, revenue, outlook (ADR-0028) ------------------
@@ -4137,49 +4039,9 @@ async fn outlook_snapshot_create(
 // --- banto-cost P4a: calc basis (design §10, ADR-0028) ---------------------
 //
 // Tauri twins of the `/api/calc-basis*` and `/api/projects/{id}/calc-basis*`
-// routes: the same role floors, the same `Operation`s through
-// `authorize_audited`, the same audit actions and detail (no rate values).
-
-/// `EditCalcBasis` for the item the request names.
-async fn company_basis_guard(
-    state: &AppState,
-    actor: &UserIdentity,
-    values: &CalcValueInput,
-) -> Result<Option<i64>, BantoError> {
-    let item = state.calc_basis.item_for(values).await?;
-    let (_, user_id) = business_guard(
-        state,
-        actor,
-        Operation::EditCalcBasis {
-            capability: item.capability()?,
-        },
-        "calc_basis",
-    )
-    .await?;
-    Ok(user_id)
-}
-
-/// `OverrideCalcBasis` on the project for the item the request names.
-async fn project_basis_guard(
-    state: &AppState,
-    actor: &UserIdentity,
-    project_id: i64,
-    values: &CalcValueInput,
-) -> Result<Option<i64>, BantoError> {
-    let item = state.calc_basis.item_for(values).await?;
-    let (_, user_id) = business_guard(
-        state,
-        actor,
-        Operation::OverrideCalcBasis {
-            project_id,
-            capability: item.capability()?,
-            managers_allowed: item.managers_may_override,
-        },
-        "calc_basis",
-    )
-    .await?;
-    Ok(user_id)
-}
+// routes: the same role floors here, then the same authorized operation
+// (`admin_template_core::ops::calc_basis`: `ViewCalcBasis`, `EditCalcBasis`,
+// `ViewProjectAmounts`, `OverrideCalcBasis`, the audit without rate values).
 
 #[tauri::command]
 async fn calc_basis_get(
@@ -4191,8 +4053,8 @@ async fn calc_basis_get(
 
 async fn calc_basis_get_body(state: &AppState, on: String) -> Result<CompanyBasis, BantoError> {
     let identity = require_role(state, Role::Viewer, "calc_basis").await?;
-    business_guard(state, &identity, Operation::ViewCalcBasis, "calc_basis").await?;
-    state.calc_basis.company(&on).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::calc_basis::company(&gate, &state.calc_basis, &on).await
 }
 
 #[tauri::command]
@@ -4201,8 +4063,8 @@ async fn calc_basis_preview(
     values: CalcValueInput,
 ) -> Result<ImpactPreview, BantoError> {
     let identity = require_role(&state, Role::Viewer, "calc_basis").await?;
-    company_basis_guard(&state, &identity, &values).await?;
-    state.calc_basis.preview(None, values).await
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::calc_basis::company_preview(&gate, &state.calc_basis, values).await
 }
 
 #[tauri::command]
@@ -4218,18 +4080,8 @@ async fn calc_basis_add_body(
     values: CalcValueInput,
 ) -> Result<CalcValueRow, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let user_id = company_basis_guard(state, &actor, &values).await?;
-    let row = state.calc_basis.add(None, values, user_id).await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "create",
-        "calc_basis",
-        Some(&row.id.to_string()),
-        Some(calc_basis_audit_detail(&row)),
-    )
-    .await;
-    Ok(row)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::calc_basis::company_add(&gate, &state.calc_basis, values).await
 }
 
 #[tauri::command]
@@ -4247,14 +4099,8 @@ async fn project_calc_basis_get_body(
     on: String,
 ) -> Result<ProjectBasis, BantoError> {
     let identity = require_role(state, Role::Viewer, "calc_basis").await?;
-    business_guard(
-        state,
-        &identity,
-        Operation::ViewProjectAmounts { project_id },
-        "calc_basis",
-    )
-    .await?;
-    state.calc_basis.project(project_id, &on).await
+    let gate = tauri_gate(state, &identity).await?;
+    ops::calc_basis::project(&gate, &state.calc_basis, project_id, &on).await
 }
 
 #[tauri::command]
@@ -4264,8 +4110,8 @@ async fn project_calc_basis_preview(
     values: CalcValueInput,
 ) -> Result<ImpactPreview, BantoError> {
     let identity = require_role(&state, Role::Viewer, "calc_basis").await?;
-    project_basis_guard(&state, &identity, project_id, &values).await?;
-    state.calc_basis.preview(Some(project_id), values).await
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::calc_basis::project_preview(&gate, &state.calc_basis, project_id, values).await
 }
 
 #[tauri::command]
@@ -4283,21 +4129,8 @@ async fn project_calc_basis_add_body(
     values: CalcValueInput,
 ) -> Result<CalcValueRow, BantoError> {
     let actor = require_role(state, Role::Editor, "business").await?;
-    let user_id = project_basis_guard(state, &actor, project_id, &values).await?;
-    let row = state
-        .calc_basis
-        .add(Some(project_id), values, user_id)
-        .await?;
-    record_ok(
-        &state.audit,
-        &actor,
-        "override",
-        "calc_basis",
-        Some(&row.id.to_string()),
-        Some(calc_basis_audit_detail(&row)),
-    )
-    .await;
-    Ok(row)
+    let gate = tauri_gate(state, &actor).await?;
+    ops::calc_basis::project_add(&gate, &state.calc_basis, project_id, values).await
 }
 
 // --- banto-cost P4b: phases / common activities / time entries -------------

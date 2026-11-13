@@ -18,13 +18,18 @@
 //! Migrated so far: 精算完了 ([`closeouts`]), 月次締め ([`closing`]),
 //! 月額固定原価 ([`fixed_costs`]), 定期売上 ([`recurring_revenue`]) - the
 //! areas with the fewest operations, as the review proposed - then 予算
-//! ([`budgets`]), 完了見込と全体一覧 ([`forecasts`]) and 帳票 ([`reports`]).
+//! ([`budgets`]), 完了見込と全体一覧 ([`forecasts`]) and 帳票 ([`reports`]),
+//! then 顧客・案件 ([`projects`]), 見込 ([`pipeline`]) and 計算基準
+//! ([`calc_basis`]).
 
 pub mod budgets;
+pub mod calc_basis;
 pub mod closeouts;
 pub mod closing;
 pub mod fixed_costs;
 pub mod forecasts;
+pub mod pipeline;
+pub mod projects;
 pub mod recurring_revenue;
 pub mod reports;
 
@@ -113,8 +118,34 @@ impl Gate<'_> {
             .await;
     }
 
+    /// Decide `op`, except that the `admin` role passes without a
+    /// capability: the system administrator maintains masters and the
+    /// projects' basic information (spec §4), never a check that shows
+    /// amounts.
+    pub async fn check_or_admin(&self, op: Operation, resource: &str) -> Result<(), BantoError> {
+        if !self.is_admin() {
+            self.check(op, resource).await?;
+        }
+        Ok(())
+    }
+
     pub fn user_id(&self) -> Option<i64> {
         self.caller.user_id
+    }
+
+    /// Whether the caller holds the `admin` role.
+    pub fn is_admin(&self) -> bool {
+        Role::from_str(self.caller.role).is_ok_and(|role| role.is_admin())
+    }
+
+    /// The projects whose rows (basic information) the caller sees: every
+    /// project for the `admin` role, `visible_projects` for the others.
+    pub async fn visible_scope(&self) -> Result<ProjectScope, BantoError> {
+        if self.is_admin() {
+            return Ok(ProjectScope::All);
+        }
+        let subject = self.authz.subject(self.caller.user_id).await?;
+        Ok(visible_projects(&subject))
     }
 
     /// The scopes of the overall list and the reports built from it
@@ -124,7 +155,7 @@ impl Gate<'_> {
     /// or audited - the scope only narrows).
     pub async fn portfolio_scopes(&self) -> Result<(ProjectScope, ProjectScope), BantoError> {
         let subject = self.authz.subject(self.caller.user_id).await?;
-        let visible = if Role::from_str(self.caller.role).is_ok_and(|role| role.is_admin()) {
+        let visible = if self.is_admin() {
             ProjectScope::All
         } else {
             visible_projects(&subject)

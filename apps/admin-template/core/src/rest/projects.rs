@@ -3,7 +3,10 @@
 //! commands in `src-tauri`; both sides authorize through
 //! `AuthzService::authorize_audited` with the same `Operation`s (ADR-0028,
 //! conventions §1), and lists use the same scope functions as the detail
-//! decisions (`visible_projects` / `amount_projects`, T12).
+//! decisions (`visible_projects` / `amount_projects`, T12). Customers,
+//! projects, the pipeline and the calc basis call the authorized operations
+//! in `crate::ops::{projects, pipeline, calc_basis}` (decision, service,
+//! audit; review §8-13); orders and the outlook still decide here.
 //!
 //! Role floors: reads need a session; writes need `editor` (Banto's "may
 //! enter business data"). On top of the floor:
@@ -45,8 +48,7 @@ use super::*;
 use axum::extract::Query;
 use axum::Extension;
 use banto_admin_services::authz::{
-    amount_projects, visible_projects, Actor, Allowed, AuthzService, Capability, Operation, Policy,
-    ProjectScope, Subject,
+    amount_projects, Actor, Allowed, AuthzService, Operation, Policy, Subject,
 };
 use banto_core::BantoError;
 use banto_server::AuthenticatedSession;
@@ -54,12 +56,11 @@ use std::str::FromStr;
 
 use crate::budgets::BudgetsService;
 use crate::calc_basis::{
-    audit_detail, CalcBasisService, CalcValueInput, CalcValueRow, CompanyBasis, ImpactPreview,
-    ProjectBasis,
+    CalcBasisService, CalcValueInput, CalcValueRow, CompanyBasis, ImpactPreview, ProjectBasis,
 };
 use crate::customers::{Customer, CustomerInput, CustomersService};
 use crate::direct_costs::DirectCostsService;
-use crate::ops::{Caller, Gate};
+use crate::ops::{self, Caller, Gate};
 use crate::orders::outlook::{OutlookQuery, OutlookView, SnapshotInfo};
 use crate::orders::{
     conversion_cancel_audit_detail, conversion_correction_audit_detail, CancelInput,
@@ -69,7 +70,7 @@ use crate::orders::{
 use crate::pipeline::{PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput};
 use crate::projects::{Project, ProjectInput, ProjectsService};
 use crate::time_entries::TimeEntriesService;
-use crate::user_names::{user_names, UserName};
+use crate::user_names::UserName;
 use crate::work_masters::WorkMastersService;
 
 use super::authz::caller_user_id;
@@ -138,19 +139,6 @@ impl BusinessState {
         Ok((subject, user_id, allowed))
     }
 
-    /// As [`Self::guard`], but the `admin` role passes without a capability.
-    pub(super) async fn guard_or_admin(
-        &self,
-        session: &AuthenticatedSession,
-        op: Operation,
-        resource: &str,
-    ) -> Result<(), BantoError> {
-        if !is_admin(session) {
-            self.guard(session, op, resource).await?;
-        }
-        Ok(())
-    }
-
     pub(super) async fn subject(
         &self,
         session: &AuthenticatedSession,
@@ -178,17 +166,17 @@ impl BusinessState {
     }
 }
 
-// --- customers --------------------------------------------------------------
+// --- customers, projects (crate::ops::projects) ---------------------------
 
 async fn customers_list(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
     Json(params): Json<ListParams>,
 ) -> Result<Json<ListResult<Customer>>, ApiError> {
-    state
-        .guard_or_admin(&session, Operation::ViewMasters, "customers")
-        .await?;
-    Ok(Json(state.customers.list(params).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::customers_list(&gate, &state.customers, params).await?,
+    ))
 }
 
 async fn customers_get(
@@ -196,10 +184,10 @@ async fn customers_get(
     Extension(session): Extension<AuthenticatedSession>,
     Path(id): Path<i64>,
 ) -> Result<Json<Customer>, ApiError> {
-    state
-        .guard_or_admin(&session, Operation::ViewMasters, "customers")
-        .await?;
-    Ok(Json(state.customers.get(id).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::customers_get(&gate, &state.customers, id).await?,
+    ))
 }
 
 // --- user names (the manager / employee pickers) -------------------------
@@ -208,72 +196,44 @@ async fn user_names_list(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
 ) -> Result<Json<Vec<UserName>>, ApiError> {
-    state
-        .guard_or_admin(&session, Operation::ViewMasters, "users")
-        .await?;
-    Ok(Json(user_names(&state.users).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::user_names_list(&gate, &state.users).await?,
+    ))
 }
 
 async fn customers_create(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Json(input): Json<CustomerInput>,
 ) -> Result<Json<Customer>, ApiError> {
-    state
-        .guard_or_admin(&session, Operation::EditMasters, "customers")
-        .await?;
-    let customer = state.customers.create(input).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "create",
-        "customers",
-        Some(&customer.id.to_string()),
-        Some(json!({ "name": customer.name })),
-    )
-    .await;
-    Ok(Json(customer))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::customers_create(&gate, &state.customers, input).await?,
+    ))
 }
 
 async fn customers_update(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<CustomerInput>,
 ) -> Result<Json<Customer>, ApiError> {
-    state
-        .guard_or_admin(&session, Operation::EditMasters, "customers")
-        .await?;
-    let customer = state.customers.update(id, input).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "update",
-        "customers",
-        Some(&id.to_string()),
-        Some(json!({ "name": customer.name, "active": customer.active })),
-    )
-    .await;
-    Ok(Json(customer))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::customers_update(&gate, &state.customers, id, input).await?,
+    ))
 }
-
-// --- projects ---------------------------------------------------------------
 
 async fn projects_list(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
     Json(params): Json<ListParams>,
 ) -> Result<Json<ListResult<Project>>, ApiError> {
-    let scope = if is_admin(&session) {
-        ProjectScope::All
-    } else {
-        visible_projects(&state.subject(&session).await?)
-    };
-    Ok(Json(state.projects.list(params, &scope).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::projects_list(&gate, &state.projects, params).await?,
+    ))
 }
 
 async fn projects_get(
@@ -281,147 +241,77 @@ async fn projects_get(
     Extension(session): Extension<AuthenticatedSession>,
     Path(id): Path<i64>,
 ) -> Result<Json<Project>, ApiError> {
-    state
-        .guard_or_admin(
-            &session,
-            Operation::ViewProject { project_id: id },
-            "projects",
-        )
-        .await?;
-    Ok(Json(state.projects.get(id).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::projects_get(&gate, &state.projects, id).await?,
+    ))
 }
 
 async fn projects_create(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Json(input): Json<ProjectInput>,
 ) -> Result<Json<Project>, ApiError> {
-    let (subject, user_id) = state
-        .guard(&session, Operation::CreateProject, "projects")
-        .await?;
-    // A sales registrant becomes the project's sales owner (ADR-0028).
-    let sales = user_id.filter(|_| subject.has(Capability::PipelineEdit));
-    let project = state.projects.create(input, sales).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "create",
-        "projects",
-        Some(&project.id.to_string()),
-        Some(json!({ "code": project.code, "status": project.status })),
-    )
-    .await;
-    Ok(Json(project))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::projects_create(&gate, &state.projects, input).await?,
+    ))
 }
 
 async fn projects_update(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<ProjectInput>,
 ) -> Result<Json<Project>, ApiError> {
-    state
-        .guard(
-            &session,
-            Operation::EditProject { project_id: id },
-            "projects",
-        )
-        .await?;
-    let project = state.projects.update(id, input).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "update",
-        "projects",
-        Some(&id.to_string()),
-        Some(json!({ "code": project.code, "status": project.status })),
-    )
-    .await;
-    Ok(Json(project))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::projects::projects_update(&gate, &state.projects, id, input).await?,
+    ))
 }
 
-// --- pipeline ---------------------------------------------------------------
+// --- pipeline (crate::ops::pipeline) ----------------------------------------
 
 async fn pipeline_versions_list(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
     Path(id): Path<i64>,
 ) -> Result<Json<Vec<PipelineVersion>>, ApiError> {
-    state
-        .guard(
-            &session,
-            Operation::ViewProjectAmounts { project_id: id },
-            "pipeline_versions",
-        )
-        .await?;
-    Ok(Json(state.pipeline.versions(id).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::pipeline::versions(&gate, &state.pipeline, id).await?,
+    ))
 }
 
 async fn pipeline_versions_create(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<PipelineVersionInput>,
 ) -> Result<Json<PipelineVersion>, ApiError> {
-    let (_, user_id) = state
-        .guard(
-            &session,
-            Operation::EditPipeline { project_id: id },
-            "pipeline_versions",
-        )
-        .await?;
-    let version = state.pipeline.create_version(id, input, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "create",
-        "pipeline_versions",
-        Some(&id.to_string()),
-        Some(json!({ "versionNo": version.version_no, "kind": version.kind })),
-    )
-    .await;
-    Ok(Json(version))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::pipeline::create_version(&gate, &state.pipeline, id, input).await?,
+    ))
 }
 
 async fn pipeline_versions_adopt(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path((id, version_id)): Path<(i64, i64)>,
 ) -> Result<Json<PipelineVersion>, ApiError> {
-    let (_, user_id) = state
-        .guard(
-            &session,
-            Operation::EditPipeline { project_id: id },
-            "pipeline_versions",
-        )
-        .await?;
-    let version = state.pipeline.adopt(id, version_id, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "adopt",
-        "pipeline_versions",
-        Some(&id.to_string()),
-        Some(json!({ "versionNo": version.version_no })),
-    )
-    .await;
-    Ok(Json(version))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::pipeline::adopt(&gate, &state.pipeline, id, version_id).await?,
+    ))
 }
 
 async fn pipeline_overview(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
 ) -> Result<Json<PipelineOverview>, ApiError> {
-    let scope = amount_projects(&state.subject(&session).await?);
-    Ok(Json(state.pipeline.overview(&scope).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(ops::pipeline::overview(&gate, &state.pipeline).await?))
 }
 
 // --- orders (P3b) -------------------------------------------------------------
@@ -765,52 +655,11 @@ async fn outlook_snapshot_create(
     Ok(Json(snapshot))
 }
 
-// --- calc basis (P4a) -------------------------------------------------------
+// --- calc basis (P4a, crate::ops::calc_basis) -----------------------------
 
 #[derive(Debug, serde::Deserialize)]
 struct OnQuery {
     on: String,
-}
-
-/// `EditCalcBasis` for the item the request names.
-async fn company_basis_guard(
-    state: &BusinessState,
-    session: &AuthenticatedSession,
-    input: &CalcValueInput,
-) -> Result<Option<i64>, BantoError> {
-    let item = state.calc_basis.item_for(input).await?;
-    let (_, user_id) = state
-        .guard(
-            session,
-            Operation::EditCalcBasis {
-                capability: item.capability()?,
-            },
-            "calc_basis",
-        )
-        .await?;
-    Ok(user_id)
-}
-
-/// `OverrideCalcBasis` on the project for the item the request names.
-async fn project_basis_guard(
-    state: &BusinessState,
-    session: &AuthenticatedSession,
-    project_id: i64,
-    input: &CalcValueInput,
-) -> Result<Option<i64>, BantoError> {
-    let item = state.calc_basis.item_for(input).await?;
-    let (_, user_id) = state
-        .guard(
-            session,
-            Operation::OverrideCalcBasis {
-                project_id,
-                capability: item.capability()?,
-                managers_allowed: item.managers_may_override,
-            },
-            "calc_basis",
-        )
-        .await?;
-    Ok(user_id)
 }
 
 async fn calc_basis_get(
@@ -818,10 +667,10 @@ async fn calc_basis_get(
     Extension(session): Extension<AuthenticatedSession>,
     Query(query): Query<OnQuery>,
 ) -> Result<Json<CompanyBasis>, ApiError> {
-    state
-        .guard(&session, Operation::ViewCalcBasis, "calc_basis")
-        .await?;
-    Ok(Json(state.calc_basis.company(&query.on).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::calc_basis::company(&gate, &state.calc_basis, &query.on).await?,
+    ))
 }
 
 async fn calc_basis_preview(
@@ -829,29 +678,21 @@ async fn calc_basis_preview(
     Extension(session): Extension<AuthenticatedSession>,
     Json(input): Json<CalcValueInput>,
 ) -> Result<Json<ImpactPreview>, ApiError> {
-    company_basis_guard(&state, &session, &input).await?;
-    Ok(Json(state.calc_basis.preview(None, input).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::calc_basis::company_preview(&gate, &state.calc_basis, input).await?,
+    ))
 }
 
 async fn calc_basis_add(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Json(input): Json<CalcValueInput>,
 ) -> Result<Json<CalcValueRow>, ApiError> {
-    let user_id = company_basis_guard(&state, &session, &input).await?;
-    let row = state.calc_basis.add(None, input, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "create",
-        "calc_basis",
-        Some(&row.id.to_string()),
-        Some(audit_detail(&row)),
-    )
-    .await;
-    Ok(Json(row))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::calc_basis::company_add(&gate, &state.calc_basis, input).await?,
+    ))
 }
 
 async fn project_basis_get(
@@ -860,14 +701,10 @@ async fn project_basis_get(
     Path(id): Path<i64>,
     Query(query): Query<OnQuery>,
 ) -> Result<Json<ProjectBasis>, ApiError> {
-    state
-        .guard(
-            &session,
-            Operation::ViewProjectAmounts { project_id: id },
-            "calc_basis",
-        )
-        .await?;
-    Ok(Json(state.calc_basis.project(id, &query.on).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::calc_basis::project(&gate, &state.calc_basis, id, &query.on).await?,
+    ))
 }
 
 async fn project_basis_preview(
@@ -876,30 +713,22 @@ async fn project_basis_preview(
     Path(id): Path<i64>,
     Json(input): Json<CalcValueInput>,
 ) -> Result<Json<ImpactPreview>, ApiError> {
-    project_basis_guard(&state, &session, id, &input).await?;
-    Ok(Json(state.calc_basis.preview(Some(id), input).await?))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::calc_basis::project_preview(&gate, &state.calc_basis, id, input).await?,
+    ))
 }
 
 async fn project_basis_add(
     State(state): State<BusinessState>,
     Extension(session): Extension<AuthenticatedSession>,
-    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(input): Json<CalcValueInput>,
 ) -> Result<Json<CalcValueRow>, ApiError> {
-    let user_id = project_basis_guard(&state, &session, id, &input).await?;
-    let row = state.calc_basis.add(Some(id), input, user_id).await?;
-    record_write(
-        &state.audit,
-        &state.auth,
-        &headers,
-        "override",
-        "calc_basis",
-        Some(&row.id.to_string()),
-        Some(audit_detail(&row)),
-    )
-    .await;
-    Ok(Json(row))
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::calc_basis::project_add(&gate, &state.calc_basis, id, input).await?,
+    ))
 }
 
 /// The services the business routers need, bundled so `api_router` passes one value.
