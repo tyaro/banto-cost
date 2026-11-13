@@ -48,6 +48,13 @@ export function loadMyAuthz(
 ): Promise<void> {
 	if (!force && !stale && loaded?.generation === generation) return Promise.resolve();
 	if (!isPipelineAvailable()) return Promise.resolve();
+	// Another session's grants are never kept past the start of this one's
+	// read, even if the read fails (PR #60 review): the nav and the dashboard
+	// go back to "unknown" rather than the previous person's capabilities.
+	if (loaded && loaded.generation !== generation) {
+		loaded = null;
+		stale = false;
+	}
 	if (force || loading?.generation !== generation) {
 		const promise = getMyAuthz()
 			.then((authz) => {

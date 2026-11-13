@@ -114,4 +114,15 @@ describe('myAuthz (review D-4, §8-15)', () => {
 		await loadMyAuthz(1);
 		expect(mocks.httpRequest).toHaveBeenCalledTimes(3);
 	});
+
+	it("drops the previous session's grants when the next session's read starts, even if it fails", async () => {
+		mocks.httpRequest.mockResolvedValueOnce(worker);
+		await loadMyAuthz(1);
+		mocks.httpRequest.mockRejectedValueOnce(new Error('offline'));
+		await loadMyAuthz(2);
+		// Whatever generation is read now, nothing of session 1 is held.
+		expect(myAuthz()).toBeNull();
+		mocks.generation = 2;
+		expect(myCapabilities()).toBeNull();
+	});
 });
