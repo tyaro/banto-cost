@@ -4,9 +4,14 @@ import {
 	attentionProjectIds,
 	combineCounts,
 	currentAndNextMonth,
+	dashboardAccess,
 	outlookMonthTotal,
-	previousMonth
+	previousMonth,
+	withAccess,
+	withAccessCombined
 } from './dashboardSummary';
+import { isForbiddenError } from './costFormat';
+import type { Capability } from './capabilitiesAdmin';
 import type { OverviewRow, PipelineOverview } from './pipelineAdmin';
 import type { OutlookFigures, OutlookView } from './ordersAdmin';
 
@@ -185,5 +190,34 @@ describe('combineCounts', () => {
 	});
 	it('is loading while nothing is read and a list is still on its way', () => {
 		expect(combineCounts([failed('a'), loading])).toEqual({ state: 'loading' });
+	});
+});
+
+// §8-15: a tile the capabilities rule out reads 権限がありません, never the ¥0 / 0件 of an empty scope.
+describe('dashboardAccess', () => {
+	const caps = (...c: Capability[]) => new Set<Capability>(c);
+
+	it('changes nothing while the capabilities are unknown', () => {
+		expect(dashboardAccess(null)).toEqual({ amounts: true, approvals: true });
+	});
+
+	it('amounts need amount.view; approvals need project.manage or finance.close', () => {
+		expect(dashboardAccess(caps('time.entry'))).toEqual({ amounts: false, approvals: false });
+		expect(dashboardAccess(caps('amount.view', 'project.manage'))).toEqual({
+			amounts: true,
+			approvals: true
+		});
+		expect(dashboardAccess(caps('finance.close'))).toEqual({ amounts: false, approvals: true });
+	});
+
+	it('a ruled-out source or count is forbidden, an allowed one passes through', () => {
+		const ok = { state: 'ok' as const, value: 0 };
+		expect(withAccess(ok, true)).toBe(ok);
+		const denied = withAccess(ok, false);
+		expect(denied.state === 'error' && isForbiddenError(denied.error)).toBe(true);
+		const count = combineCounts([ok]);
+		expect(withAccessCombined(count, true)).toBe(count);
+		const deniedCount = withAccessCombined(count, false);
+		expect(deniedCount.state === 'error' && isForbiddenError(deniedCount.error)).toBe(true);
 	});
 });

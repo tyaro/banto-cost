@@ -11,6 +11,7 @@ import { isBantoReady } from '#lib/banto/setup.js';
 import { deferUntilStarted } from '#lib/banto/startupGate.js';
 import { syncLocaleFromProvider } from '#lib/banto/locale.js';
 import { loadBusinessCalendar } from '#lib/banto/businessCalendar.svelte.js';
+import { loadMyAuthz } from '#lib/banto/myAuthz.svelte.js';
 import { settings } from '#lib/settings.svelte.js';
 import { isPathActive, publicNavItems, resolveAppPath } from '#lib/navigation.js';
 
@@ -90,7 +91,12 @@ export async function load({ url }) {
 	// P8d: today's business date and the fiscal periods, once per app run
 	// (cached; a failure falls back to the device date without periods). The
 	// pages read them while they set their default months.
-	if (snapshot.kind !== 'publicViewer') await loadBusinessCalendar();
+	// §8-15 (review D-4): the person's own capabilities, once per session, so
+	// the nav can hide the screens they cannot use (display only; bounded
+	// wait, a failure hides nothing). Read alongside the calendar.
+	if (snapshot.kind !== 'publicViewer') {
+		await Promise.all([loadBusinessCalendar(), loadMyAuthz(snapshot.generation)]);
+	}
 
 	// The generation THIS load confirmed (I-16) - never a `snapshot.generation`
 	// read now: after the awaits above another session may already have been

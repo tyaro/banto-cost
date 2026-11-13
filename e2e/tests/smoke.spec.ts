@@ -878,11 +878,24 @@ test.describe.serial('Banto LAN/REST smoke', () => {
 		await expect(page.getByText('閲覧する権限がありません').first()).toBeVisible();
 		await expect(page.getByRole('button', { name: '顧客を登録' })).toHaveCount(0);
 
-		// The dashboard totals only the projects in the viewer's scope (none).
+		// §8-15: with no capability the nav lists no business screen (display
+		// only - the server's refusal above stays the answer).
 		await page.goto('/dashboard');
-		await expect(page.locator('[data-tile="pipeline-total"] .stat-value')).toHaveText('¥0');
-		await expect(page.locator('[data-tile="attention"] .stat-value')).toHaveText('0 件');
-		// 確認すること (P8g): a source the viewer may not read says so, never 0 件.
+		await expect(page.locator('#app-sidebar').getByRole('link', { name: '顧客' })).toHaveCount(0);
+		await expect(page.locator('#app-sidebar').getByRole('link', { name: '案件台帳' })).toHaveCount(
+			0
+		);
+		// Without amount.view the amount tiles say so instead of the ¥0 / 0 件
+		// of an empty scope (§8-15); 確認すること (P8g) likewise, never 0 件.
+		await expect(page.locator('[data-tile="pipeline-total"] .stat-value')).toHaveText(
+			'権限がありません'
+		);
+		await expect(page.locator('[data-tile="attention"] .stat-value')).toHaveText(
+			'権限がありません'
+		);
+		await expect(page.locator('[data-tile="approvals"] .stat-value')).toHaveText(
+			'権限がありません'
+		);
 		await expect(page.locator('[data-tile="fixed-costs-due"] .stat-value')).toHaveText(
 			'権限がありません'
 		);

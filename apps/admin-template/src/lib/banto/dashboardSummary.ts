@@ -7,6 +7,8 @@
 import type { PipelineOverview } from './pipelineAdmin';
 import type { OutlookView } from './ordersAdmin';
 import type { PortfolioTotals } from './forecastAdmin';
+import type { Capability } from './capabilitiesAdmin';
+import { ProviderError } from '@banto/admin-core';
 
 /**
  * This month and next month (`YYYY-MM`) of a business date (`YYYY-MM-DD`),
@@ -100,4 +102,41 @@ export function combineCounts(sources: readonly Source<number>[]): CombinedCount
 	if (read === 0)
 		return failure && !loading ? { state: 'error', ...failure } : { state: 'loading' };
 	return { state: 'ok', total, missing: failure ? 'failed' : loading ? 'loading' : 'none' };
+}
+
+/**
+ * Which tiles the person's capabilities let them read (§8-15). The amount
+ * sources (pipeline overview, monthly outlook, the overall list's alerts)
+ * answer a caller without `amount.view` with an EMPTY scope rather than a
+ * refusal, and the approval lists answer someone who approves nothing with
+ * an empty list - summed, both would read as ¥0 / 0件 (unset is never 0,
+ * banto-cost CLAUDE.md). With the capabilities unknown (`null`) every tile
+ * goes by what the server answers, as before.
+ */
+export interface DashboardAccess {
+	amounts: boolean;
+	approvals: boolean;
+}
+
+export function dashboardAccess(held: ReadonlySet<Capability> | null): DashboardAccess {
+	if (!held) return { amounts: true, approvals: true };
+	return {
+		amounts: held.has('amount.view'),
+		approvals: held.has('project.manage') || held.has('finance.close')
+	};
+}
+
+const DENIED = {
+	state: 'error',
+	error: new ProviderError({ kind: 'forbidden' })
+} as const;
+
+/** `source`, or a 権限がありません one when the capabilities rule the tile out. */
+export function withAccess<T>(source: Source<T>, allowed: boolean): Source<T> {
+	return allowed ? source : DENIED;
+}
+
+/** As `withAccess` for a combined count (承認待ち). */
+export function withAccessCombined(count: CombinedCount, allowed: boolean): CombinedCount {
+	return allowed ? count : DENIED;
 }

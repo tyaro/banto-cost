@@ -55,6 +55,7 @@
 		setUserCapabilities,
 		type Capability
 	} from '#lib/banto/capabilitiesAdmin.js';
+	import { reloadMyAuthz } from '#lib/banto/myAuthz.svelte.js';
 
 	const roleOptions: { value: UserRole; label: string }[] = [
 		{ value: 'admin', label: m['role.admin']() },
@@ -275,6 +276,8 @@
 		try {
 			const stored = await setUserCapabilities(targetId, capabilities);
 			toastStore.push('success', m['users.capabilitiesSaved']());
+			// The nav follows one's own capabilities (§8-15): the change may be one's own.
+			void reloadMyAuthz();
 			if (epoch === selectionEpoch && selected?.id === targetId) {
 				capabilities = CAPABILITIES.filter((c) => stored.includes(c));
 			}
