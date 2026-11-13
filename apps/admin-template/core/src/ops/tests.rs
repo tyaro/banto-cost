@@ -9,7 +9,7 @@ use banto_core::{BantoError, ListParams};
 use banto_storage::Db;
 
 use super::{
-    budgets, calc_basis, closeouts, closing, fixed_costs, forecasts, pipeline, projects,
+    budgets, calc_basis, closeouts, closing, fixed_costs, forecasts, orders, pipeline, projects,
     recurring_revenue, reports, Caller, Gate,
 };
 use crate::budgets::BudgetsService;
@@ -17,7 +17,8 @@ use crate::calc_basis::tests::value as calc_value;
 use crate::calc_basis::CalcBasisService;
 use crate::customers::{CustomerInput, CustomersService};
 use crate::forecasts::ForecastsService;
-use crate::orders::tests::{line, ordered_project};
+use crate::orders::tests::{conversion, line, ordered_project, pipeline_project, row_version};
+use crate::orders::OrdersService;
 use crate::pipeline::tests::version as pipeline_version;
 use crate::pipeline::PipelineService;
 use crate::projects::tests::{fixture, input as project_input};
@@ -37,6 +38,7 @@ struct Env {
     projects: ProjectsService,
     pipeline: PipelineService,
     calc_basis: CalcBasisService,
+    orders: OrdersService,
     users: UsersService,
 }
 
@@ -52,6 +54,7 @@ impl Env {
             projects: ProjectsService::new(db.clone()),
             pipeline: PipelineService::new(db.clone()),
             calc_basis: CalcBasisService::new(db.clone()),
+            orders: OrdersService::new(db.clone()),
             users: UsersService::new(db.clone()),
             db,
         }
@@ -687,4 +690,136 @@ async fn t03_calc_basis_rows_need_the_items_right_and_overrides_the_managers() {
     }
     let denied: Vec<_> = rows.iter().filter(|r| r.action == "denied").collect();
     assert_eq!(denied.len(), 2);
+}
+
+#[tokio::test]
+async fn t23_t24_orders_are_the_owners_recognition_accountings_and_audited_without_reasons() {
+    let env = Env::new().await;
+    let project = pipeline_project(&env.db, "P-X05", 3_000_000, 60, "2026-12").await;
+    let plan = || vec![line(Some("2026-12"), 3_000_000)];
+
+    // The manager needs amount.view as well to convert.
+    env.grant(PM, &[Capability::ProjectManage]).await;
+    let pm = env.gate(PM);
+    let rv = row_version(&env.db, project).await;
+    assert!(forbidden(
+        orders::convert(&pm, &env.orders, project, conversion(rv, 3_000_000, plan())).await
+    ));
+    env.grant(PM, &[Capability::ProjectManage, Capability::AmountView])
+        .await;
+    let converted = orders::convert(&pm, &env.orders, project, conversion(rv, 3_000_000, plan()))
+        .await
+        .unwrap();
+    assert_eq!(converted.confirmed_amount, Some(3_000_000));
+
+    // The manager requests a change and approves it: self-approval is
+    // allowed and recorded.
+    let requested = orders::request_change(
+        &pm,
+        &env.orders,
+        project,
+        crate::orders::ChangeRequest {
+            delta_amount: 200_000,
+            plan_month: Some("2026-12".into()),
+            basis: Some("架空の追加注文".into()),
+        },
+    )
+    .await
+    .unwrap();
+    let change_id = requested.changes[0].id;
+    let decided = orders::decide_change(
+        &pm,
+        &env.orders,
+        project,
+        change_id,
+        crate::orders::ChangeDecision {
+            approve: true,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(decided.confirmed_amount, Some(3_200_000));
+    assert_eq!(
+        orders::get(&pm, &env.orders, project)
+            .await
+            .unwrap()
+            .changes[0]
+            .status,
+        "approved"
+    );
+
+    // The outlook is narrowed to the projects whose amounts the caller
+    // sees (none for the admin role without amount.view); saving a snapshot
+    // needs report.all.
+    let outlook = orders::outlook(&pm, &env.orders, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(outlook.totals.ordered_plan, 3_200_000);
+    let outlook = orders::outlook(&env.gate(ADMIN), &env.orders, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(outlook.totals.ordered_plan, 0);
+    assert!(forbidden(
+        orders::save_snapshot(&pm, &env.orders, Some("架空の見通し".into())).await
+    ));
+
+    // Recognizing revenue is accounting's, not the manager's.
+    let recognition = || crate::orders::RecognitionInput {
+        recognized_on: "2026-12-15".into(),
+        amount: 1_000_000,
+        basis: Some("架空の検収書".into()),
+        clears: None,
+    };
+    assert!(forbidden(
+        orders::recognize(&pm, &env.orders, project, recognition()).await
+    ));
+    env.grant(ADMIN, &[Capability::FinanceClose, Capability::AmountView])
+        .await;
+    let admin = env.gate(ADMIN);
+    let recognized = orders::recognize(&admin, &env.orders, project, recognition())
+        .await
+        .unwrap();
+    let recognition_id = recognized.recognitions[0].id;
+    orders::cancel_recognition(
+        &admin,
+        &env.orders,
+        project,
+        recognition_id,
+        crate::orders::CancelInput {
+            reason: Some("架空の取消理由".into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Writes are audited once each with the caller's origin; no reason or
+    // basis reaches the audit.
+    let rows = env.audit_rows().await;
+    let writes: Vec<_> = rows.iter().filter(|r| r.result == "ok").collect();
+    assert_eq!(
+        writes
+            .iter()
+            .map(|r| (r.action.as_str(), r.resource.as_str(), r.origin.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("convert", "orders", "tauri"),
+            ("request_change", "orders", "tauri"),
+            ("approve_change", "orders", "tauri"),
+            ("create", "revenue_recognitions", "tauri"),
+            ("cancel", "revenue_recognitions", "tauri"),
+        ]
+    );
+    assert!(writes[2]
+        .detail
+        .as_deref()
+        .unwrap()
+        .contains("\"selfApproval\":true"));
+    for row in &writes {
+        let detail = row.detail.as_deref().unwrap();
+        assert!(!detail.contains("架空の"));
+    }
+    let denied: Vec<_> = rows.iter().filter(|r| r.action == "denied").collect();
+    assert_eq!(denied.len(), 3);
+    assert!(denied.iter().all(|r| r.origin == "tauri"));
 }
