@@ -42,6 +42,9 @@ const CUSTOMER = `E2E架空精機-${RUN}`;
 const PROJECT_CODE = `WF-${RUN}`;
 const PROJECT_NAME = 'E2E架空の検査装置';
 const PROJECT_LABEL = `${PROJECT_CODE} ${PROJECT_NAME}`;
+// Row texts carry the run too: a CI retry reruns the group on the same server.
+const WORK_NOTE = `E2E架空の図面作成-${RUN}`;
+const COST_NOTE = `E2E架空の部材-${RUN}`;
 
 const ALL_CAPABILITIES = [
 	'time.entry',
@@ -91,6 +94,45 @@ async function confirmModal(page: Page, title: string, action: string): Promise<
 
 function region(page: Page, name: string): Locator {
 	return page.getByRole('region', { name, exact: true });
+}
+
+/**
+ * What the dashboard's 確認すること should count right now, read from the same
+ * APIs: the database is shared with smoke.spec.ts and a CI retry reruns this
+ * group on the same server, so the tests compare with these, never with a
+ * fixed number.
+ */
+async function expectedCounts(page: Page, month: string, previous: string) {
+	const portfolio = await api<{ totals: { alertCounts: { alert: string; count: number }[] } }>(
+		page,
+		'GET',
+		'/api/portfolio'
+	);
+	const lengths = await Promise.all(
+		[
+			'/api/time-entries/approvals',
+			'/api/direct-costs/approvals',
+			'/api/time-entries/corrections'
+		].map((path) => api<unknown[]>(page, 'GET', path).then((rows) => rows.length))
+	);
+	const due = (path: string) =>
+		api<{ dueCount: number }>(page, 'GET', path).then((v) => v.dueCount);
+	return {
+		forecastLoss: portfolio.totals.alertCounts.find((a) => a.alert === 'forecast_loss')?.count ?? 0,
+		/** Time entries, direct costs, corrections. */
+		approvalLists: lengths,
+		approvals: lengths.reduce((a, b) => a + b, 0),
+		fixedDue: await due(`/api/fixed-costs/months/${month}`),
+		recurringDue: await due(`/api/recurring-revenue/months/${month}`),
+		recurringPrevious: await due(`/api/recurring-revenue/months/${previous}`)
+	};
+}
+
+const counted = (n: number) => `${n} 件`;
+
+function previousOf(month: string): string {
+	const [y, m] = month.split('-').map(Number);
+	return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
 }
 
 /** A dashboard tile's figure. */
@@ -228,10 +270,10 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 		await form.getByRole('combobox', { name: '案件' }).selectOption({ label: PROJECT_LABEL });
 		await form.getByRole('combobox', { name: '工程' }).selectOption({ label: '設計' });
 		await form.getByRole('spinbutton', { name: '時間' }).fill('3');
-		await form.getByRole('textbox', { name: '作業内容' }).fill('E2E架空の図面作成');
+		await form.getByRole('textbox', { name: '作業内容' }).fill(WORK_NOTE);
 		await form.getByRole('button', { name: '下書きとして保存' }).click();
 
-		const row = page.getByRole('row', { name: /E2E架空の図面作成/ });
+		const row = page.getByRole('row', { name: new RegExp(WORK_NOTE) });
 		await expect(row).toContainText('下書き');
 		await row.getByRole('button', { name: '申請して承認', exact: true }).click();
 		await expect(page.getByRole('dialog', { name: '申請して承認' })).toContainText(PROJECT_CODE);
@@ -246,25 +288,28 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 		await form.getByRole('combobox', { name: '案件' }).selectOption({ label: PROJECT_LABEL });
 		await form.getByRole('combobox', { name: '費目' }).selectOption({ label: '材料費' });
 		await form.getByRole('textbox', { name: '金額（税抜・円）' }).fill('120000');
-		await form.getByRole('textbox', { name: '内容' }).fill('E2E架空の部材');
+		await form.getByRole('textbox', { name: '内容' }).fill(COST_NOTE);
 		await form.getByRole('button', { name: '下書きとして保存' }).click();
-		const row = page.getByRole('row', { name: /E2E架空の部材/ });
+		const row = page.getByRole('row', { name: new RegExp(COST_NOTE) });
 		await expect(row).toContainText('下書き');
+		const before = await expectedCounts(page, month, previousOf(month));
 		await page.getByRole('button', { name: /この月の下書きを申請/ }).click();
 		await expect(row).toContainText('申請中');
 
 		// P8g §8-10: the dashboard counts it, and the tile leads to the list.
 		await page.goto('/dashboard');
-		await expect(tile(page, 'approvals')).toHaveText('1 件');
+		await expect(tile(page, 'approvals')).toHaveText(counted(before.approvals + 1));
 		await page.locator('[data-tile="approvals"]').click();
 		await expect(page).toHaveURL(/\/approvals$/);
 	});
 
 	test('7. 承認一覧: 表示中をすべて承認 with its confirmation', async () => {
 		const costs = region(page, '直接費の承認');
-		await expect(costs.getByRole('row', { name: /E2E架空の部材/ })).toBeVisible();
-		await costs.getByRole('button', { name: '表示中をすべて承認（1件）' }).click();
-		await confirmModal(page, '直接費の一括承認', '表示中をすべて承認（1件）');
+		await expect(costs.getByRole('row', { name: new RegExp(COST_NOTE) })).toBeVisible();
+		const approveAll = costs.getByRole('button', { name: /^表示中をすべて承認（\d+件）$/ });
+		const label = (await approveAll.textContent())!.trim();
+		await approveAll.click();
+		await confirmModal(page, '直接費の一括承認', label);
 		await expect(costs).toContainText('承認待ちの直接費はありません');
 	});
 
@@ -286,6 +331,7 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 	});
 
 	test('9. ダッシュボード: a loss forecast shows under 確認すること and leads to the overall list', async () => {
+		const before = await expectedCounts(page, month, previousOf(month));
 		// The completion forecast is set-up here (its screen is not the flow
 		// under test): ¥3,500,000 still to come on a ¥3,000,000 order.
 		const { draft } = await api<{ draft: { id: number; baseDate: string; rowVersion: number } }>(
@@ -312,15 +358,16 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 			rowVersion: saved.rowVersion
 		});
 
+		const now = await expectedCounts(page, month, previousOf(month));
+		expect(now.forecastLoss).toBe(before.forecastLoss + 1);
+
 		await page.goto('/dashboard');
 		await expect(page.getByRole('heading', { name: '確認すること' })).toBeVisible();
-		// Other spec files' projects never have a forecast, so this one is the only loss.
-		await expect(tile(page, 'forecast-loss')).toHaveText('1 件');
-		await expect(tile(page, 'approvals')).toHaveText('0 件');
+		await expect(tile(page, 'forecast-loss')).toHaveText(counted(now.forecastLoss));
 		await expect(page.locator('[data-tile="forecast-loss"]')).toHaveClass(/check-active/);
-		await expect(page.locator('[data-tile="approvals"]')).not.toHaveClass(/check-active/);
-		await expect(tile(page, 'fixed-costs-due')).toHaveText('0 件');
-		await expect(tile(page, 'recurring-revenue-due')).toHaveText('0 件');
+		await expect(tile(page, 'approvals')).toHaveText(counted(now.approvals));
+		await expect(tile(page, 'fixed-costs-due')).toHaveText(counted(now.fixedDue));
+		await expect(tile(page, 'recurring-revenue-due')).toHaveText(counted(now.recurringDue));
 
 		await page.locator('[data-tile="forecast-loss"]').click();
 		await expect(page).toHaveURL(/\/projects$/);
@@ -328,10 +375,8 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 	});
 
 	test('9b. ダッシュボード: each source shows when it answers; a failed or slow part only marks its note', async () => {
-		const previous = (() => {
-			const [y, m] = month.split('-').map(Number);
-			return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
-		})();
+		const previous = previousOf(month);
+		const now = await expectedCounts(page, month, previous);
 		let release!: () => void;
 		const held = new Promise<void>((resolve) => (release = resolve));
 		const hold = async (route: Route) => {
@@ -357,19 +402,22 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 			await page.goto('/dashboard');
 			// The tiles already read do not wait for the slow ones.
 			await expect(tile(page, 'forecast-loss')).toHaveText('読み込み中…');
-			await expect(tile(page, 'recurring-revenue-due')).toHaveText('0 件');
+			await expect(tile(page, 'recurring-revenue-due')).toHaveText(counted(now.recurringDue));
 			await expect(note('recurring-revenue-due')).toContainText(`前月（${previous}）を確認中`);
 			// This month's count stays; only the note says the previous month failed.
-			await expect(tile(page, 'fixed-costs-due')).toHaveText('0 件');
+			await expect(tile(page, 'fixed-costs-due')).toHaveText(counted(now.fixedDue));
 			await expect(note('fixed-costs-due')).toContainText(
 				`前月（${previous}）の件数は取得できません`
 			);
 			// The readable approval lists are counted, and the tile says a part is missing.
-			await expect(tile(page, 'approvals')).toHaveText('0 件');
+			const [time, , corrections] = now.approvalLists;
+			await expect(tile(page, 'approvals')).toHaveText(counted(time + corrections));
 			await expect(note('approvals')).toContainText('一部の一覧を取得できない');
 			release();
-			await expect(tile(page, 'forecast-loss')).toHaveText('1 件');
-			await expect(note('recurring-revenue-due')).toContainText(`前月（${previous}）の未計上 0 件`);
+			await expect(tile(page, 'forecast-loss')).toHaveText(counted(now.forecastLoss));
+			await expect(note('recurring-revenue-due')).toContainText(
+				`前月（${previous}）の未計上 ${now.recurringPrevious} 件`
+			);
 		} finally {
 			release();
 			await page.unrouteAll({ behavior: 'wait' });
