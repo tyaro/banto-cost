@@ -8,6 +8,7 @@
   "confirm.count": "Count",
   "confirm.countValue": "{count}",
   "confirm.reason": "Reason",
+  "confirm.changed": "The items changed while you were confirming. Check them and try again.",
   "common.loading": "Loading…",
   "common.close": "Close",
   "common.reload": "Reload",

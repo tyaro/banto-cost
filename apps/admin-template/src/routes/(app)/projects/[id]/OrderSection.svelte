@@ -292,6 +292,9 @@
 		const conversion = summary?.conversion;
 		if (!summary || !conversion || busy) return;
 		const reason = cancelReason.trim();
+		// The version the dialog's conversion was read with: a project reloaded
+		// while the dialog is open (another conversion) is refused as stale.
+		const version = rowVersion;
 		cancelReasonMissing = reason === '';
 		if (cancelReasonMissing) return;
 		const ok = await confirmAction({
@@ -321,7 +324,7 @@
 		});
 		if (!ok) return;
 		const done = await write(
-			() => cancelOrderConversion(projectId, { rowVersion, reason }),
+			() => cancelOrderConversion(projectId, { rowVersion: version, reason }),
 			m['orders.conversionCancelled']()
 		);
 		if (done) {

@@ -8,6 +8,7 @@
   "confirm.count": "件数",
   "confirm.countValue": "{count}件",
   "confirm.reason": "理由",
+  "confirm.changed": "確認している間に対象が変わりました。内容を確かめて、もう一度実行してください。",
   "common.loading": "読み込み中…",
   "common.close": "閉じる",
   "common.reload": "再読み込み",

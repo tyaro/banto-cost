@@ -188,6 +188,14 @@
 		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
+			// Items added elsewhere while the dialog was open are not recognized
+			// unconfirmed: read the month again and ask again if it changed.
+			const fresh = await getRecurringMonth(shownMonth);
+			if (fresh.dueCount !== dueCount || fresh.recognizedOn !== recognizedOn) {
+				view = fresh;
+				notify('error', m['confirm.changed']());
+				return;
+			}
 			const result = await recognizeRecurringMonth(shownMonth);
 			view = result.view;
 			notify('success', m['recurring.recognized']({ month: view.month, count: result.recognized }));

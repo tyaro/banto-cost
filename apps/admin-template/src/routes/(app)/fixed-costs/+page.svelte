@@ -204,6 +204,14 @@
 		if (!ok || busy || view?.month !== shownMonth) return;
 		busy = true;
 		try {
+			// Items added elsewhere while the dialog was open are not posted
+			// unconfirmed: read the month again and ask again if it changed.
+			const fresh = await getFixedCostMonth(shownMonth);
+			if (fresh.dueCount !== dueCount) {
+				view = fresh;
+				notify('error', m['confirm.changed']());
+				return;
+			}
 			const result = await postFixedCostMonth(shownMonth);
 			view = result.view;
 			notify('success', m['fixedCosts.posted']({ month: view.month, count: result.posted }));
