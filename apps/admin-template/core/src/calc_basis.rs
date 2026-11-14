@@ -251,6 +251,12 @@ fn duplicate_error() -> BantoError {
 /// same date or version into a refusal instead of a second row (T13).
 fn map_insert_error(err: BantoError) -> BantoError {
     match &err {
+        // Two saves of different dates at the same time take the same next
+        // version: the later one is told to reload, not to change its date
+        // (SQLite and Postgres both name the index, PR #64 review).
+        BantoError::Storage(message) if message.contains("calc_values_version") => {
+            crate::customers::stale_version_error()
+        }
         BantoError::Storage(message) if message.to_lowercase().contains("unique") => {
             duplicate_error()
         }
@@ -967,6 +973,16 @@ pub(crate) mod tests {
             .map_err(map_insert_error)
             .unwrap_err();
         assert_eq!(field(&err), "validFrom");
+        // A second save of another date takes the same version: reload, not a new date.
+        let insert = svc.sql(
+            "INSERT INTO calc_values (item_key, scope, project_id, valid_from, value, version_no, \
+             reason) VALUES ('day_minutes', 'company', NULL, '2026-07-01', 450, 1, 'x') RETURNING id",
+        );
+        let err: BantoError = on_pool!(&svc.db, pool => scalar!(pool, insert))
+            .map(|_: i64| ())
+            .map_err(map_insert_error)
+            .unwrap_err();
+        assert_eq!(field(&err), "rowVersion");
         assert_eq!(svc.count().await, 1);
     }
 }

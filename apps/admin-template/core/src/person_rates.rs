@@ -214,6 +214,12 @@ fn duplicate_error() -> BantoError {
 /// into a refusal instead of a second row (T13).
 fn map_insert_error(err: BantoError) -> BantoError {
     match &err {
+        // Two saves of different dates at the same time take the same next
+        // version: the later one is told to reload, not to change its date
+        // (SQLite and Postgres both name the index, PR #64 review).
+        BantoError::Storage(message) if message.contains("person_rates_version") => {
+            crate::customers::stale_version_error()
+        }
         BantoError::Storage(message) if message.to_lowercase().contains("unique") => {
             duplicate_error()
         }
@@ -573,6 +579,16 @@ pub(crate) mod tests {
             .map_err(map_insert_error)
             .unwrap_err();
         assert_eq!(field(&err), "validFrom");
+        // Another date saved at the same time takes the same version: reload.
+        let insert =
+            "INSERT INTO person_rates (user_id, project_id, valid_from, value, version_no, \
+             reason) VALUES (2, NULL, '2026-07-01', 6100, 1, 'x') RETURNING id"
+                .to_string();
+        let err: BantoError = on_pool!(&svc.db, pool => scalar!(pool, insert))
+            .map(|_: i64| ())
+            .map_err(map_insert_error)
+            .unwrap_err();
+        assert_eq!(field(&err), "rowVersion");
     }
 
     #[tokio::test]
