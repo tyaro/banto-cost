@@ -273,6 +273,10 @@ for (const position of ['left', 'right'] as const) {
 		test('sits vertically centred on its edge and the content keeps clear of it', async ({
 			page
 		}) => {
+			// Tall enough for every item of an account with all capabilities:
+			// banto-cost's nav no longer fits 900px (the next test pins that
+			// overflow), and centring is only defined for a bar that fits.
+			await page.setViewportSize({ width: 1440, height: 1080 });
 			await gotoDashboard(page);
 			await expect(page.locator(`.launcher--${position}`)).toBeVisible();
 			await expect(page.locator('html')).toHaveAttribute(
@@ -292,6 +296,26 @@ for (const position of ['left', 'right'] as const) {
 				expect(viewport.width - (bar.x + bar.width)).toBeLessThan(20);
 				expect(content.right).toBeLessThanOrEqual(bar.x);
 			}
+		});
+
+		test('a bar taller than the edge scrolls and keeps its first item reachable', async ({
+			page
+		}) => {
+			await page.setViewportSize({ width: 1440, height: 700 });
+			await gotoDashboard(page);
+			const track = page.locator('.launcher__track');
+			const sizes = await track.evaluate((el) => ({
+				scroll: el.scrollHeight,
+				client: el.clientHeight,
+				top: el.getBoundingClientRect().top
+			}));
+			expect(sizes.scroll).toBeGreaterThan(sizes.client);
+			// Not centred off the top of the screen: the bar starts inside the track.
+			const bar = await boxOf(page.locator('.launcher__bar'));
+			expect(bar.y).toBeGreaterThanOrEqual(sizes.top);
+			const last = page.locator('.launcher [data-launcher-item]').last();
+			await last.scrollIntoViewIfNeeded();
+			await expect(last).toBeInViewport();
 		});
 
 		test('the tooltip shows beside the item on the page side, unclipped, and stays across the gap', async ({
