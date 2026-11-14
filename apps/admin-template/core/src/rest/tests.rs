@@ -6408,6 +6408,143 @@ async fn t43_rest_person_rates_need_finance_rate_and_amount_view() {
 }
 
 #[tokio::test]
+async fn t45_rest_rerates_need_finance_rate_and_finance_close() {
+    let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["time.entry", "project.manage", "amount.view"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/projects",
+            &editor,
+            project_body("P-001", EDITOR_ID),
+        ))
+        .await
+        .unwrap();
+    let project = body_json(response).await["id"].as_i64().unwrap();
+    // Approved with no rate anywhere (原価未確定).
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/time-entries",
+            &editor,
+            json!({ "workDate": "2026-11-09", "projectId": project, "phaseId": 1, "minutes": 120 }),
+        ))
+        .await
+        .unwrap();
+    let id = body_json(response).await["entry"]["id"].as_i64().unwrap();
+    for (path, body) in [
+        ("submit", json!({ "rowVersion": 1 })),
+        ("decide", json!({ "rowVersion": 2, "approve": true })),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_json_auth(
+                &format!("/api/time-entries/{id}/{path}"),
+                &editor,
+                body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+    let rerate = json!({ "rowVersion": 3, "reason": "単価の決定" });
+    // finance.rate + amount.view without finance.close, and the reverse.
+    grant(&router, &admin, 1, json!(["finance.rate", "amount.view"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/person-rates",
+            &admin,
+            json!({ "userId": EDITOR_ID, "validFrom": "2026-06-01", "value": 6_000,
+                    "reason": "架空の単価" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    for request in [
+        get_auth("/api/time-entries/rerates", &admin),
+        post_json_auth(
+            &format!("/api/time-entries/{id}/rerate"),
+            &admin,
+            rerate.clone(),
+        ),
+        get_auth("/api/time-entries/rerates", &editor),
+        post_json_auth(
+            &format!("/api/time-entries/{id}/rerate"),
+            &editor,
+            rerate.clone(),
+        ),
+    ] {
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    grant(
+        &router,
+        &admin,
+        1,
+        json!(["finance.rate", "amount.view", "finance.close"]),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/time-entries/rerates", &admin))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let list = body_json(response).await;
+    assert_eq!(list["noRate"], 0);
+    assert_eq!(list["candidates"][0]["entry"]["id"], id);
+    assert!(list["candidates"][0]["entry"]["laborCost"].is_null());
+    assert_eq!(list["candidates"][0]["newRate"], 6_000);
+    assert_eq!(list["candidates"][0]["newCost"], 12_000);
+    assert_eq!(list["candidates"][0]["source"], "person");
+    assert!(list["candidates"][0]["blocked"].is_null());
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            &format!("/api/time-entries/{id}/rerate"),
+            &admin,
+            rerate,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let rerated = body_json(response).await;
+    assert_eq!(rerated["correctsId"], id);
+    assert_eq!(rerated["status"], "approved");
+    assert_eq!(rerated["laborCost"], 12_000);
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/time-entries/rerates", &admin))
+        .await
+        .unwrap();
+    assert!(body_json(response).await["candidates"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    // The audit keeps the entry, never the rate nor the reason.
+    let entries = audit.list(ListParams::default()).await.unwrap().rows;
+    let writes: Vec<_> = entries
+        .iter()
+        .filter(|e| e.resource == "time_entries" && e.action == "rerate")
+        .collect();
+    assert_eq!(writes.len(), 1);
+    let detail = format!("{:?}", writes[0].detail);
+    assert!(
+        !detail.contains("6000") && !detail.contains("12000") && !detail.contains("単価の決定"),
+        "{detail}"
+    );
+}
+
+#[tokio::test]
 async fn t37_rest_fixed_costs_need_finance_rate_and_post_a_month_once() {
     let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
     grant(

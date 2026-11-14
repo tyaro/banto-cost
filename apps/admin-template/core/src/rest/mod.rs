@@ -78,6 +78,8 @@
 //! | POST   | `/api/time-entries/{id}/correct` | `CorrectionInput` | `TimeEntrySaved` (editor+ + `EnterTime` / `EnterCommonTime`; own approved entry; reason; P6b-2) |
 //! | GET    | `/api/time-entries/{id}/corrections` | - | `TimeEntry[]` (any role; own entry; the corrections, newest first) |
 //! | GET    | `/api/time-entries/corrections` | - | `CorrectionPair[]` (any role; `finance.close`, others empty) |
+//! | GET    | `/api/time-entries/rerates` | - | `RerateList` (any role + `EditRates` + `FinanceClose`; 単価の当て直しの候補, T45) |
+//! | POST   | `/api/time-entries/{id}/rerate` | `RerateInput` | `TimeEntry` (editor+ + `EditRates` + `ApproveCorrection`; reason; an approved correction with the rate now) |
 //! | GET    | `/api/projects/{id}/time-summary` | - | `ProjectTimeSummary` (any role + `ViewProjectAmounts`) |
 //! | GET    | `/api/projects/{id}/budget` | - | `BudgetOverview` (any role + `ViewProjectAmounts`) |
 //! | POST   | `/api/projects/{id}/budget/draft` | - | `DraftCreated` (editor+ + `ManageProject`; the existing draft when there is one) |
