@@ -170,15 +170,23 @@ pub fn impact(
         if let Some(pid) = &u.usage.project {
             affected.insert(pid.clone());
         }
-        out.includes_closed |= u.usage.closed;
-        match u.usage.status {
-            UsageStatus::Pending => out.pending += 1,
+        // A closed month counts only for an entry that would change: a draft
+        // costed anew at approval, or an approved entry whose saved rate differs
+        // (an approved one that already matches needs no reopening).
+        let changes = match u.usage.status {
+            UsageStatus::Pending => {
+                out.pending += 1;
+                true
+            }
             UsageStatus::Approved => {
-                if next != u.usage.applied_value {
+                let differs = next != u.usage.applied_value;
+                if differs {
                     out.correction_candidates.push(u.usage.id.clone());
                 }
+                differs
             }
-        }
+        };
+        out.includes_closed |= changes && u.usage.closed;
     }
     out.affected_projects = affected.into_iter().collect();
     out
@@ -417,5 +425,18 @@ mod tests {
         let same = person(7, Some(1), "2026-11-01", Some(5_000), 1);
         let got = impact(&values, &[], &same, &usages);
         assert!(got.correction_candidates.is_empty());
+
+        // 締め済みの月の承認済み工数でも、保存した単価と同じなら月の再開は要らない。
+        let mut closed = usage("a4", 9, 1, "2026-10-20", Some(6_000));
+        closed.usage.closed = true;
+        let rates = vec![person(9, None, "2026-06-01", Some(5_500), 1)];
+        let to_saved = person(9, None, "2026-10-01", Some(6_000), 2);
+        let got = impact(&values, &rates, &to_saved, std::slice::from_ref(&closed));
+        assert!(got.correction_candidates.is_empty());
+        assert!(!got.includes_closed);
+        let to_other = person(9, None, "2026-10-01", Some(6_200), 2);
+        let got = impact(&values, &rates, &to_other, &[closed]);
+        assert_eq!(got.correction_candidates, vec!["a4".to_string()]);
+        assert!(got.includes_closed);
     }
 }
