@@ -977,6 +977,15 @@ async fn t08_time_entries_are_the_callers_own_rates_masked_and_audited_without_t
         .all(|r| r.origin == "tauri" && r.resource == "time_entries"));
 }
 
+async fn own_costs(
+    gate: &Gate<'_>,
+    svc: &DirectCostsService,
+) -> Vec<crate::direct_costs::DirectCost> {
+    costs::list_own(gate, svc, "2026-11-01", "2026-11-30")
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn t10_t14_direct_costs_need_the_project_and_approving_them_its_amounts() {
     let env = Env::new().await;
@@ -1012,6 +1021,12 @@ async fn t10_t14_direct_costs_need_the_project_and_approving_them_its_amounts() 
         .await
         .unwrap();
     let id = saved.cost.id;
+    // 申請して承認 (review U-2) is offered only when the approval would pass:
+    // not yet without amount.view.
+    assert_eq!(
+        own_costs(&pm, &env.direct_costs).await[0].can_approve,
+        Some(false)
+    );
     assert!(matches!(
         costs::delete(&admin, &env.direct_costs, id, saved.cost.row_version).await,
         Err(BantoError::NotFound { .. })
@@ -1033,6 +1048,14 @@ async fn t10_t14_direct_costs_need_the_project_and_approving_them_its_amounts() 
     ));
     env.grant(PM, &[Capability::ProjectManage, Capability::AmountView])
         .await;
+    // Submitted: no longer a draft to offer it on.
+    assert_eq!(own_costs(&pm, &env.direct_costs).await[0].can_approve, None);
+    let second = costs::create(&pm, &env.direct_costs, cost(project, "travel", 1_000))
+        .await
+        .unwrap();
+    let listed = own_costs(&pm, &env.direct_costs).await;
+    let row = listed.iter().find(|c| c.id == second.cost.id).unwrap();
+    assert_eq!(row.can_approve, Some(true));
     assert_eq!(
         costs::approvals(&pm, &env.direct_costs)
             .await
@@ -1096,12 +1119,13 @@ async fn t10_t14_direct_costs_need_the_project_and_approving_them_its_amounts() 
             ("create", "vendors", "tauri"),
             ("create", "direct_costs", "tauri"),
             ("submit", "direct_costs", "tauri"),
+            ("create", "direct_costs", "tauri"),
             ("approve", "direct_costs", "tauri"),
             ("create", "purchase_orders", "tauri"),
             ("cancel", "purchase_orders", "tauri"),
         ]
     );
-    assert!(writes[3]
+    assert!(writes[4]
         .detail
         .as_deref()
         .unwrap()

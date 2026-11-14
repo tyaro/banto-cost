@@ -69,6 +69,11 @@ export interface DirectCost {
 	returnReason: string | null;
 	confirmedBy: number | null;
 	adjusted: number;
+	/**
+	 * On the owner's list only: a draft or returned record the owner may also
+	 * approve once submitted (申請して承認, review U-2).
+	 */
+	canApprove?: boolean;
 	rowVersion: number;
 	updatedAt: string;
 }

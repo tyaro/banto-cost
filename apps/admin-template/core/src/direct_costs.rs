@@ -134,6 +134,13 @@ pub struct DirectCost {
     pub confirmed_by: Option<i64>,
     /// Approved adjustments of this record (sum of the reductions).
     pub adjusted: i64,
+    /// On the owner's list only: a draft or returned record the owner may
+    /// also approve once submitted (`ApproveCost` on every project with the
+    /// company's approval policy), so the screen can offer 申請して承認
+    /// (review U-2). Set by the wiring (`cost_access::shown_own`); absent
+    /// elsewhere. The approval itself is authorized again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_approve: Option<bool>,
     pub row_version: i64,
     pub updated_at: String,
 }
@@ -1153,6 +1160,7 @@ impl DirectCostsService {
                     allocations: by_cost.remove(&r.id).unwrap_or_default(),
                     confirmed_by,
                     adjusted,
+                    can_approve: None,
                     id: r.id,
                     user_id: r.user_id,
                     user_name: r.user_name,

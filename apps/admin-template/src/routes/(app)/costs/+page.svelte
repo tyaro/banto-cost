@@ -12,15 +12,24 @@
 	 * several projects is split over them (T10). Orders are registered in 案件
 	 * 詳細 → 直接費. The server decides every entry (the project scope, the
 	 * order's remainder). Demo mode has no backend.
+	 *
+	 * When the server marks a record `canApprove` (the owner may approve it
+	 * too - single-handed use), 申請して承認 submits it and approves it at
+	 * once, one record or every draft of the month (review U-2, as on 工数入力):
+	 * the same two operations in a row, each authorized and audited as usual
+	 * (the approval as selfApproval).
 	 */
 	import { monthWithPeriod } from '#lib/banto/businessCalendar.svelte.js';
 	import { getDataProvider, isProviderError, notify } from '@banto/admin-core';
 	import { PageHeader, EmptyState, ErrorState, LoadingState, StatusBadge } from '@banto/ui';
 	import * as m from '#lib/paraglide/messages.js';
+	import { confirmAction } from '#lib/banto/confirmAction.svelte.js';
+	import { failureReason, runEach } from '#lib/banto/bulk.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
 	import { formatSignedYen, isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
 	import type { Project } from '#lib/banto/resources/projects.js';
 	import {
+		decideCost,
 		deleteCost,
 		listOwnCosts,
 		submitCost,
@@ -171,6 +180,85 @@
 		c.confirmedBy === null;
 	const shown = $derived(loadedFor === month ? (costs ?? []) : []);
 	const pendingSubmit = $derived(shown.filter(editable));
+	/** The month's drafts the owner may also approve: offer 申請して承認 (review U-2). */
+	const pendingApprove = $derived(pendingSubmit.filter((c) => c.canApprove === true));
+
+	/** 申請 then 承認, the two existing operations in a row. */
+	async function submitAndApprove(c: DirectCost) {
+		const submitted = await submitCost(c.id, c.rowVersion);
+		await decideCost(c.id, { rowVersion: submitted.rowVersion, approve: true });
+	}
+
+	function costDetails(c: DirectCost): { label: string; value: string }[] {
+		return [
+			{ label: m['costs.fieldBookedOn'](), value: c.bookedOn },
+			{ label: m['time.colTarget'](), value: targetLabel(c) },
+			{ label: m['costs.fieldCostType'](), value: costTypeLabel(c.costType) },
+			{ label: m['costs.colAmount'](), value: formatSignedYen(signedAmount(c)) }
+		];
+	}
+
+	async function runSubmitApprove(rows: DirectCost[]) {
+		acting = true;
+		try {
+			const result = await runEach(rows, submitAndApprove);
+			if (result.done > 0) notify('success', m['costs.submitApproved']({ count: result.done }));
+			if (result.failed > 0) {
+				const reason = failureReason(result.firstError, m['costs.forbiddenEntry']());
+				notify('error', m['costs.submitApproveFailed']({ count: result.failed, reason }));
+			}
+		} finally {
+			acting = false;
+			void load();
+		}
+	}
+
+	async function submitApproveOne(c: DirectCost) {
+		if (acting) return;
+		const ok = await confirmAction({
+			title: m['costs.submitApproveConfirmTitle'](),
+			body: m['costs.submitApproveConfirm'](),
+			details: costDetails(c),
+			undo: m['costs.approveUndo'](),
+			confirmLabel: m['costs.submitApprove']()
+		});
+		if (!ok || acting) return;
+		await runSubmitApprove([c]);
+	}
+
+	async function submitApproveAll() {
+		if (acting || pendingApprove.length === 0) return;
+		// Act on the records the dialog counted, not a list reloaded while it was open.
+		const rows = pendingApprove;
+		const excluded = pendingSubmit.length - rows.length;
+		// Each record that becomes an actual (PR #62 review): date, target, type, amount.
+		const details = [
+			{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: rows.length }) },
+			{
+				label: m['costs.colAmount'](),
+				value: formatSignedYen(rows.reduce((sum, c) => sum + signedAmount(c), 0))
+			},
+			...rows.map((c) => ({
+				label: `${c.bookedOn} #${c.id}`,
+				value: `${targetLabel(c)} / ${costTypeLabel(c.costType)} / ${formatSignedYen(signedAmount(c))}`
+			}))
+		];
+		if (excluded > 0) {
+			details.push({
+				label: m['approvals.excludedLabel'](),
+				value: m['costs.submitApproveExcluded']({ count: excluded })
+			});
+		}
+		const ok = await confirmAction({
+			title: m['costs.submitApproveConfirmTitle'](),
+			body: m['costs.submitApproveAllConfirm']({ count: rows.length }),
+			details,
+			undo: m['costs.approveUndo'](),
+			confirmLabel: m['costs.submitApproveAll']({ count: rows.length })
+		});
+		if (!ok || acting) return;
+		await runSubmitApprove(rows);
+	}
 
 	async function submitAll() {
 		if (acting || pendingSubmit.length === 0) return;
@@ -224,6 +312,15 @@
 					onclick={() => void submitAll()}
 					>{m['costs.submitAll']({ count: pendingSubmit.length })}</button
 				>
+				{#if pendingApprove.length > 0}
+					<button
+						type="button"
+						class="banto-btn banto-btn--secondary"
+						disabled={acting}
+						onclick={() => void submitApproveAll()}
+						>{m['costs.submitApproveAll']({ count: pendingApprove.length })}</button
+					>
+				{/if}
 			{/if}
 		</div>
 
@@ -325,6 +422,15 @@
 																m['costs.submitted']()
 															)}>{m['costs.submit']()}</button
 													>
+													{#if c.canApprove}
+														<button
+															type="button"
+															class="banto-btn banto-btn--secondary"
+															disabled={acting}
+															onclick={() => void submitApproveOne(c)}
+															>{m['costs.submitApprove']()}</button
+														>
+													{/if}
 													<button
 														type="button"
 														class="banto-btn banto-btn--ghost"

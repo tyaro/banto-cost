@@ -71,6 +71,9 @@
 		display: grid;
 		grid-template-columns: max-content 1fr;
 		gap: var(--banto-space-1) var(--banto-space-3);
+		/* A bulk action lists every row: scroll a long list inside the dialog. */
+		max-height: 40vh;
+		overflow-y: auto;
 		margin: 0 0 var(--banto-space-3);
 		padding: var(--banto-space-2) var(--banto-space-3);
 		border: var(--banto-border-width) solid var(--banto-border);
