@@ -1921,5 +1921,10 @@
   "rerate.done": "Rerated {count} entries",
   "rerate.failed": "{count} entries could not be rerated: {reason}",
   "rerate.forbidden": "You may not rerate hours",
-  "rerate.fieldReason": "Reason for the rerate"
+  "rerate.fieldReason": "Reason for the rerate",
+  "rerate.confirmKnownDiff": "Cost change (entries with a saved cost)",
+  "rerate.confirmKnownDiffValue": "{count} entries {amount}",
+  "rerate.confirmNewlyCosted": "Newly costed (were not costed)",
+  "rerate.confirmNewlyCostedValue": "{count} entries {amount}",
+  "rerate.diffNewlyCosted": "Newly costed"
 }

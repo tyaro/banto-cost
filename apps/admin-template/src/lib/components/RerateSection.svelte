@@ -60,7 +60,12 @@
 	const pickable = $derived(candidates.filter((c) => c.blocked === null));
 	const chosen = $derived(candidates.filter((c) => picked.includes(c.entry.id)));
 	const allPicked = $derived(pickable.length > 0 && chosen.length === pickable.length);
-	const chosenDiff = $derived(chosen.reduce((sum, c) => sum + diffOf(c), 0));
+	/** The change of costs already known; an entry without a saved cost has no
+	 *  difference (unset is never 0) and is counted apart as newly costed. */
+	const chosenKnown = $derived(chosen.filter((c) => c.entry.laborCost !== null));
+	const chosenDiff = $derived(chosenKnown.reduce((sum, c) => sum + (diffOf(c) ?? 0), 0));
+	const chosenNew = $derived(chosen.filter((c) => c.entry.laborCost === null));
+	const chosenNewCost = $derived(chosenNew.reduce((sum, c) => sum + c.newCost, 0));
 
 	async function load() {
 		const token = ++loadToken;
@@ -86,8 +91,9 @@
 		untrack(() => void load());
 	});
 
-	function diffOf(c: RerateCandidate): number {
-		return c.newCost - (c.entry.laborCost ?? 0);
+	/** `null` when the saved cost is unknown (原価未確定): no difference to show. */
+	function diffOf(c: RerateCandidate): number | null {
+		return c.entry.laborCost === null ? null : c.newCost - c.entry.laborCost;
 	}
 
 	function target(c: RerateCandidate): string {
@@ -141,14 +147,32 @@
 		// Rerate the rows the dialog counted, not a list reloaded while it was open.
 		const rows = chosen;
 		const why = reason.trim();
+		const details: { label: string; value: string }[] = [
+			{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: rows.length }) }
+		];
+		if (chosenKnown.length > 0) {
+			details.push({
+				label: m['rerate.confirmKnownDiff'](),
+				value: m['rerate.confirmKnownDiffValue']({
+					count: chosenKnown.length,
+					amount: formatSignedYen(chosenDiff)
+				})
+			});
+		}
+		if (chosenNew.length > 0) {
+			details.push({
+				label: m['rerate.confirmNewlyCosted'](),
+				value: m['rerate.confirmNewlyCostedValue']({
+					count: chosenNew.length,
+					amount: formatYen(chosenNewCost)
+				})
+			});
+		}
+		details.push({ label: m['confirm.reason'](), value: why });
 		const ok = await confirmAction({
 			title: m['rerate.confirmTitle'](),
 			body: m['rerate.confirmBody']({ count: rows.length }),
-			details: [
-				{ label: m['confirm.count'](), value: m['confirm.countValue']({ count: rows.length }) },
-				{ label: m['rerate.colDiff'](), value: formatSignedYen(chosenDiff) },
-				{ label: m['confirm.reason'](), value: why }
-			],
+			details,
 			undo: m['rerate.confirmUndo'](),
 			confirmLabel: m['rerate.run']({ count: rows.length })
 		});
@@ -257,7 +281,9 @@
 										: formatYen(c.entry.laborCost)}
 								</td>
 								<td class="num">{formatYen(c.newCost)}</td>
-								<td class="num">{formatSignedYen(diffOf(c))}</td>
+								<td class="num" class:unset={diffOf(c) === null}>
+									{diffOf(c) === null ? m['rerate.diffNewlyCosted']() : formatSignedYen(diffOf(c))}
+								</td>
 								<td>{c.blocked === null ? m['rerate.ready']() : blockedLabel(c.blocked)}</td>
 							</tr>
 						{/each}

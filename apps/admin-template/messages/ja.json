@@ -1921,5 +1921,10 @@
   "rerate.done": "{count}件の工数を当て直しました",
   "rerate.failed": "{count}件は当て直せませんでした：{reason}",
   "rerate.forbidden": "当て直す権限がありません",
-  "rerate.fieldReason": "当て直しの理由"
+  "rerate.fieldReason": "当て直しの理由",
+  "rerate.confirmKnownDiff": "原価の差（保存した原価があるもの）",
+  "rerate.confirmKnownDiffValue": "{count}件 {amount}",
+  "rerate.confirmNewlyCosted": "新たに原価が決まるもの（原価未確定だったもの）",
+  "rerate.confirmNewlyCostedValue": "{count}件 {amount}",
+  "rerate.diffNewlyCosted": "新たに確定"
 }
