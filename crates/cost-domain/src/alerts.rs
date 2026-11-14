@@ -5,7 +5,7 @@
 //!
 //! - 受注前（引合・見積中・交渉中）：受注予定月超過、営業見込の確認遅れ、確度・時期未設定。
 //! - 受注済みで精算前（受注・進行中・作業完了）：完了見込赤字、予算超過見込み、低利益率、
-//!   原資超過見込み（T42）、未承認、未確定追加売上、見込更新要、完了見込なし、未精算発注残（作業完了で発注残あり）。
+//!   原資超過見込み・予算の原資超過（T42）、未承認、未確定追加売上、見込更新要、完了見込なし、未精算発注残（作業完了で発注残あり）。
 //! - 失注・中止・保留・精算完了は標準の集計から外すので、注意を出さない。
 
 use crate::calendar::{Date, YearMonth};
@@ -35,6 +35,8 @@ pub enum Alert {
     /// 完了見込原価が原資（確定受注額 − 目標粗利）を超える（T42。赤字のときは赤字だけを出す。
     /// 目標粗利率が未設定なら判定しない）。
     ForecastOverFunds,
+    /// 現在の承認原価予算が原資を超える（T42。目標粗利率が未設定・予算なしなら判定しない）。
+    BudgetOverFunds,
     /// 未承認（下書き・申請中・差戻し）の工数・直接費がある。
     Unapproved,
     /// 未確定追加売上（承認前の受注変更）がある。
@@ -59,6 +61,7 @@ impl Alert {
             Self::ForecastOverBudget => "forecast_over_budget",
             Self::LowMargin => "low_margin",
             Self::ForecastOverFunds => "forecast_over_funds",
+            Self::BudgetOverFunds => "budget_over_funds",
             Self::Unapproved => "unapproved",
             Self::PendingAddition => "pending_addition",
             Self::ForecastUpdateNeeded => "forecast_update_needed",
@@ -165,6 +168,9 @@ pub fn evaluate(
                         out.push(Alert::ForecastOverFunds);
                     }
                 }
+            }
+            if o.funds.zip(o.budget).is_some_and(|(x, b)| b > x) {
+                out.push(Alert::BudgetOverFunds);
             }
             if o.unapproved > 0 {
                 out.push(Alert::Unapproved);
@@ -421,5 +427,70 @@ mod tests {
             ),
             vec![Alert::LowMargin, Alert::ForecastOverFunds]
         );
+    }
+
+    #[test]
+    fn t42_予算の原資超過() {
+        let t = Thresholds::default();
+        // 原資2,500,000円に承認予算2,600,000円。完了見込2,400,000円は原資内。
+        let o = OrderedFacts {
+            funds: Some(2_500_000),
+            ..spec_ordered(2_400_000)
+        };
+        assert_eq!(
+            evaluate(ProjectStatus::InProgress, None, Some(&o), d(TODAY), &t),
+            vec![Alert::BudgetOverFunds]
+        );
+        // 予算ちょうどは超過ではない。
+        let at = OrderedFacts {
+            funds: Some(2_600_000),
+            ..o.clone()
+        };
+        assert!(evaluate(ProjectStatus::InProgress, None, Some(&at), d(TODAY), &t).is_empty());
+        // 完了見込がなくても予算と原資で判定する（完了見込なしの注意と並ぶ）。
+        let no_forecast = OrderedFacts {
+            forecast: None,
+            committed: 0,
+            ..o.clone()
+        };
+        assert_eq!(
+            evaluate(
+                ProjectStatus::Ordered,
+                None,
+                Some(&no_forecast),
+                d(TODAY),
+                &t
+            ),
+            vec![Alert::BudgetOverFunds, Alert::NoForecast]
+        );
+        // 赤字でも予算の原資超過は出す（予算の問題で、完了見込とは別）。
+        assert_eq!(
+            evaluate(
+                ProjectStatus::Ordered,
+                None,
+                Some(&OrderedFacts {
+                    funds: Some(2_500_000),
+                    ..spec_ordered(4_100_000)
+                }),
+                d(TODAY),
+                &t
+            ),
+            vec![
+                Alert::ForecastLoss,
+                Alert::ForecastOverBudget,
+                Alert::BudgetOverFunds
+            ]
+        );
+        // 原資なし・予算なしは判定しない。
+        for (funds, budget) in [(None, Some(2_600_000)), (Some(2_500_000), None)] {
+            let x = OrderedFacts {
+                funds,
+                budget,
+                ..spec_ordered(2_400_000)
+            };
+            assert!(evaluate(ProjectStatus::Ordered, None, Some(&x), d(TODAY), &t).is_empty());
+        }
+        // 精算完了などは出さない。
+        assert!(evaluate(ProjectStatus::Settled, None, Some(&o), d(TODAY), &t).is_empty());
     }
 }

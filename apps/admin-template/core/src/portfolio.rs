@@ -543,6 +543,27 @@ mod tests {
             .any(|c| c.alert == over_funds && c.count == 1));
         // 案件詳細の要約にも同じ行。
         assert_eq!(&svc.project(spec).await.unwrap().row, r);
+        let budget_over = Alert::BudgetOverFunds.as_str().to_string();
+        assert!(!r.alerts.contains(&budget_over), "予算2,600,000円は原資内");
+
+        // 40%：原資2,400,000円。承認予算2,600,000円も原資を超える。
+        basis
+            .add(
+                Some(spec),
+                value(TARGET_MARGIN_ITEM, "2020-02-01", Some(40), "さらに上げる"),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let all = svc
+            .overview(&ProjectScope::All, &ProjectScope::All)
+            .await
+            .unwrap();
+        let r = row(&all, spec);
+        assert_eq!(r.funds_left_after_budget, Some(-200_000));
+        assert_eq!(r.funds_left_after_forecast, Some(-500_000));
+        assert!(r.alerts.contains(&over_funds), "{:?}", r.alerts);
+        assert!(r.alerts.contains(&budget_over), "{:?}", r.alerts);
 
         // 金額を見られない案件は差も注意も出さない（T12）。
         let some = svc

@@ -173,6 +173,7 @@ fn alert_label(code: &str) -> &str {
         "forecast_over_budget" => "予算超過見込み",
         "low_margin" => "低利益率",
         "forecast_over_funds" => "原資超過見込み",
+        "budget_over_funds" => "予算が原資超過",
         "unapproved" => "未承認あり",
         "pending_addition" => "未確定追加売上",
         "forecast_update_needed" => "見込更新要",

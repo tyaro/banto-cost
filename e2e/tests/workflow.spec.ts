@@ -119,6 +119,8 @@ async function expectedCounts(page: Page, month: string, previous: string) {
 		api<{ dueCount: number }>(page, 'GET', path).then((v) => v.dueCount);
 	return {
 		forecastLoss: portfolio.totals.alertCounts.find((a) => a.alert === 'forecast_loss')?.count ?? 0,
+		forecastOverFunds:
+			portfolio.totals.alertCounts.find((a) => a.alert === 'forecast_over_funds')?.count ?? 0,
 		/** Time entries, direct costs, corrections. */
 		approvalLists: lengths,
 		approvals: lengths.reduce((a, b) => a + b, 0),
@@ -369,6 +371,15 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 		await expect(summary).toContainText('原資−完了見込 -¥135,000');
 		await expect(summary).toContainText('原資超過見込み');
 		await expect(summary).not.toContainText('完了見込赤字');
+
+		// The dashboard counts it under 確認すること and leads to the overall list.
+		const now = await expectedCounts(page, month, previousOf(month));
+		expect(now.forecastOverFunds).toBeGreaterThan(0);
+		await page.goto('/dashboard');
+		await expect(tile(page, 'forecast-over-funds')).toHaveText(counted(now.forecastOverFunds));
+		await expect(page.locator('[data-tile="forecast-over-funds"]')).toHaveClass(/check-active/);
+		await page.locator('[data-tile="forecast-over-funds"]').click();
+		await expect(page).toHaveURL(/\/projects$/);
 	});
 
 	test('9. ダッシュボード: a loss forecast shows under 確認すること and leads to the overall list', async () => {
