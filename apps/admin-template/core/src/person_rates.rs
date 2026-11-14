@@ -96,6 +96,8 @@ pub struct PersonRates {
 }
 
 /// A new row. `projectId: null` = every project; `value: null` ends the rate.
+/// `value` must be sent: an omitted one is refused rather than read as an end
+/// (`None` = omitted, `Some(None)` = an explicit `null`; PR #64 review).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonRateInput {
@@ -103,8 +105,8 @@ pub struct PersonRateInput {
     #[serde(default)]
     pub project_id: Option<i64>,
     pub valid_from: String,
-    #[serde(default)]
-    pub value: Option<i64>,
+    #[serde(default, deserialize_with = "present")]
+    pub value: Option<Option<i64>>,
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -123,6 +125,14 @@ pub struct PersonRatePreview {
     /// Approved entries whose saved rate differs (当て直しの候補, never changed automatically).
     pub correction_candidates: usize,
     pub includes_closed: bool,
+}
+
+/// A field that is present, `null` included (an absent one stays `None`).
+fn present<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<i64>::deserialize(deserializer).map(Some)
 }
 
 const ROW_SELECT: &str = "SELECT r.id, r.user_id, r.project_id, p.code AS project_code, \
@@ -322,7 +332,17 @@ impl PersonRatesService {
                 "日付は YYYY-MM-DD で入力してください",
             ));
         }
-        if let Some(v) = input.value {
+        let value = match input.value {
+            Some(value) => value,
+            None => {
+                errors.push(field_error(
+                    "value",
+                    "単価を入力してください（やめるときは null を指定します）",
+                ));
+                None
+            }
+        };
+        if let Some(v) = value {
             if !ValueKind::Yen.accepts(v) {
                 let (lo, hi) = ValueKind::Yen.range();
                 errors.push(field_error(
@@ -345,7 +365,7 @@ impl PersonRatesService {
             person: input.user_id,
             project: input.project_id,
             valid_from: valid_from.expect("checked above"),
-            value: input.value,
+            value,
             version: next_version(rates, input.user_id, input.project_id),
         };
         validate_new(rates, &row).map_err(|e| match e {
@@ -459,7 +479,7 @@ pub(crate) mod tests {
             user_id,
             project_id,
             valid_from: from.into(),
-            value,
+            value: Some(value),
             reason: Some("架空の単価".into()),
         }
     }
@@ -589,6 +609,26 @@ pub(crate) mod tests {
             .map_err(map_insert_error)
             .unwrap_err();
         assert_eq!(field(&err), "rowVersion");
+    }
+
+    #[tokio::test]
+    async fn an_omitted_value_is_refused_not_read_as_an_end() {
+        let (svc, _) = setup().await;
+        svc.add(rate(2, None, "2026-06-01", Some(6_000)), None)
+            .await
+            .unwrap();
+        let omitted: PersonRateInput = serde_json::from_value(serde_json::json!({
+            "userId": 2, "validFrom": "2026-07-01", "reason": "送り忘れ"
+        }))
+        .unwrap();
+        assert_eq!(omitted.value, None);
+        assert_eq!(field(&svc.add(omitted, None).await.unwrap_err()), "value");
+        let ended: PersonRateInput = serde_json::from_value(serde_json::json!({
+            "userId": 2, "validFrom": "2026-07-01", "value": null, "reason": "やめる"
+        }))
+        .unwrap();
+        assert_eq!(ended.value, Some(None));
+        assert_eq!(svc.add(ended, None).await.unwrap().value, None);
     }
 
     #[tokio::test]
