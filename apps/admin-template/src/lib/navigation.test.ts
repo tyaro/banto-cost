@@ -207,7 +207,13 @@ describe('navSections with capabilities', () => {
 		expect(shown).toEqual(expect.arrayContaining(['/approvals', '/closing', '/recurring-revenue']));
 		expect(shown).toContain('/calc-basis');
 		expect(shown).not.toContain('/fixed-costs');
+		expect(shown).not.toContain('/person-rates');
 		expect(shown).not.toContain('/time');
+	});
+
+	it('personal rates need finance.rate and amount.view (T43)', () => {
+		expect(main(new Set<Capability>(['finance.rate']))).not.toContain('/person-rates');
+		expect(main(new Set<Capability>(['finance.rate', 'amount.view']))).toContain('/person-rates');
 	});
 
 	it('an amount-gated screen needs amount.view as well', () => {
