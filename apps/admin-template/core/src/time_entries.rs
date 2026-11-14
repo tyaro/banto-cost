@@ -469,6 +469,25 @@ fn correction_error(issue: &CorrectionIssue) -> FieldError {
     }
 }
 
+const SAME_RATE_MESSAGE: &str = "保存した単価と今の単価が同じです。当て直しは要りません";
+const NO_RATE_MESSAGE: &str =
+    "この工数の単価がまだ決まっていません。単価を登録してから当て直してください";
+
+/// The rate that applies now is the one the caller confirmed.
+fn confirmed(cost: &cost_domain::time::ApprovedCost, expected: i64) -> bool {
+    cost.rate.as_ref().map(|r| r.value) == Some(expected)
+}
+
+/// The rate changed after the caller confirmed it (`expectedRate`).
+fn rate_moved_error() -> BantoError {
+    BantoError::Validation {
+        field_errors: vec![field_error(
+            "expectedRate",
+            "確認した後に単価が変わりました。一覧を読み直して、もう一度確認してください",
+        )],
+    }
+}
+
 /// A rate was added while a rerate ran: the cost it computed may be stale.
 fn rates_changed_error() -> BantoError {
     status_error(
@@ -1497,7 +1516,7 @@ impl TimeEntriesService {
         let values: Vec<CalcValue> = rows.iter().filter_map(domain_row).collect();
         let person_rows = crate::person_rates::load(&self.db).await?;
         let rates = crate::person_rates::domain_rates(&person_rows);
-        let cost = match rerate(
+        let found = rerate(
             &values,
             &rates,
             original.user_id,
@@ -1505,28 +1524,12 @@ impl TimeEntriesService {
             work_date,
             original.minutes,
             original.applied_rate,
-        ) {
-            Rerate::Candidate(cost)
-                if cost.rate.as_ref().map(|r| r.value) == Some(input.expected_rate) =>
-            {
-                cost
-            }
-            Rerate::Candidate(_) => return Err(BantoError::Validation {
-                field_errors: vec![field_error(
-                    "expectedRate",
-                    "確認した後に単価が変わりました。一覧を読み直して、もう一度確認してください",
-                )],
-            }),
-            Rerate::Same => {
-                return Err(status_error(
-                    "保存した単価と今の単価が同じです。当て直しは要りません",
-                ))
-            }
-            Rerate::NoRate => {
-                return Err(status_error(
-                    "この工数の単価がまだ決まっていません。単価を登録してから当て直してください",
-                ))
-            }
+        );
+        let cost = match found {
+            Rerate::Candidate(cost) if confirmed(&cost, input.expected_rate) => cost,
+            Rerate::Candidate(_) => return Err(rate_moved_error()),
+            Rerate::Same => return Err(status_error(SAME_RATE_MESSAGE)),
+            Rerate::NoRate => return Err(status_error(NO_RATE_MESSAGE)),
         };
         let value_id = cost
             .rate
