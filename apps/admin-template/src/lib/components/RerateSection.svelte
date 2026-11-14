@@ -180,7 +180,11 @@
 		busy = true;
 		try {
 			const result = await runEach(rows, (c) =>
-				rerateEntry(c.entry.id, { rowVersion: c.entry.rowVersion, reason: why })
+				rerateEntry(c.entry.id, {
+					rowVersion: c.entry.rowVersion,
+					expectedRate: c.newRate,
+					reason: why
+				})
 			);
 			if (result.done > 0) notify('success', m['rerate.done']({ count: result.done }));
 			if (result.failed > 0) {

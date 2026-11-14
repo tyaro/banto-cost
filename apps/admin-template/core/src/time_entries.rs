@@ -255,6 +255,11 @@ pub struct RerateList {
 #[serde(rename_all = "camelCase")]
 pub struct RerateInput {
     pub row_version: i64,
+    /// The new rate the caller confirmed (the list's `newRate`): the rerate
+    /// is refused when the rate that applies now differs, so the amount
+    /// stored is the amount shown (PR #65 review). The minutes are fixed by
+    /// `rowVersion`, so the same rate means the same cost.
+    pub expected_rate: i64,
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -1492,26 +1497,37 @@ impl TimeEntriesService {
         let values: Vec<CalcValue> = rows.iter().filter_map(domain_row).collect();
         let person_rows = crate::person_rates::load(&self.db).await?;
         let rates = crate::person_rates::domain_rates(&person_rows);
-        let cost =
-            match rerate(
-                &values,
-                &rates,
-                original.user_id,
-                original.project_id,
-                work_date,
-                original.minutes,
-                original.applied_rate,
-            ) {
-                Rerate::Candidate(cost) => cost,
-                Rerate::Same => {
-                    return Err(status_error(
-                        "保存した単価と今の単価が同じです。当て直しは要りません",
-                    ))
-                }
-                Rerate::NoRate => return Err(status_error(
+        let cost = match rerate(
+            &values,
+            &rates,
+            original.user_id,
+            original.project_id,
+            work_date,
+            original.minutes,
+            original.applied_rate,
+        ) {
+            Rerate::Candidate(cost)
+                if cost.rate.as_ref().map(|r| r.value) == Some(input.expected_rate) =>
+            {
+                cost
+            }
+            Rerate::Candidate(_) => return Err(BantoError::Validation {
+                field_errors: vec![field_error(
+                    "expectedRate",
+                    "確認した後に単価が変わりました。一覧を読み直して、もう一度確認してください",
+                )],
+            }),
+            Rerate::Same => {
+                return Err(status_error(
+                    "保存した単価と今の単価が同じです。当て直しは要りません",
+                ))
+            }
+            Rerate::NoRate => {
+                return Err(status_error(
                     "この工数の単価がまだ決まっていません。単価を登録してから当て直してください",
-                )),
-            };
+                ))
+            }
+        };
         let value_id = cost
             .rate
             .as_ref()
@@ -2819,9 +2835,11 @@ mod tests {
         assert_eq!(svc.get(longer.id).await.unwrap().status, "submitted");
     }
 
+    /// The rerate as the screen sends it, having confirmed 6,000 yen/h.
     fn rerate_input(e: &TimeEntry, reason: Option<&str>) -> RerateInput {
         RerateInput {
             row_version: e.row_version,
+            expected_rate: 6_000,
             reason: reason.map(Into::into),
         }
     }
@@ -2887,6 +2905,13 @@ mod tests {
                     .unwrap_err()
             ),
             ["reason"]
+        );
+        // A rate other than the one confirmed is refused (the amount shown).
+        let mut other = rerate_input(&a, Some("単価の決定"));
+        other.expected_rate = 5_000;
+        assert_eq!(
+            fields(svc.rerate(a.id, other, Some(1)).await.unwrap_err()),
+            ["expectedRate"]
         );
         let mut stale = rerate_input(&a, Some("単価の決定"));
         stale.row_version -= 1;

@@ -6453,7 +6453,7 @@ async fn t45_rest_rerates_need_finance_rate_and_finance_close() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
     }
-    let rerate = json!({ "rowVersion": 3, "reason": "単価の決定" });
+    let rerate = json!({ "rowVersion": 3, "expectedRate": 6_000, "reason": "単価の決定" });
     // finance.rate + amount.view without finance.close, and the reverse.
     grant(&router, &admin, 1, json!(["finance.rate", "amount.view"])).await;
     let response = router

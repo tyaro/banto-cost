@@ -321,11 +321,12 @@ export async function listRerates(): Promise<RerateList> {
 
 /**
  * Rerate one approved entry with the rate that applies now: an approved
- * correction of it (the entry stays as history). `rowVersion` is the entry's (T13).
+ * correction of it (the entry stays as history). `rowVersion` is the entry's (T13);
+ * `expectedRate` is the confirmed `newRate` - a different rate now is refused.
  */
 export async function rerateEntry(
 	id: number,
-	values: { rowVersion: number; reason: string }
+	values: { rowVersion: number; expectedRate: number; reason: string }
 ): Promise<TimeEntry> {
 	guard();
 	if (tauri()) return invokeCommand<TimeEntry>('time_entries_rerate', { id, values });
