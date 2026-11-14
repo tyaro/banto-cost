@@ -165,6 +165,10 @@ export interface PortfolioRow {
 	targetMarginPct: number | null;
 	/** 原資 (`null` before the order or with no 目標粗利率). */
 	funds: number | null;
+	/** 原資 − the current approved budget (negative = over the funds, T42). */
+	fundsLeftAfterBudget: number | null;
+	/** 原資 − 完了見込原価 (negative = over the funds, T42). */
+	fundsLeftAfterForecast: number | null;
 	alerts: string[];
 	updateReasons: string[];
 }

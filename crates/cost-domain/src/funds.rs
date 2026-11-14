@@ -8,6 +8,9 @@
 //!
 //! 受注前（確定受注額なし）と目標粗利率の未設定は `None`（0%・0円で計算しない）。
 //!
+//! 原資との差（T42）は「原資 − 金額」で、承認済み予算と完了見込原価のそれぞれについて出す。
+//! 負は原資を超えていることを表す。原資か金額のどちらかがなければ `None`（0円で比べない）。
+//!
 //! 率は案件ごとに検収日の時点の値を使う（2026-11-07 ユーザー決定）。検収日は案件の最初の
 //! 売上計上日（取消を除く）で、まだ検収していない案件は業務日付の値を使う（[`rate_date`]）。
 
@@ -42,9 +45,28 @@ pub fn funds(order_amount: Option<Yen>, target_margin_pct: Option<i64>) -> Optio
     })
 }
 
+/// 原資との差（原資 − 金額）。負は原資超過。原資か金額がなければ `None`（T42）。
+pub fn funds_left(funds: Option<Yen>, amount: Option<Yen>) -> Option<Yen> {
+    Some(funds? - amount?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn t42_funds_left_is_the_funds_minus_the_amount() {
+        // 原資1,700,000円：予算1,500,000円なら200,000円の余り、完了見込1,800,000円なら100,000円の超過。
+        assert_eq!(funds_left(Some(1_700_000), Some(1_500_000)), Some(200_000));
+        assert_eq!(funds_left(Some(1_700_000), Some(1_800_000)), Some(-100_000));
+        assert_eq!(funds_left(Some(1_700_000), Some(1_700_000)), Some(0));
+    }
+
+    #[test]
+    fn t42_no_funds_or_no_amount_is_not_compared_as_zero() {
+        assert_eq!(funds_left(None, Some(1_500_000)), None);
+        assert_eq!(funds_left(Some(1_700_000), None), None);
+    }
 
     #[test]
     fn t36_the_rate_is_read_on_the_acceptance_date_or_today() {

@@ -172,6 +172,8 @@ fn alert_label(code: &str) -> &str {
         "forecast_loss" => "完了見込赤字",
         "forecast_over_budget" => "予算超過見込み",
         "low_margin" => "低利益率",
+        "forecast_over_funds" => "原資超過見込み",
+        "budget_over_funds" => "予算が原資超過",
         "unapproved" => "未承認あり",
         "pending_addition" => "未確定追加売上",
         "forecast_update_needed" => "見込更新要",
@@ -512,6 +514,8 @@ impl ReportsService {
                 Cell::opt_int(r.forecast_profit),
                 percent(r.forecast_ratio_permille),
                 Cell::opt_int(r.forecast_overrun),
+                Cell::opt_int(r.funds_left_after_budget),
+                Cell::opt_int(r.funds_left_after_forecast),
                 if r.amounts_visible {
                     Cell::text(alerts.join("・"))
                 } else {
@@ -547,7 +551,7 @@ const MONTHLY_HEADER: [&str; 17] = [
     "案件累計粗利率(%)",
 ];
 
-const PORTFOLIO_HEADER: [&str; 20] = [
+const PORTFOLIO_HEADER: [&str; 22] = [
     "案件コード",
     "案件名",
     "顧客",
@@ -567,6 +571,8 @@ const PORTFOLIO_HEADER: [&str; 20] = [
     "完了見込利益",
     "見込利益率(%)",
     "予算超過見込",
+    "原資−予算",
+    "原資−完了見込",
     "注意表示",
 ];
 
@@ -853,6 +859,13 @@ mod tests {
         assert_eq!(csv.row_count, 2);
         let lines = csv_lines(&csv);
         assert!(lines.iter().any(|l| l.contains("うち金額を表示 1件")));
+        // T42: 原資との差の2列は予算超過見込の後、注意表示の前。
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(",予算超過見込,原資−予算,原資−完了見込,注意表示")),
+            "{lines:?}"
+        );
         let row_a = lines.iter().find(|l| l.starts_with("P-R07,")).unwrap();
         assert!(row_a.contains(",1000000,"), "{row_a}");
         let row_b = lines.iter().find(|l| l.starts_with("P-R08,")).unwrap();

@@ -15,7 +15,7 @@
 	 *
 	 * Then 確認すること (review U-4, P8g): what to act on today, each tile a link
 	 * to the screen that fixes it -
-	 * - 赤字見込み / 予算超過見込み / 見込更新要: projects with that alert in the
+	 * - 赤字見込み / 予算超過見込み / 原資超過見込み (T42) / 見込更新要: projects with that alert in the
 	 *   overall list (`/api/portfolio` totals, amount-visible rows only), and a
 	 *   notice when the direct-cost ledger leaves projects 集計できない (T39).
 	 * - 承認待ち: submitted time entries, direct costs and corrections the
@@ -47,6 +47,7 @@
 		NotebookPen,
 		RefreshCw,
 		Percent,
+		PiggyBank,
 		TrendingDown,
 		TrendingUp,
 		TriangleAlert,
@@ -357,6 +358,12 @@
 			Wallet,
 			'forecast_over_budget',
 			m['dashboard.forecastOverBudget']()
+		),
+		alertTile(
+			'forecast-over-funds',
+			PiggyBank,
+			'forecast_over_funds',
+			m['dashboard.forecastOverFunds']()
 		),
 		alertTile(
 			'forecast-update-needed',

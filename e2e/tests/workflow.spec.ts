@@ -119,6 +119,8 @@ async function expectedCounts(page: Page, month: string, previous: string) {
 		api<{ dueCount: number }>(page, 'GET', path).then((v) => v.dueCount);
 	return {
 		forecastLoss: portfolio.totals.alertCounts.find((a) => a.alert === 'forecast_loss')?.count ?? 0,
+		forecastOverFunds:
+			portfolio.totals.alertCounts.find((a) => a.alert === 'forecast_over_funds')?.count ?? 0,
 		/** Time entries, direct costs, corrections. */
 		approvalLists: lengths,
 		approvals: lengths.reduce((a, b) => a + b, 0),
@@ -328,6 +330,56 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 		await expect(region(page, '工数')).toContainText('労務原価 ¥15,000');
 		await expect(region(page, '利益の要約')).toContainText('最新実績（承認済み） ¥135,000');
 		await expect(region(page, '利益の要約')).toContainText('完了見込なし');
+	});
+
+	test('8b. 原資: a forecast over the funds shows the difference and the alert in the summary', async () => {
+		// 目標粗利率 20% on this project only: 原資 = ¥3,000,000 − ¥600,000 = ¥2,400,000.
+		await api(page, 'POST', `/api/projects/${projectId}/calc-basis`, {
+			itemKey: 'target_margin_pct',
+			validFrom: '2020-01-01',
+			value: 20,
+			reason: 'E2E架空の目標粗利率'
+		});
+		// ¥135,000 approved + ¥2,400,000 to come = ¥2,535,000: a profit, over the funds.
+		const { draft } = await api<{ draft: { id: number; baseDate: string; rowVersion: number } }>(
+			page,
+			'POST',
+			`/api/projects/${projectId}/forecast/draft`,
+			{}
+		);
+		const saved = await api<{ rowVersion: number }>(
+			page,
+			'PUT',
+			`/api/forecast-versions/${draft.id}`,
+			{
+				baseDate: draft.baseDate,
+				plannedEnd: null,
+				reason: 'E2E架空の外注見込',
+				lines: [
+					{ phaseId: null, costType: 'outsource', remainingMinutes: null, amount: 2_400_000 }
+				],
+				rowVersion: draft.rowVersion
+			}
+		);
+		await api(page, 'POST', `/api/forecast-versions/${draft.id}/adopt`, {
+			rowVersion: saved.rowVersion
+		});
+
+		await page.goto(`/projects/${projectId}`);
+		const summary = region(page, '利益の要約');
+		await expect(summary).toContainText('原資（目標粗利率 20%） ¥2,400,000');
+		await expect(summary).toContainText('原資−完了見込 -¥135,000');
+		await expect(summary).toContainText('原資超過見込み');
+		await expect(summary).not.toContainText('完了見込赤字');
+
+		// The dashboard counts it under 確認すること and leads to the overall list.
+		const now = await expectedCounts(page, month, previousOf(month));
+		expect(now.forecastOverFunds).toBeGreaterThan(0);
+		await page.goto('/dashboard');
+		await expect(tile(page, 'forecast-over-funds')).toHaveText(counted(now.forecastOverFunds));
+		await expect(page.locator('[data-tile="forecast-over-funds"]')).toHaveClass(/check-active/);
+		await page.locator('[data-tile="forecast-over-funds"]').click();
+		await expect(page).toHaveURL(/\/projects$/);
 	});
 
 	test('9. ダッシュボード: a loss forecast shows under 確認すること and leads to the overall list', async () => {
