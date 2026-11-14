@@ -478,6 +478,8 @@ const isAllowedPackageImport = (spec) =>
 		{ tauri: 'outlook_snapshot_create', rest: 'POST /api/outlook/snapshots', role: 'Editor' },
 		// banto-cost P4a: 計算基準の追加（会社基準・案件の上書き）も editor 床＋authorize_audited。
 		{ tauri: 'calc_basis_add', rest: 'POST /api/calc-basis', role: 'Editor' },
+		// banto-cost T43: 個人別単価。editor 床＋EditRates（ops::person_rates）。
+		{ tauri: 'person_rates_add', rest: 'POST /api/person-rates', role: 'Editor' },
 		{
 			tauri: 'project_calc_basis_add',
 			rest: 'POST /api/projects/{id}/calc-basis',
@@ -625,6 +627,9 @@ const isAllowedPackageImport = (spec) =>
 		// banto-cost P4a の読み取り（影響の事前確認は保存しないので読み取り側）。
 		{ tauri: 'calc_basis_get', rest: 'GET /api/calc-basis', role: 'Viewer' },
 		{ tauri: 'calc_basis_preview', rest: 'POST /api/calc-basis/preview', role: 'Viewer' },
+		// banto-cost T43 の読み取り（ViewRates・EditRates）。
+		{ tauri: 'person_rates_get', rest: 'GET /api/person-rates', role: 'Viewer' },
+		{ tauri: 'person_rates_preview', rest: 'POST /api/person-rates/preview', role: 'Viewer' },
 		{
 			tauri: 'project_calc_basis_get',
 			rest: 'GET /api/projects/{id}/calc-basis',
@@ -761,6 +766,8 @@ const isAllowedPackageImport = (spec) =>
 		'ping',
 		'calc_basis_get',
 		'calc_basis_preview',
+		'person_rates_get',
+		'person_rates_preview',
 		'common_activities_list',
 		'order_get',
 		'outlook_get',
@@ -833,6 +840,8 @@ const isAllowedPackageImport = (spec) =>
 		'GET /api/outlook/snapshots/{id}',
 		'GET /api/calc-basis',
 		'POST /api/calc-basis/preview',
+		'GET /api/person-rates',
+		'POST /api/person-rates/preview',
 		'GET /api/projects/{id}/calc-basis',
 		'POST /api/projects/{id}/calc-basis/preview',
 		'GET /api/phases',

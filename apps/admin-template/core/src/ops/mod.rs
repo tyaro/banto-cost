@@ -32,6 +32,7 @@ pub mod costs;
 pub mod fixed_costs;
 pub mod forecasts;
 pub mod orders;
+pub mod person_rates;
 pub mod pipeline;
 pub mod projects;
 pub mod recurring_revenue;

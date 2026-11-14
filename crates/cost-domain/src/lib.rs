@@ -22,6 +22,7 @@ pub mod ledger;
 pub mod money;
 pub mod order;
 pub mod outlook;
+pub mod person_rate;
 pub mod pipeline;
 pub mod project;
 pub mod purchase;

@@ -6319,6 +6319,95 @@ async fn t15_rest_business_calendar_is_read_by_any_signed_in_role() {
 }
 
 #[tokio::test]
+async fn t43_rest_person_rates_need_finance_rate_and_amount_view() {
+    let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
+    // finance.rate without amount.view, and accounting without finance.rate.
+    grant(
+        &router,
+        &admin,
+        EDITOR_ID,
+        json!(["finance.rate", "finance.close"]),
+    )
+    .await;
+    let body = json!({
+        "userId": EDITOR_ID,
+        "validFrom": "2026-06-01",
+        "value": 6_000,
+        "reason": "架空の単価"
+    });
+    for request in [
+        get_auth("/api/person-rates?on=2026-11-14", &editor),
+        post_json_auth("/api/person-rates/preview", &editor, body.clone()),
+        post_json_auth("/api/person-rates", &editor, body.clone()),
+    ] {
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert!(denied_entries(&audit)
+        .await
+        .iter()
+        .any(|row| row.resource == "person_rates"));
+
+    grant(&router, &admin, 1, json!(["finance.rate", "amount.view"])).await;
+    let response = router
+        .clone()
+        .oneshot(post_json_auth(
+            "/api/person-rates/preview",
+            &admin,
+            body.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview = body_json(response).await;
+    assert!(preview["before"].is_null());
+    assert_eq!(preview["after"], 6_000);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/person-rates", &admin, body.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = router
+        .clone()
+        .oneshot(post_json_auth("/api/person-rates", &admin, body))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "同じ日の行"
+    );
+    let response = router
+        .clone()
+        .oneshot(get_auth("/api/person-rates?on=2026-11-14", &admin))
+        .await
+        .unwrap();
+    let listed = body_json(response).await;
+    let person = listed["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["userId"] == EDITOR_ID)
+        .unwrap()
+        .clone();
+    assert_eq!(person["current"]["value"], 6_000);
+
+    // The audit keeps who and when, never the rate nor the reason.
+    let entries = audit.list(ListParams::default()).await.unwrap().rows;
+    let writes: Vec<_> = entries
+        .iter()
+        .filter(|e| e.resource == "person_rates" && e.action == "create")
+        .collect();
+    assert_eq!(writes.len(), 1);
+    let detail = format!("{:?}", writes[0].detail);
+    assert!(
+        !detail.contains("6000") && !detail.contains("架空"),
+        "{detail}"
+    );
+}
+
+#[tokio::test]
 async fn t37_rest_fixed_costs_need_finance_rate_and_post_a_month_once() {
     let (router, audit, admin, editor, _viewer) = router_with_role_tokens_and_audit().await;
     grant(

@@ -30,6 +30,7 @@ export type CostNavIconKey =
 	| 'projects'
 	| 'customers'
 	| 'calc-basis'
+	| 'person-rates'
 	| 'time'
 	| 'approvals'
 	| 'costs'
@@ -43,6 +44,7 @@ export type CostNavLabelKey =
 	| 'nav.projects'
 	| 'nav.customers'
 	| 'nav.calcBasis'
+	| 'nav.personRates'
 	| 'nav.time'
 	| 'nav.approvals'
 	| 'nav.costs'
@@ -252,6 +254,14 @@ const allNavItems: NavItem[] = [
 			all: ['amount.view'],
 			any: ['finance.rate', 'finance.close', 'report.all', 'project.manage']
 		}
+	},
+	// banto-cost T43: 個人別単価 (design 10.9). finance.rate + amount.view (server-side).
+	{
+		path: '/person-rates',
+		labelKey: 'nav.personRates',
+		icon: 'person-rates',
+		group: 'nav.groupBasis',
+		capabilities: { all: ['finance.rate', 'amount.view'] }
 	},
 	// banto-cost P4b: 工程・共通活動 masters (spec §5.2).
 	{

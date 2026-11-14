@@ -21,6 +21,7 @@ pub mod fixed_costs;
 pub mod forecasts;
 pub mod ops;
 pub mod orders;
+pub mod person_rates;
 pub mod pipeline;
 pub mod portfolio;
 pub mod projects;

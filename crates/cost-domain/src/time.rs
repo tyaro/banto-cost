@@ -3,12 +3,13 @@
 //! - 工数は分の整数で持つ。1件はゼロより大きく、会社の入力単位（計算基準 `time_unit`）の倍数。
 //! - 同じ人の1日の合計は24時間まで。所定時間との差や同じ日・案件・工程の重複は警告にとどめる。
 //! - 状態は「下書き → 申請 → 承認」または「差戻し」。標準の集計は承認済みだけを実績にする。
-//! - 承認時に、作業日に適用される時間原価単価（計算基準 `emp_rate`）と労務原価を確定する。
+//! - 承認時に、作業日に適用される時間原価単価（個人別単価、なければ計算基準 `emp_rate`）と労務原価を確定する。
 //!   単価がなければ原価は `None`（原価未確定）で、0円にしない（T04）。
 
-use crate::calc_basis::{resolve, CalcValue, Resolved};
+use crate::calc_basis::{CalcValue, Resolved};
 use crate::calendar::Date;
 use crate::money::{labor_cost, Minutes, Yen};
+use crate::person_rate::{resolve_rate, PersonRate};
 
 /// 労務原価に使う計算基準の項目（社員の時間原価単価）。
 pub const RATE_ITEM: &str = "emp_rate";
@@ -201,15 +202,19 @@ pub struct ApprovedCost {
     pub cost: Option<Yen>,
 }
 
-/// 作業日に適用される時間原価単価で労務原価を求める（T02・T03）。
-/// `values` は `emp_rate` の行。後日の単価変更で承認済みの値を変えないよう、呼び出し側は結果を保存する。
+/// 作業日に適用される時間原価単価で労務原価を求める（T02・T03・T43）。
+/// `values` は `emp_rate` の行、`rates` は個人別単価。単価は「その人のその案件 → その人 →
+/// 案件の上書き → 会社標準」の順で決まる（`person_rate`）。後日の単価変更で承認済みの値を
+/// 変えないよう、呼び出し側は結果を保存する。
 pub fn approval_cost(
     values: &[CalcValue],
-    project: Option<&str>,
+    rates: &[PersonRate],
+    person: i64,
+    project: Option<i64>,
     work_date: Date,
     minutes: Minutes,
 ) -> ApprovedCost {
-    let rate = resolve(values, RATE_ITEM, project, work_date, None);
+    let rate = resolve_rate(values, rates, RATE_ITEM, person, project, work_date);
     let cost = labor_cost(minutes, rate.as_ref().map(|r| r.value));
     ApprovedCost { rate, cost }
 }
@@ -379,7 +384,7 @@ mod tests {
     #[test]
     fn t02_140時間を5000円で承認すると労務原価700000円() {
         let values = [rate("2026-06-01", 5_000, 1)];
-        let got = approval_cost(&values, Some("1"), d("2026-11-09"), 140 * 60);
+        let got = approval_cost(&values, &[], 1, Some(1), d("2026-11-09"), 140 * 60);
         assert_eq!(got.cost, Some(700_000));
         assert_eq!(got.rate.unwrap().value, 5_000);
         // 140時間を承認済み工数として集計しても同じ。
@@ -387,7 +392,7 @@ mod tests {
             .map(|_| SummaryEntry {
                 status: TimeStatus::Approved,
                 minutes: 7 * 60,
-                labor_cost: approval_cost(&values, Some("1"), d("2026-11-09"), 7 * 60).cost,
+                labor_cost: approval_cost(&values, &[], 1, Some(1), d("2026-11-09"), 7 * 60).cost,
             })
             .collect();
         let s = summarize(&entries);
@@ -399,12 +404,12 @@ mod tests {
     #[test]
     fn t03_作業日で単価が選ばれ過去の承認値は変わらない() {
         let mut values = vec![rate("2026-06-01", 5_000, 1)];
-        let before = approval_cost(&values, None, d("2026-11-30"), 60);
+        let before = approval_cost(&values, &[], 1, None, d("2026-11-30"), 60);
         assert_eq!(before.cost, Some(5_000));
         // 12月からの新しい版を追加しても、11月の作業日は旧版のまま。
         values.push(rate("2026-12-01", 5_400, 2));
-        let nov = approval_cost(&values, None, d("2026-11-30"), 60);
-        let dec = approval_cost(&values, None, d("2026-12-01"), 60);
+        let nov = approval_cost(&values, &[], 1, None, d("2026-11-30"), 60);
+        let dec = approval_cost(&values, &[], 1, None, d("2026-12-01"), 60);
         assert_eq!(nov.cost, Some(5_000));
         assert_eq!(dec.cost, Some(5_400));
         assert_eq!(
@@ -436,22 +441,22 @@ mod tests {
             },
         ];
         assert_eq!(
-            approval_cost(&values, Some("7"), d("2026-11-14"), 60).cost,
+            approval_cost(&values, &[], 1, Some(7), d("2026-11-14"), 60).cost,
             Some(5_000)
         );
         assert_eq!(
-            approval_cost(&values, Some("7"), d("2026-11-15"), 60).cost,
+            approval_cost(&values, &[], 1, Some(7), d("2026-11-15"), 60).cost,
             Some(6_000)
         );
         assert_eq!(
-            approval_cost(&values, Some("8"), d("2026-11-15"), 60).cost,
+            approval_cost(&values, &[], 1, Some(8), d("2026-11-15"), 60).cost,
             Some(5_000)
         );
     }
 
     #[test]
     fn t04_単価なしと未承認は0円の確定実績にしない() {
-        let none = approval_cost(&[], Some("1"), d("2026-11-09"), 480);
+        let none = approval_cost(&[], &[], 1, Some(1), d("2026-11-09"), 480);
         assert_eq!(none.rate, None);
         assert_eq!(none.cost, None);
         let s = summarize(&[

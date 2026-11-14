@@ -58,6 +58,9 @@ use admin_template_core::orders::{
     CancelInput, ChangeDecision, ChangeRequest, ConversionCancelInput, ConversionCorrectionInput,
     ConversionRequest, OrderSummary, OrdersService, RecognitionInput, ReplanInput,
 };
+use admin_template_core::person_rates::{
+    PersonRateInput, PersonRatePreview, PersonRateRow, PersonRates,
+};
 use admin_template_core::pipeline::{
     PipelineOverview, PipelineService, PipelineVersion, PipelineVersionInput,
 };
@@ -3870,6 +3873,53 @@ async fn project_calc_basis_add_body(
     ops::calc_basis::project_add(&gate, &state.calc_basis, project_id, values).await
 }
 
+// --- banto-cost T43: personal rates (design §10.9, ADR-0028) ---------------
+//
+// Tauri twins of the `/api/person-rates*` routes: the same role floors here,
+// then the same authorized operation (`admin_template_core::ops::person_rates`:
+// `ViewRates`, `EditRates`, the audit without the rate nor the reason).
+
+#[tauri::command]
+async fn person_rates_get(
+    state: State<'_, AppState>,
+    on: String,
+) -> Result<PersonRates, BantoError> {
+    person_rates_get_body(&state, on).await
+}
+
+async fn person_rates_get_body(state: &AppState, on: String) -> Result<PersonRates, BantoError> {
+    let identity = require_role(state, Role::Viewer, ops::person_rates::RESOURCE).await?;
+    let gate = tauri_gate(state, &identity).await?;
+    ops::person_rates::list(&gate, &state.calc_basis.person_rates(), &on).await
+}
+
+#[tauri::command]
+async fn person_rates_preview(
+    state: State<'_, AppState>,
+    values: PersonRateInput,
+) -> Result<PersonRatePreview, BantoError> {
+    let identity = require_role(&state, Role::Viewer, ops::person_rates::RESOURCE).await?;
+    let gate = tauri_gate(&state, &identity).await?;
+    ops::person_rates::preview(&gate, &state.calc_basis.person_rates(), values).await
+}
+
+#[tauri::command]
+async fn person_rates_add(
+    state: State<'_, AppState>,
+    values: PersonRateInput,
+) -> Result<PersonRateRow, BantoError> {
+    person_rates_add_body(&state, values).await
+}
+
+async fn person_rates_add_body(
+    state: &AppState,
+    values: PersonRateInput,
+) -> Result<PersonRateRow, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let gate = tauri_gate(state, &actor).await?;
+    ops::person_rates::add(&gate, &state.calc_basis.person_rates(), values).await
+}
+
 // --- banto-cost P4b: phases / common activities / time entries -------------
 //
 // Tauri twins of `/api/phases*`, `/api/common-activities*`,
@@ -5861,6 +5911,9 @@ pub fn run() {
             project_calc_basis_get,
             project_calc_basis_preview,
             project_calc_basis_add,
+            person_rates_get,
+            person_rates_preview,
+            person_rates_add,
             phases_list,
             phases_create,
             phases_update,
@@ -10925,6 +10978,88 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.resource == "calc_basis" && r.action == "denied" && r.origin == "tauri"));
+    }
+
+    // --- banto-cost T43 ----------------------------------------------------
+    // Tauri twin of `rest::tests::t43_rest_person_rates_need_finance_rate_and_amount_view`.
+
+    #[tokio::test]
+    async fn t43_tauri_person_rates_need_finance_rate_and_amount_view() {
+        let state = admin_app_state().await;
+        let admin = state
+            .users
+            .get_by_username("admin")
+            .await
+            .expect("lookup")
+            .expect("admin");
+        let editor = state
+            .users
+            .create_user("editor", "password123", "編集者", Role::Editor)
+            .await
+            .expect("create editor");
+        let input = |value: Option<i64>| -> PersonRateInput {
+            serde_json::from_value(serde_json::json!({
+                "userId": editor.id,
+                "validFrom": "2026-06-01",
+                "value": value,
+                "reason": "架空の単価"
+            }))
+            .expect("input")
+        };
+        // The administrator role without finance.rate sees no personal rate.
+        assert!(matches!(
+            person_rates_get_body(&state, "2026-11-14".into()).await,
+            Err(BantoError::Forbidden)
+        ));
+        authz_capabilities_set_body(&state, editor.id, &[Capability::FinanceRate])
+            .await
+            .expect("admin grants");
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        // finance.rate without amount.view is not enough.
+        assert!(matches!(
+            person_rates_add_body(&state, input(Some(6_000))).await,
+            Err(BantoError::Forbidden)
+        ));
+        state.set_session_for_test(Some(DesktopSession::Account(admin)));
+        authz_capabilities_set_body(
+            &state,
+            editor.id,
+            &[Capability::FinanceRate, Capability::AmountView],
+        )
+        .await
+        .expect("admin grants");
+        state.set_session_for_test(Some(DesktopSession::Account(editor.clone())));
+        let row = person_rates_add_body(&state, input(Some(6_000)))
+            .await
+            .expect("personal rate");
+        assert_eq!(row.version_no, 1);
+        let listed = person_rates_get_body(&state, "2026-11-14".into())
+            .await
+            .expect("rates");
+        let mine = listed
+            .people
+            .iter()
+            .find(|p| p.user_id == editor.id)
+            .expect("the editor");
+        assert_eq!(mine.current.as_ref().and_then(|r| r.value), Some(6_000));
+
+        let rows = state
+            .audit
+            .list(ListParams::default())
+            .await
+            .expect("audit list")
+            .rows;
+        let writes: Vec<_> = rows
+            .iter()
+            .filter(|r| r.resource == "person_rates" && r.action == "create")
+            .collect();
+        assert_eq!(writes.len(), 1);
+        assert!(writes
+            .iter()
+            .all(|r| !r.detail.clone().unwrap_or_default().contains("6000")));
+        assert!(rows
+            .iter()
+            .any(|r| r.resource == "person_rates" && r.action == "denied" && r.origin == "tauri"));
     }
 
     // --- banto-cost P4b ----------------------------------------------------
