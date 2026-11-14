@@ -103,6 +103,9 @@
 //! | GET    | `/api/fixed-costs/months/{month}` | - | `MonthView` (any role + `ManageFixedCosts`) |
 //! | POST   | `/api/fixed-costs/months/{month}/post` | - | `PostResult` (editor+ + `ManageFixedCosts`; once per contract and month) |
 //! | POST   | `/api/fixed-costs/postings/{id}/cancel` | `CancelInput` | `MonthView` (editor+ + `ManageFixedCosts`; reason required) |
+//! | GET    | `/api/person-rates?on` | - | `PersonRates` (any role + `ViewRates`: `finance.rate` + `amount.view`; 個人別単価, T43) |
+//! | POST   | `/api/person-rates/preview` | `PersonRateInput` | `PersonRatePreview` (any role + `EditRates`) |
+//! | POST   | `/api/person-rates` | `PersonRateInput` | `PersonRateRow` (editor+ + `EditRates`; a new row, nothing rewritten) |
 //! | GET    | `/api/recurring-revenue/agreements` | - | `Agreement[]` (any role + `ManageRecurringRevenue`: `finance.close` + `amount.view`; 定期売上, T38) |
 //! | POST   | `/api/recurring-revenue/agreements` | `AgreementInput` | `Agreement` (editor+ + `ManageRecurringRevenue`; regenerates the monthly plan) |
 //! | PUT    | `/api/recurring-revenue/agreements/{id}` | `AgreementInput` | `Agreement` (editor+ + `ManageRecurringRevenue`; recognized months kept) |
@@ -302,6 +305,7 @@ mod costs;
 mod first_setup;
 mod fixed_costs;
 mod forecasts;
+mod person_rates;
 mod projects;
 mod recurring_revenue;
 mod reports;
@@ -528,6 +532,16 @@ pub fn api_router(
             auth.clone(),
         ))
         .merge(fixed_costs::fixed_costs_write_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(person_rates::person_rates_read_router(
+            business.clone(),
+            audit.clone(),
+            auth.clone(),
+        ))
+        .merge(person_rates::person_rates_write_router(
             business.clone(),
             audit.clone(),
             auth.clone(),

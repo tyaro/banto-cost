@@ -412,7 +412,7 @@ mod tests {
             checked += 1;
         }
         assert_eq!(
-            checked, 33,
+            checked, 34,
             "date and month columns found: update the count"
         );
     }

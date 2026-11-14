@@ -272,6 +272,11 @@ impl CalcBasisService {
         placeholders(self.db.dialect(), s)
     }
 
+    /// The personal rates (個人別単価, T43) on the same database.
+    pub fn person_rates(&self) -> crate::person_rates::PersonRatesService {
+        crate::person_rates::PersonRatesService::new(self.db.clone())
+    }
+
     /// Active items in display order.
     pub async fn items(&self) -> Result<Vec<CalcItem>, BantoError> {
         let sql = format!(

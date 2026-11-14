@@ -24,8 +24,9 @@
 //! correction is never edited: a returned one is requested again.
 //! An entry dated in a closed month (月次締め, P6b) takes no write at all:
 //! every write checks the month in its transaction (`refuse_closed!`).
-//! On approval the `emp_rate` calc-basis row in effect on the work date and
-//! the labor cost are stored; without a rate the cost stays NULL (原価未確定,
+//! On approval the rate in effect on the work date - the person's own rate
+//! for the project, the person's rate, else the `emp_rate` calc-basis row
+//! (T43, `cost_domain::person_rate`) - and the labor cost are stored; without a rate the cost stays NULL (原価未確定,
 //! T04). A later calc-basis change never rewrites them (T03, design §10.5):
 //! the calc-basis preview counts them as correction candidates instead.
 //!
@@ -39,6 +40,7 @@ use banto_core::{BantoError, FieldError};
 use banto_server::ServerEvent;
 use banto_storage::{Db, Dialect};
 use cost_domain::calc_basis::{CalcValue, Source, Usage, UsageStatus};
+use cost_domain::person_rate::{self, PersonUsage};
 use cost_domain::time::{
     approval_cost, check_correction, check_entry, counts, summarize, CorrectionIssue,
     CorrectionTarget, DayEntry, EntryInput, Rework, SummaryEntry, Target, TimeIssue, TimeStatus,
@@ -539,10 +541,17 @@ impl TimeEntriesService {
             .iter()
             .filter_map(domain_row)
             .collect();
+        let rates = crate::person_rates::domain_rates(&crate::person_rates::load(&self.db).await?);
         for e in rows.iter_mut().filter(|e| awaiting(e)) {
             let work_date = parse_date("workDate", &e.work_date)?;
-            let pid = e.project_id.map(|p| p.to_string());
-            let cost = approval_cost(&values, pid.as_deref(), work_date, e.minutes);
+            let cost = approval_cost(
+                &values,
+                &rates,
+                e.user_id,
+                e.project_id,
+                work_date,
+                e.minutes,
+            );
             e.rate_missing = Some(cost.rate.is_none());
         }
         Ok(())
@@ -1198,14 +1207,27 @@ impl TimeEntriesService {
                 .value_rows(RATE_ITEM)
                 .await?;
             let values: Vec<CalcValue> = rows.iter().filter_map(domain_row).collect();
-            let pid = entry.project_id.map(|p| p.to_string());
-            let cost = approval_cost(&values, pid.as_deref(), work_date, entry.minutes);
+            let person_rows = crate::person_rates::load(&self.db).await?;
+            let rates = crate::person_rates::domain_rates(&person_rows);
+            let cost = approval_cost(
+                &values,
+                &rates,
+                entry.user_id,
+                entry.project_id,
+                work_date,
+                entry.minutes,
+            );
             let value_id = cost
                 .rate
                 .as_ref()
                 .and_then(|r| row_of(&rows, &r.source, entry.project_id));
+            // A personal rate (T43) records its own row; the calc-basis row stays NULL.
+            let person_rate_id =
+                person_rate::applicable(&rates, entry.user_id, entry.project_id, work_date)
+                    .and_then(|hit| crate::person_rates::row_id(&person_rows, hit));
             let sql = self.sql(&format!(
                 "UPDATE time_entries SET status = 'approved', applied_calc_value_id = ?, \
+                 applied_person_rate_id = ?, \
                  applied_rate = ?, labor_cost = ?, decided_by = ?, decided_at = {now}, \
                  row_version = row_version + 1, updated_at = {now} \
                  WHERE id = ? AND row_version = ? AND status = 'submitted'",
@@ -1220,7 +1242,7 @@ impl TimeEntriesService {
                         let _: Vec<(i64,)> = fetch_all!(&mut *tx, lock, entry.user_id)?;
                     }
                 }
-                let n = execute!(&mut *tx, sql, value_id, rate, cost.cost, actor_user_id, id,
+                let n = execute!(&mut *tx, sql, value_id, person_rate_id, rate, cost.cost, actor_user_id, id,
                     input.row_version)?;
                 refuse_closed!(&mut *tx, gate, &entry.work_date, "workDate");
                 if let Some(oid) = entry.corrects_id {
@@ -1370,7 +1392,7 @@ pub(crate) fn row_of(
                 && r.value.is_some()
                 && r.valid_from == valid_from.to_string()
         }),
-        Source::LineSpecific => None,
+        Source::LineSpecific | Source::Person { .. } => None,
     }
     .map(|r| r.id)
 }
@@ -1386,28 +1408,73 @@ pub(crate) async fn usages(db: &Db, item_key: &str) -> Result<Vec<Usage>, BantoE
     let closed = crate::closing::closed_months(db).await?;
     // A replaced entry and a returned correction are neither pending nor
     // correction candidates (T11).
-    let sql = format!(
-        "SELECT t.id, t.project_id, t.work_date, t.status, t.applied_rate \
+    // An entry costed by a personal rate (T43) is not changed by the
+    // company basis or a project override: its usage carries that rate.
+    let rates = crate::person_rates::domain_rates(&crate::person_rates::load(db).await?);
+    Ok(person_usages_with(db, None, &closed)
+        .await?
+        .into_iter()
+        .map(|mut u| {
+            u.usage.line_specific = person_rate::applicable(
+                &rates,
+                u.person,
+                u.usage.project.as_deref().and_then(|p| p.parse().ok()),
+                u.usage.on,
+            )
+            .and_then(|r| r.value);
+            u.usage
+        })
+        .collect())
+}
+
+/// Time entries as usages of `emp_rate` with the person they belong to (of
+/// `person` only when given), for the personal-rate impact preview (T44).
+pub(crate) async fn person_usages(
+    db: &Db,
+    person: Option<i64>,
+) -> Result<Vec<PersonUsage>, BantoError> {
+    let closed = crate::closing::closed_months(db).await?;
+    person_usages_with(db, person, &closed).await
+}
+
+async fn person_usages_with(
+    db: &Db,
+    person: Option<i64>,
+    closed: &[String],
+) -> Result<Vec<PersonUsage>, BantoError> {
+    // A replaced entry and a returned correction are neither pending nor
+    // correction candidates (T11).
+    type Row = (i64, i64, Option<i64>, String, String, Option<i64>);
+    let select = format!(
+        "SELECT t.id, t.user_id, t.project_id, t.work_date, t.status, t.applied_rate \
          FROM time_entries t WHERE {COUNTS}"
     );
-    type Row = (i64, Option<i64>, String, String, Option<i64>);
-    let rows: Vec<Row> = on_pool!(db, pool => fetch_all!(pool, sql))?;
+    let rows: Vec<Row> = match person {
+        Some(user) => {
+            let sql = placeholders(db.dialect(), &format!("{select} AND t.user_id = ?"));
+            on_pool!(db, pool => fetch_all!(pool, sql, user))?
+        }
+        None => on_pool!(db, pool => fetch_all!(pool, select))?,
+    };
     Ok(rows
         .into_iter()
-        .filter_map(|(id, project, date, status, rate)| {
-            Some(Usage {
-                id: id.to_string(),
-                item: RATE_ITEM.to_string(),
-                project: project.map(|p| p.to_string()),
-                on: Date::parse(&date)?,
-                status: if status == "approved" {
-                    UsageStatus::Approved
-                } else {
-                    UsageStatus::Pending
+        .filter_map(|(id, user, project, date, status, rate)| {
+            Some(PersonUsage {
+                person: user,
+                usage: Usage {
+                    id: id.to_string(),
+                    item: RATE_ITEM.to_string(),
+                    project: project.map(|p| p.to_string()),
+                    on: Date::parse(&date)?,
+                    status: if status == "approved" {
+                        UsageStatus::Approved
+                    } else {
+                        UsageStatus::Pending
+                    },
+                    closed: closed.contains(&crate::closing::month_of(&date)),
+                    line_specific: None,
+                    applied_value: rate,
                 },
-                closed: closed.contains(&crate::closing::month_of(&date)),
-                line_specific: None,
-                applied_value: rate,
             })
         })
         .collect())
@@ -1470,6 +1537,73 @@ mod tests {
             }
             other => panic!("validation expected, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn t43_approval_prefers_the_persons_rate_and_records_its_row() {
+        use crate::person_rates::{tests::rate as person, PersonRatesService};
+        let (db, svc, p) = setup().await;
+        set_rate(&db, "emp_rate", "2026-06-01", 5_000).await;
+        let people = PersonRatesService::new(db.clone());
+        let own = people
+            .add(person(2, None, "2026-06-01", Some(6_000)), Some(1))
+            .await
+            .unwrap();
+        // Before approval the entry is not 単価未登録: the personal rate applies.
+        let a = svc
+            .create(2, entry(p, "2026-11-09", 60))
+            .await
+            .unwrap()
+            .entry
+            .id;
+        let listed = svc.list_own(2, "2026-11-09", "2026-11-09").await.unwrap();
+        assert_eq!(listed[0].rate_missing, Some(false));
+        let approved = submit_and_approve(&svc, 2, a).await;
+        assert_eq!(approved.applied_rate, Some(6_000));
+        assert_eq!(approved.labor_cost, Some(6_000));
+        // The person's rate for this project wins over the person's rate.
+        let for_project = people
+            .add(person(2, Some(p), "2026-11-01", Some(7_000)), Some(1))
+            .await
+            .unwrap();
+        let b = svc
+            .create(2, entry(p, "2026-11-10", 60))
+            .await
+            .unwrap()
+            .entry
+            .id;
+        assert_eq!(submit_and_approve(&svc, 2, b).await.labor_cost, Some(7_000));
+        let sql = "SELECT id, applied_person_rate_id, applied_calc_value_id FROM time_entries \
+             ORDER BY id"
+            .to_string();
+        let rows: Vec<(i64, Option<i64>, Option<i64>)> =
+            on_pool!(&db, pool => fetch_all!(pool, sql)).unwrap();
+        assert_eq!(
+            rows,
+            vec![(a, Some(own.id), None), (b, Some(for_project.id), None)]
+        );
+        // A company change does not touch entries costed by a personal rate.
+        let preview = CalcBasisService::new(db.clone())
+            .preview(None, value("emp_rate", "2026-06-01", Some(5_500), "x"))
+            .await
+            .unwrap_err();
+        assert_eq!(fields(preview), vec!["validFrom".to_string()]);
+        let preview = CalcBasisService::new(db.clone())
+            .preview(None, value("emp_rate", "2026-10-01", Some(5_500), "x"))
+            .await
+            .unwrap();
+        assert_eq!(preview.correction_candidates, 0);
+        // Ending the project's personal rate falls back to the person's rate:
+        // the entry approved at 7,000 becomes a 当て直しの候補, the one
+        // approved at 6,000 already matches; nothing is rewritten (T44).
+        let found = people
+            .preview(person(2, Some(p), "2026-11-05", None))
+            .await
+            .unwrap();
+        assert_eq!((found.before, found.after), (Some(7_000), Some(6_000)));
+        assert_eq!(found.correction_candidates, 1);
+        assert_eq!(svc.get(b).await.unwrap().labor_cost, Some(7_000));
+        assert_eq!(svc.get(a).await.unwrap().labor_cost, Some(6_000));
     }
 
     #[tokio::test]

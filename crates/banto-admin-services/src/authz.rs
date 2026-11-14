@@ -255,9 +255,11 @@ pub enum Operation {
     /// project, self-approval by policy. `submitted_by` is the person whose
     /// hours are corrected (the one who requested the correction).
     ApproveCorrection { submitted_by: i64 },
-    /// Personal hourly cost rates (view).
+    /// Personal hourly cost rates (個人別単価, banto-cost T43): view. The
+    /// rates are per person (`finance.rate`), and seeing them presupposes
+    /// `amount.view`.
     ViewRates,
-    /// Personal hourly cost rates (register/change).
+    /// Personal hourly cost rates (register/change, preview the impact).
     EditRates,
     /// Revenue recognition, cost confirmation, monthly close, corrections.
     FinanceClose,
@@ -567,7 +569,10 @@ pub fn authorize(subject: &Subject, op: Operation, policy: Policy) -> Result<All
                 });
             }
         }
-        Operation::ViewRates | Operation::EditRates => require(subject, Capability::FinanceRate)?,
+        Operation::ViewRates | Operation::EditRates => {
+            require(subject, Capability::FinanceRate)?;
+            require(subject, Capability::AmountView)?;
+        }
         Operation::FinanceClose => require(subject, Capability::FinanceClose)?,
         Operation::CloseMonth => {
             require(subject, Capability::FinanceClose)?;
@@ -1565,9 +1570,15 @@ mod tests {
             deny(&pm, Operation::EditRates),
             Denial::MissingCapability(Capability::FinanceRate)
         );
-        let finance = subject(2, &[Capability::FinanceRate], &[]);
+        let finance = subject(2, &[Capability::FinanceRate, Capability::AmountView], &[]);
         allow(&finance, Operation::ViewRates);
         allow(&finance, Operation::EditRates);
+        // T43: personal rates are amounts - finance.rate alone is not enough.
+        let blind = subject(3, &[Capability::FinanceRate], &[]);
+        assert_eq!(
+            deny(&blind, Operation::EditRates),
+            Denial::MissingCapability(Capability::AmountView)
+        );
     }
 
     #[test]
