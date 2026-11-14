@@ -191,6 +191,11 @@
 					: money(v),
 			comparator: numeric
 		},
+		amountColumn(
+			'fundsLeftAfterBudget',
+			m['portfolio.colFundsLeftBudget'](),
+			(r) => r.fundsLeftAfterBudget
+		),
 		amountColumn('actualCost', m['portfolio.colActual'](), (r) => r.actualCost, actualMark),
 		amountColumn(
 			'forecastCost',
@@ -202,6 +207,12 @@
 			'forecastProfit',
 			m['portfolio.colForecastProfit'](),
 			(r) => r.forecastProfit,
+			forecastMark
+		),
+		amountColumn(
+			'fundsLeftAfterForecast',
+			m['portfolio.colFundsLeftForecast'](),
+			(r) => r.fundsLeftAfterForecast,
 			forecastMark
 		),
 		{

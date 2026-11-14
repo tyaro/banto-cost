@@ -5,7 +5,7 @@
 //!
 //! - 受注前（引合・見積中・交渉中）：受注予定月超過、営業見込の確認遅れ、確度・時期未設定。
 //! - 受注済みで精算前（受注・進行中・作業完了）：完了見込赤字、予算超過見込み、低利益率、
-//!   未承認、未確定追加売上、見込更新要、完了見込なし、未精算発注残（作業完了で発注残あり）。
+//!   原資超過見込み（T42）、未承認、未確定追加売上、見込更新要、完了見込なし、未精算発注残（作業完了で発注残あり）。
 //! - 失注・中止・保留・精算完了は標準の集計から外すので、注意を出さない。
 
 use crate::calendar::{Date, YearMonth};
@@ -32,6 +32,9 @@ pub enum Alert {
     ForecastOverBudget,
     /// 完了見込直接利益率が閾値を下回る（赤字のときは赤字だけを出す）。
     LowMargin,
+    /// 完了見込原価が原資（確定受注額 − 目標粗利）を超える（T42。赤字のときは赤字だけを出す。
+    /// 目標粗利率が未設定なら判定しない）。
+    ForecastOverFunds,
     /// 未承認（下書き・申請中・差戻し）の工数・直接費がある。
     Unapproved,
     /// 未確定追加売上（承認前の受注変更）がある。
@@ -55,6 +58,7 @@ impl Alert {
             Self::ForecastLoss => "forecast_loss",
             Self::ForecastOverBudget => "forecast_over_budget",
             Self::LowMargin => "low_margin",
+            Self::ForecastOverFunds => "forecast_over_funds",
             Self::Unapproved => "unapproved",
             Self::PendingAddition => "pending_addition",
             Self::ForecastUpdateNeeded => "forecast_update_needed",
@@ -97,6 +101,8 @@ pub struct OrderedFacts {
     pub order_amount: Option<Yen>,
     /// 現在の承認原価予算。予算がなければ `None`（予算超過見込みは判定しない）。
     pub budget: Option<Yen>,
+    /// 原資（`cost_domain::funds`）。目標粗利率が未設定・受注前なら `None`（原資超過見込みは判定しない）。
+    pub funds: Option<Yen>,
     pub forecast: Option<ForecastFacts>,
     /// 未承認の工数・直接費の件数。
     pub unapproved: usize,
@@ -154,6 +160,9 @@ pub fn evaluate(
                         if r < pct * 10 {
                             out.push(Alert::LowMargin);
                         }
+                    }
+                    if o.funds.is_some_and(|x| f.cost > x) {
+                        out.push(Alert::ForecastOverFunds);
                     }
                 }
             }
@@ -243,6 +252,7 @@ mod tests {
         OrderedFacts {
             order_amount: Some(4_000_000),
             budget: Some(2_600_000),
+            funds: None,
             forecast: Some(ForecastFacts {
                 cost,
                 update_reasons: vec![],
@@ -339,5 +349,77 @@ mod tests {
         ] {
             assert!(evaluate(s, None, None, d(TODAY), &Thresholds::default()).is_empty());
         }
+    }
+
+    #[test]
+    fn t42_原資超過見込み() {
+        let t = Thresholds::default();
+        // 確定受注4,000,000円・目標粗利率15% → 原資3,400,000円。
+        let with_funds = |cost| OrderedFacts {
+            funds: Some(3_400_000),
+            budget: None,
+            ..spec_ordered(cost)
+        };
+        assert_eq!(
+            evaluate(
+                ProjectStatus::InProgress,
+                None,
+                Some(&with_funds(3_500_000)),
+                d(TODAY),
+                &t
+            ),
+            vec![Alert::ForecastOverFunds]
+        );
+        // 原資ちょうどは超過ではない。
+        assert!(evaluate(
+            ProjectStatus::Ordered,
+            None,
+            Some(&with_funds(3_400_000)),
+            d(TODAY),
+            &t
+        )
+        .is_empty());
+        // 赤字は赤字だけ。
+        assert_eq!(
+            evaluate(
+                ProjectStatus::Ordered,
+                None,
+                Some(&with_funds(4_100_000)),
+                d(TODAY),
+                &t
+            ),
+            vec![Alert::ForecastLoss]
+        );
+        // 目標粗利率が未設定（原資なし）なら判定しない。
+        assert!(evaluate(
+            ProjectStatus::Ordered,
+            None,
+            Some(&OrderedFacts {
+                funds: None,
+                budget: None,
+                ..spec_ordered(3_900_000)
+            }),
+            d(TODAY),
+            &t
+        )
+        .is_empty());
+        // 低利益率と重ねて出す（閾値と目標は別の基準）。
+        let low = Thresholds {
+            review_delay_days: None,
+            low_margin_pct: Some(30),
+        };
+        assert_eq!(
+            evaluate(
+                ProjectStatus::WorkDone,
+                None,
+                Some(&OrderedFacts {
+                    committed: 0,
+                    ..with_funds(3_500_000)
+                }),
+                d(TODAY),
+                &low
+            ),
+            vec![Alert::LowMargin, Alert::ForecastOverFunds]
+        );
     }
 }

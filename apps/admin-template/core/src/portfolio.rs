@@ -24,7 +24,7 @@ use cost_domain::alerts::{
     REVIEW_DELAY_ITEM,
 };
 use cost_domain::forecast::profit;
-use cost_domain::funds::funds;
+use cost_domain::funds::{funds, funds_left};
 use cost_domain::money::ratio_permille;
 use cost_domain::project::ProjectStatus;
 use cost_domain::{Date, YearMonth};
@@ -77,6 +77,10 @@ pub struct PortfolioRow {
     pub target_margin_pct: Option<i64>,
     /// 原資 = confirmed order − order × 目標粗利率 (design §9.4 item 4, T36).
     pub funds: Option<i64>,
+    /// 原資 − the current approved budget (negative = over the funds, T42).
+    pub funds_left_after_budget: Option<i64>,
+    /// 原資 − 完了見込原価 (negative = over the funds, T42).
+    pub funds_left_after_forecast: Option<i64>,
     /// `cost_domain::alerts::Alert` codes.
     pub alerts: Vec<String>,
     /// `cost_domain::forecast::UpdateReason` codes of the latest version.
@@ -267,6 +271,8 @@ impl PortfolioService {
                 forecast_overrun: None,
                 target_margin_pct: None,
                 funds: None,
+                funds_left_after_budget: None,
+                funds_left_after_forecast: None,
                 alerts: Vec::new(),
                 update_reasons: Vec::new(),
             };
@@ -316,6 +322,8 @@ impl PortfolioService {
                 .await?
                 .0;
             row.funds = funds(order.confirmed_amount, row.target_margin_pct).map(|f| f.funds);
+            row.funds_left_after_budget = funds_left(row.funds, row.budget_total);
+            row.funds_left_after_forecast = funds_left(row.funds, row.forecast_cost);
             let low_margin_pct = if status.is_ordered_open() {
                 applied_value(&self.db, LOW_MARGIN_ITEM, Some(p.id), today)
                     .await?
@@ -326,6 +334,7 @@ impl PortfolioService {
             let ordered = OrderedFacts {
                 order_amount: order.confirmed_amount,
                 budget: row.budget_total,
+                funds: row.funds,
                 forecast: summary.latest.as_ref().map(|f| ForecastFacts {
                     cost: f.cost_total,
                     update_reasons: summary.update_reasons.clone(),
@@ -439,10 +448,8 @@ mod tests {
         p.rows.iter().find(|r| r.project_id == id).unwrap()
     }
 
-    #[tokio::test]
-    async fn t28_t30_alerts_amounts_and_totals_follow_the_scope() {
-        let db = fixture().await;
-        let (spec, _, _) = spec_project(&db, "P-L01").await;
+    /// Adopts the spec project's forecast: 完了見込原価 2,900,000円 (27.5%).
+    async fn adopt_spec_forecast(db: &Db, spec: i64) {
         let forecasts = ForecastsService::new(db.clone());
         let d = forecasts.create_draft(spec, Some(2)).await.unwrap().draft;
         let d = forecasts
@@ -464,6 +471,98 @@ mod tests {
             .await
             .unwrap();
         forecasts.adopt(&d, d.row_version, Some(1)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn t42_funds_left_and_the_over_funds_alert() {
+        let db = fixture().await;
+        let (spec, _, _) = spec_project(&db, "P-G01").await;
+        adopt_spec_forecast(&db, spec).await;
+        let bare = ordered_project(&db, "P-G02", vec![line(None, 1_000_000)]).await;
+        let svc = PortfolioService::new(db.clone());
+        let over_funds = Alert::ForecastOverFunds.as_str().to_string();
+
+        // 目標粗利率が未設定なら原資との差も注意も出さない（0% で比べない）。
+        let all = svc
+            .overview(&ProjectScope::All, &ProjectScope::All)
+            .await
+            .unwrap();
+        let r = row(&all, spec);
+        assert_eq!(r.forecast_cost, Some(2_900_000));
+        assert_eq!(r.funds_left_after_budget, None);
+        assert_eq!(r.funds_left_after_forecast, None);
+        assert!(!r.alerts.contains(&over_funds));
+
+        // 15%：原資3,400,000円。予算2,600,000円・完了見込2,900,000円はどちらも原資内。
+        let basis = CalcBasisService::new(db.clone());
+        basis
+            .add(
+                None,
+                value(TARGET_MARGIN_ITEM, "2020-01-01", Some(15), "初期"),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let all = svc
+            .overview(&ProjectScope::All, &ProjectScope::All)
+            .await
+            .unwrap();
+        let r = row(&all, spec);
+        assert_eq!(r.funds_left_after_budget, Some(800_000));
+        assert_eq!(r.funds_left_after_forecast, Some(500_000));
+        assert!(!r.alerts.contains(&over_funds));
+        // 予算・完了見込のない案件は差を出さない。
+        let b = row(&all, bare);
+        assert_eq!(b.funds, Some(850_000));
+        assert_eq!(b.funds_left_after_budget, None);
+        assert_eq!(b.funds_left_after_forecast, None);
+
+        // この案件だけ30%：原資2,800,000円。完了見込が100,000円超える。
+        basis
+            .add(
+                Some(spec),
+                value(TARGET_MARGIN_ITEM, "2020-01-01", Some(30), "この案件だけ"),
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let all = svc
+            .overview(&ProjectScope::All, &ProjectScope::All)
+            .await
+            .unwrap();
+        let r = row(&all, spec);
+        assert_eq!(r.funds, Some(2_800_000));
+        assert_eq!(r.funds_left_after_budget, Some(200_000));
+        assert_eq!(r.funds_left_after_forecast, Some(-100_000));
+        assert!(r.alerts.contains(&over_funds), "{:?}", r.alerts);
+        assert_eq!(r.budget_total, Some(2_600_000), "承認済み予算は変わらない");
+        assert!(all
+            .totals
+            .alert_counts
+            .iter()
+            .any(|c| c.alert == over_funds && c.count == 1));
+        // 案件詳細の要約にも同じ行。
+        assert_eq!(&svc.project(spec).await.unwrap().row, r);
+
+        // 金額を見られない案件は差も注意も出さない（T12）。
+        let some = svc
+            .overview(
+                &ProjectScope::All,
+                &ProjectScope::Only(BTreeSet::from([bare])),
+            )
+            .await
+            .unwrap();
+        let hidden = row(&some, spec);
+        assert_eq!(hidden.funds_left_after_budget, None);
+        assert_eq!(hidden.funds_left_after_forecast, None);
+        assert!(hidden.alerts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn t28_t30_alerts_amounts_and_totals_follow_the_scope() {
+        let db = fixture().await;
+        let (spec, _, _) = spec_project(&db, "P-L01").await;
+        adopt_spec_forecast(&db, spec).await;
         // A second ordered project without a forecast, a pre-order one whose
         // order month (2026-11 in the fixture version) is not past yet.
         let bare = ordered_project(&db, "P-L02", vec![line(None, 1_000_000)]).await;

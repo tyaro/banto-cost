@@ -13,7 +13,8 @@
 	 * The figures are the overall list's row of this project
 	 * (`GET /api/projects/{id}/summary`, Tauri `project_summary`): the
 	 * confirmed order, the current approved budget, the approved actuals, the
-	 * latest adopted completion forecast with its profit and ratio, 原資, and
+	 * latest adopted completion forecast with its profit and ratio, 原資 and
+	 * how far the budget and the forecast stay within it (T42), and
 	 * the alerts judged by `cost_domain::alerts` on the server — never a
 	 * second copy of those rules here. Unset stays 未設定 / 算出不可, never 0.
 	 *
@@ -233,6 +234,20 @@
 						<span class="value"
 							>{summary.targetMarginPct === null ? m['cost.unset']() : money(summary.funds)}</span
 						>
+						{#if summary.fundsLeftAfterBudget !== null}
+							<span class="label" class:short={summary.fundsLeftAfterBudget < 0}
+								>{m['projectSummary.fundsLeftBudget']({
+									amount: formatSignedYen(summary.fundsLeftAfterBudget)
+								})}</span
+							>
+						{/if}
+						{#if summary.fundsLeftAfterForecast !== null}
+							<span class="label" class:short={summary.fundsLeftAfterForecast < 0}
+								>{m['projectSummary.fundsLeftForecast']({
+									amount: formatSignedYen(summary.fundsLeftAfterForecast)
+								})}</span
+							>
+						{/if}
 					</div>
 				</div>
 				{#if summary.forecastActualComplete === false}
@@ -315,6 +330,11 @@
 
 	.value.over {
 		color: var(--banto-danger);
+	}
+
+	/* Over the funds (原資 − amount below zero, T42). */
+	.label.short {
+		color: var(--banto-warning-tint-text);
 	}
 
 	.warn {

@@ -330,6 +330,47 @@ test.describe.serial('banto-cost business flow on one fictional project', () => 
 		await expect(region(page, '利益の要約')).toContainText('完了見込なし');
 	});
 
+	test('8b. 原資: a forecast over the funds shows the difference and the alert in the summary', async () => {
+		// 目標粗利率 20% on this project only: 原資 = ¥3,000,000 − ¥600,000 = ¥2,400,000.
+		await api(page, 'POST', `/api/projects/${projectId}/calc-basis`, {
+			itemKey: 'target_margin_pct',
+			validFrom: '2020-01-01',
+			value: 20,
+			reason: 'E2E架空の目標粗利率'
+		});
+		// ¥135,000 approved + ¥2,400,000 to come = ¥2,535,000: a profit, over the funds.
+		const { draft } = await api<{ draft: { id: number; baseDate: string; rowVersion: number } }>(
+			page,
+			'POST',
+			`/api/projects/${projectId}/forecast/draft`,
+			{}
+		);
+		const saved = await api<{ rowVersion: number }>(
+			page,
+			'PUT',
+			`/api/forecast-versions/${draft.id}`,
+			{
+				baseDate: draft.baseDate,
+				plannedEnd: null,
+				reason: 'E2E架空の外注見込',
+				lines: [
+					{ phaseId: null, costType: 'outsource', remainingMinutes: null, amount: 2_400_000 }
+				],
+				rowVersion: draft.rowVersion
+			}
+		);
+		await api(page, 'POST', `/api/forecast-versions/${draft.id}/adopt`, {
+			rowVersion: saved.rowVersion
+		});
+
+		await page.goto(`/projects/${projectId}`);
+		const summary = region(page, '利益の要約');
+		await expect(summary).toContainText('原資（目標粗利率 20%） ¥2,400,000');
+		await expect(summary).toContainText('原資−完了見込 -¥135,000');
+		await expect(summary).toContainText('原資超過見込み');
+		await expect(summary).not.toContainText('完了見込赤字');
+	});
+
 	test('9. ダッシュボード: a loss forecast shows under 確認すること and leads to the overall list', async () => {
 		const before = await expectedCounts(page, month, previousOf(month));
 		// The completion forecast is set-up here (its screen is not the flow

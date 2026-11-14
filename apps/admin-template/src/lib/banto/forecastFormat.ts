@@ -21,6 +21,7 @@ const ALERTS: Record<string, () => string> = {
 	forecast_loss: () => m['alerts.forecastLoss'](),
 	forecast_over_budget: () => m['alerts.forecastOverBudget'](),
 	low_margin: () => m['alerts.lowMargin'](),
+	forecast_over_funds: () => m['alerts.forecastOverFunds'](),
 	unapproved: () => m['alerts.unapproved'](),
 	pending_addition: () => m['alerts.pendingAddition'](),
 	forecast_update_needed: () => m['alerts.forecastUpdateNeeded'](),
