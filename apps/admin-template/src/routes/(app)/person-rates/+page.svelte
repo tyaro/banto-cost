@@ -13,7 +13,7 @@
 	 * 未設定, never 0. Demo mode has no backend.
 	 */
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
-	import { getDataProvider, isProviderError } from '@banto/admin-core';
+	import { isProviderError } from '@banto/admin-core';
 	import * as m from '#lib/paraglide/messages.js';
 	import {
 		getPersonRates,
@@ -21,7 +21,6 @@
 		type PersonRates
 	} from '#lib/banto/personRatesAdmin.js';
 	import { isPipelineAvailable } from '#lib/banto/pipelineAdmin.js';
-	import type { Project } from '#lib/banto/resources/projects.js';
 	import { formatCalcValue, isForbiddenError, todayIso } from '#lib/banto/costFormat.js';
 	import { sessionStore } from '#lib/session.svelte.js';
 	import { canWriteResources } from '#lib/permissions.js';
@@ -37,7 +36,11 @@
 	let loadError = $state<unknown>(null);
 	let loadToken = 0;
 	const forbidden = $derived(isForbiddenError(loadError));
-	let projects = $state<{ value: number; label: string }[]>([]);
+	/** The scope choices come with the rates (every project, `ViewRates`), not
+	 *  from the membership-scoped project list (PR #64 review). */
+	const projects = $derived(
+		(rates?.projects ?? []).map((p) => ({ value: p.id, label: `${p.code} ${p.name}` }))
+	);
 	/** The person whose history (and, when `editing`, change form) is open. */
 	let selectedId = $state<number | null>(null);
 	let editing = $state(false);
@@ -67,26 +70,9 @@
 		}
 	}
 
-	async function loadProjects() {
-		try {
-			const result = await getDataProvider().getList<Project>('projects', {
-				sort: [{ field: 'code', direction: 'asc' }],
-				filters: [],
-				pagination: { offset: 0, limit: 5_000 }
-			});
-			projects = result.rows.map((p) => ({ value: p.id, label: `${p.code} ${p.name}` }));
-		} catch {
-			projects = [];
-		}
-	}
-
 	$effect(() => {
 		void on;
 		void load();
-	});
-
-	$effect(() => {
-		if (available) void loadProjects();
 	});
 
 	function open(userId: number, edit: boolean) {

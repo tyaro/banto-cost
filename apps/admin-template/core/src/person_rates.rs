@@ -75,11 +75,24 @@ pub struct PersonView {
     pub history: Vec<PersonRateRow>,
 }
 
+/// A project a rate can be set for (the form's choices).
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectChoice {
+    pub id: i64,
+    pub code: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonRates {
     pub on: String,
     pub people: Vec<PersonView>,
+    /// Every project, for the per-project scope. Rates are company-wide
+    /// (`ViewRates`), so the choices are not limited to the caller's
+    /// memberships the way the project list is (PR #64 review).
+    pub projects: Vec<ProjectChoice>,
 }
 
 /// A new row. `projectId: null` = every project; `value: null` ends the rate.
@@ -268,9 +281,12 @@ impl PersonRatesService {
                 history: mine.into_iter().cloned().collect(),
             });
         }
+        let projects: Vec<ProjectChoice> = on_pool!(&self.db, pool => fetch_all!(pool,
+            "SELECT id, code, name FROM projects ORDER BY code, id".to_string()))?;
         Ok(PersonRates {
             on: date.to_string(),
             people,
+            projects,
         })
     }
 
@@ -464,6 +480,9 @@ pub(crate) mod tests {
         let listed = svc.list("2026-11-14").await.unwrap();
         assert_eq!(listed.people.len(), 2);
         assert!(listed.people.iter().all(|p| p.current.is_none()));
+        // The scope choices list every project, not only the caller's.
+        assert_eq!(listed.projects.len(), 1);
+        assert_eq!(listed.projects[0].code, "P-001");
 
         svc.add(rate(2, None, "2026-06-01", Some(6_000)), Some(1))
             .await

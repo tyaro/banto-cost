@@ -674,4 +674,4 @@ calc_values(id, item_key, scope{company|project}, project_id NULL,
 - 認可：閲覧は `ViewRates`、追加と影響の確認は `EditRates`（どちらも `finance.rate`＋`amount.view`、2026-11-14 に `amount.view` を必須にした）。REST `GET /api/person-rates?on`・`POST /api/person-rates/preview`・`POST /api/person-rates`（書き込みは editor 以上）、Tauri `person_rates_get`・`person_rates_preview`・`person_rates_add`（`ops::person_rates`）。監査には人・案件・適用開始日・版・やめる行かだけを残し、単価と理由は残さない。
 - 影響の確認（10.5 と同じ数え方、`cost_domain::person_rate::impact`）：適用開始日の現在の単価と変更後の単価（④までの全段で解決）、値が変わる案件、承認時に新しい単価で計算する下書き・申請中、承認済みで保存した単価と新しい適用値が違う工数（当て直しの候補、T44）、締め済みの月を含むか。承認済みは書き換えない。会社基準・案件の上書きの影響確認では、個人別の単価が効く工数を数えない。
 - 締め済みの月の工数の当て直しは、月を再開してから行う（今の訂正と同じ規則、2026-11-14 ユーザー決定）。当て直しの一覧と一括の操作は次の段階（§8-9 再計算訂正を兼ねる）。
-- 画面：管理設定「個人別単価」（`/person-rates`、`finance.rate`＋`amount.view` の人だけナビに出す）。基準日の各人の単価（全案件）・版・予定の変更・案件ごとの単価、人を選ぶと履歴と追加フォーム（範囲・やめる・単価・適用開始日・理由、「影響を確認」してから保存）。
+- 画面：管理設定「個人別単価」（`/person-rates`、`finance.rate`＋`amount.view` の人だけナビに出す）。基準日の各人の単価（全案件）・版・予定の変更・案件ごとの単価、人を選ぶと履歴と追加フォーム（範囲・やめる・単価・適用開始日・理由、「影響を確認」してから保存）。範囲の案件の選択肢は一覧の応答（`projects`、全案件）から取る。案件台帳の一覧は担当の案件に絞られるため、担当のない経理でも案件ごとの単価を登録できるようにする。

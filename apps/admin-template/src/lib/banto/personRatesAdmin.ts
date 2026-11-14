@@ -53,6 +53,8 @@ export interface PersonView {
 export interface PersonRates {
 	on: string;
 	people: PersonView[];
+	/** Every project, for the per-project scope (not limited to the caller's memberships). */
+	projects: { id: number; code: string; name: string }[];
 }
 
 /** A new row. `projectId: null` = every project; `value: null` ends the rate. */
