@@ -26,8 +26,13 @@ pub struct CalcValue {
 /// 適用値の出典。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
-    /// 明細で個別に指定された値（外注先・契約ごとの単価、個人別単価など）。
+    /// 明細で個別に指定された値（外注先・契約ごとの単価など）。
     LineSpecific,
+    /// 個人別の単価（`person_rate`）。`project_specific` はその人のその案件だけの単価。
+    Person {
+        valid_from: Date,
+        project_specific: bool,
+    },
     ProjectOverride {
         valid_from: Date,
     },
