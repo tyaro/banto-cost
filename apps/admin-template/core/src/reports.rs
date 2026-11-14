@@ -859,6 +859,13 @@ mod tests {
         assert_eq!(csv.row_count, 2);
         let lines = csv_lines(&csv);
         assert!(lines.iter().any(|l| l.contains("うち金額を表示 1件")));
+        // T42: 原資との差の2列は予算超過見込の後、注意表示の前。
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(",予算超過見込,原資−予算,原資−完了見込,注意表示")),
+            "{lines:?}"
+        );
         let row_a = lines.iter().find(|l| l.starts_with("P-R07,")).unwrap();
         assert!(row_a.contains(",1000000,"), "{row_a}");
         let row_b = lines.iter().find(|l| l.starts_with("P-R08,")).unwrap();
