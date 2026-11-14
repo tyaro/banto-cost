@@ -331,7 +331,7 @@ impl PersonRatesService {
             PersonRateError::NothingToEnd => BantoError::Validation {
                 field_errors: vec![field_error(
                     "value",
-                    "この範囲には個人別の単価がありません（やめる単価がありません）",
+                    "この日の前にこの範囲で効いている個人別の単価がありません（やめる単価がありません）",
                 )],
             },
         })?;

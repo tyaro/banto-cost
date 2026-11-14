@@ -93,7 +93,7 @@ pub fn resolve_rate(
 pub enum PersonRateError {
     /// 同じ人・同じ範囲・同じ適用開始日の行がすでにある。
     DuplicateValidFrom,
-    /// 「やめる」行だが、この範囲に単価の行がない。
+    /// 「やめる」行だが、その日の直前にこの範囲で効いている単価がない。
     NothingToEnd,
 }
 
@@ -106,8 +106,16 @@ pub fn validate_new(rates: &[PersonRate], new: &PersonRate) -> Result<(), Person
     if scope.iter().any(|r| r.valid_from == new.valid_from) {
         return Err(PersonRateError::DuplicateValidFrom);
     }
-    if new.value.is_none() && !scope.iter().any(|r| r.value.is_some()) {
-        return Err(PersonRateError::NothingToEnd);
+    // やめる行は、その日の直前にこの範囲で効いている単価があるときだけ置ける
+    // （未来にだけ単価がある・すでにやめている範囲には置けない）。
+    if new.value.is_none() {
+        let in_effect = scope
+            .iter()
+            .filter(|r| r.valid_from < new.valid_from)
+            .max_by_key(|r| (r.valid_from, r.version));
+        if !matches!(in_effect, Some(PersonRate { value: Some(_), .. })) {
+            return Err(PersonRateError::NothingToEnd);
+        }
     }
     Ok(())
 }
@@ -349,6 +357,29 @@ mod tests {
         );
         assert_eq!(
             validate_new(&rates, &person(7, None, "2026-07-01", None, 2)),
+            Ok(())
+        );
+        // 単価の開始前の日にはやめられない。
+        assert_eq!(
+            validate_new(&rates, &person(7, None, "2026-05-01", None, 2)),
+            Err(PersonRateError::NothingToEnd)
+        );
+        // 未来にだけ単価がある範囲・すでにやめた範囲にもやめる行は置けない。
+        let future = vec![person(7, Some(1), "2026-12-01", Some(6_500), 1)];
+        assert_eq!(
+            validate_new(&future, &person(7, Some(1), "2026-06-01", None, 2)),
+            Err(PersonRateError::NothingToEnd)
+        );
+        let ended = vec![
+            person(7, None, "2026-06-01", Some(6_000), 1),
+            person(7, None, "2026-08-01", None, 2),
+        ];
+        assert_eq!(
+            validate_new(&ended, &person(7, None, "2026-09-01", None, 3)),
+            Err(PersonRateError::NothingToEnd)
+        );
+        assert_eq!(
+            validate_new(&ended, &person(7, None, "2026-07-01", None, 3)),
             Ok(())
         );
         assert_eq!(next_version(&rates, 7, None), 2);
