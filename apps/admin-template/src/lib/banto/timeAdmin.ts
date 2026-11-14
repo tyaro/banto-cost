@@ -293,6 +293,49 @@ export async function listPendingCorrections(): Promise<CorrectionPair[]> {
 	return httpRequest<CorrectionPair[]>('/api/time-entries/corrections', { method: 'GET' });
 }
 
+/**
+ * An approved entry whose saved rate differs from the rate that applies now
+ * (単価の当て直しの候補, T45). Mirrors `time_entries::RerateCandidate`.
+ */
+export interface RerateCandidate {
+	entry: TimeEntry;
+	newRate: number;
+	newCost: number;
+	source: 'personProject' | 'person' | 'projectOverride' | 'company';
+	/** Why it cannot be rerated now; `null` = it can. */
+	blocked: 'closed_month' | 'settled' | 'correction_pending' | null;
+}
+
+export interface RerateList {
+	candidates: RerateCandidate[];
+	/** Approved entries that still have no rate anywhere. */
+	noRate: number;
+}
+
+/** The rerate candidates (`finance.rate` + `amount.view` + `finance.close`). */
+export async function listRerates(): Promise<RerateList> {
+	guard();
+	if (tauri()) return invokeCommand<RerateList>('time_entries_rerates');
+	return httpRequest<RerateList>('/api/time-entries/rerates', { method: 'GET' });
+}
+
+/**
+ * Rerate one approved entry with the rate that applies now: an approved
+ * correction of it (the entry stays as history). `rowVersion` is the entry's (T13);
+ * `expectedRate` is the confirmed `newRate` - a different rate now is refused.
+ */
+export async function rerateEntry(
+	id: number,
+	values: { rowVersion: number; expectedRate: number; reason: string }
+): Promise<TimeEntry> {
+	guard();
+	if (tauri()) return invokeCommand<TimeEntry>('time_entries_rerate', { id, values });
+	return httpRequest<TimeEntry>(`/api/time-entries/${id}/rerate`, {
+		method: 'POST',
+		body: values
+	});
+}
+
 /** A project's hours (amounts: `ViewProjectAmounts`). */
 export async function getProjectTimeSummary(projectId: number): Promise<ProjectTimeSummary> {
 	guard();

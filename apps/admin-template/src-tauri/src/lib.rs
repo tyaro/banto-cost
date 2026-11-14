@@ -76,8 +76,8 @@ use admin_template_core::system_info::SystemInfoService;
 #[cfg(feature = "system-metrics")]
 use admin_template_core::system_metrics::SystemMetricsSampler;
 use admin_template_core::time_entries::{
-    CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntriesService,
-    TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
+    CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, RerateInput, RerateList,
+    TimeEntriesService, TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
 };
 use admin_template_core::user_names::UserName;
 use admin_template_core::users::{Role, UserIdentity, UserIdentityView, UserSummary, UsersService};
@@ -4179,6 +4179,38 @@ async fn time_entries_pending_corrections_body(
     ops::time::pending_corrections(&gate, &state.time_entries).await
 }
 
+/// Tauri twin of `GET /api/time-entries/rerates` (単価の当て直し, T45).
+#[tauri::command]
+async fn time_entries_rerates(state: State<'_, AppState>) -> Result<RerateList, BantoError> {
+    time_entries_rerates_body(&state).await
+}
+
+async fn time_entries_rerates_body(state: &AppState) -> Result<RerateList, BantoError> {
+    let identity = require_role(state, Role::Viewer, TIME_RESOURCE).await?;
+    let gate = tauri_gate(state, &identity).await?;
+    ops::time::rerate_candidates(&gate, &state.time_entries).await
+}
+
+/// Tauri twin of `POST /api/time-entries/{id}/rerate` (T45).
+#[tauri::command]
+async fn time_entries_rerate(
+    state: State<'_, AppState>,
+    id: i64,
+    values: RerateInput,
+) -> Result<TimeEntry, BantoError> {
+    time_entries_rerate_body(&state, id, values).await
+}
+
+async fn time_entries_rerate_body(
+    state: &AppState,
+    id: i64,
+    values: RerateInput,
+) -> Result<TimeEntry, BantoError> {
+    let actor = require_role(state, Role::Editor, "business").await?;
+    let gate = tauri_gate(state, &actor).await?;
+    ops::time::rerate(&gate, &state.time_entries, id, values).await
+}
+
 #[tauri::command]
 async fn project_time_summary(
     state: State<'_, AppState>,
@@ -5930,6 +5962,8 @@ pub fn run() {
             time_entries_correct,
             time_entries_corrections,
             time_entries_pending_corrections,
+            time_entries_rerates,
+            time_entries_rerate,
             project_time_summary,
             project_budget,
             budget_draft_create,

@@ -42,9 +42,10 @@ use banto_storage::{Db, Dialect};
 use cost_domain::calc_basis::{CalcValue, Source, Usage, UsageStatus};
 use cost_domain::person_rate::{self, PersonUsage};
 use cost_domain::time::{
-    approval_cost, check_correction, check_entry, counts, summarize, CorrectionIssue,
-    CorrectionTarget, DayEntry, EntryInput, Rework, SummaryEntry, Target, TimeIssue, TimeStatus,
-    TimeSummary, TimeWarning, DAY_LIMIT, RATE_ITEM, UNIT_ITEM,
+    approval_cost, check_correction, check_entry, counts, rerate, rerate_block, summarize,
+    CorrectionIssue, CorrectionTarget, DayEntry, EntryInput, Rerate, RerateBlock, Rework,
+    SummaryEntry, Target, TimeIssue, TimeStatus, TimeSummary, TimeWarning, DAY_LIMIT, RATE_ITEM,
+    UNIT_ITEM,
 };
 use cost_domain::{calc_basis, Date, Minutes};
 use serde::{Deserialize, Serialize};
@@ -221,6 +222,66 @@ pub struct DecisionInput {
     /// Required when returning (差戻しの理由).
     #[serde(default)]
     pub reason: Option<String>,
+}
+
+/// An approved entry whose saved rate differs from the rate that applies now
+/// (単価の当て直しの候補, design §10.9, T45). Amounts: `EditRates`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RerateCandidate {
+    /// The entry as approved (its saved rate and cost, `null` = 原価未確定).
+    pub entry: TimeEntry,
+    pub new_rate: i64,
+    pub new_cost: i64,
+    /// Where the new rate comes from: `personProject` | `person` |
+    /// `projectOverride` | `company`.
+    pub source: &'static str,
+    /// Why it cannot be rerated now: `closed_month` | `settled` |
+    /// `correction_pending`; `null` = it can.
+    pub blocked: Option<&'static str>,
+}
+
+/// The candidates, and how many approved entries have no rate that applies
+/// now (never costed, or their rate ended after approval).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RerateList {
+    pub candidates: Vec<RerateCandidate>,
+    pub no_rate: usize,
+}
+
+/// One rerate: the version of the approved entry read and the reason.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RerateInput {
+    pub row_version: i64,
+    /// The new rate the caller confirmed (the list's `newRate`): the rerate
+    /// is refused when the rate that applies now differs, so the amount
+    /// stored is the amount shown (PR #65 review). The minutes are fixed by
+    /// `rowVersion`, so the same rate means the same cost.
+    pub expected_rate: i64,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+fn source_key(source: &Source) -> &'static str {
+    match source {
+        Source::Person {
+            project_specific: true,
+            ..
+        } => "personProject",
+        Source::Person { .. } => "person",
+        Source::ProjectOverride { .. } => "projectOverride",
+        Source::Company { .. } | Source::LineSpecific => "company",
+    }
+}
+
+fn block_key(block: RerateBlock) -> &'static str {
+    match block {
+        RerateBlock::ClosedMonth => "closed_month",
+        RerateBlock::Settled => "settled",
+        RerateBlock::CorrectionPending => "correction_pending",
+    }
 }
 
 /// A warning that does not block the save (spec §6.1).
@@ -406,6 +467,32 @@ fn correction_error(issue: &CorrectionIssue) -> FieldError {
         CorrectionIssue::Pending => pending_correction_error(),
         CorrectionIssue::ReasonRequired => field_error("reason", "訂正の理由を入力してください"),
     }
+}
+
+const SAME_RATE_MESSAGE: &str = "保存した単価と今の単価が同じです。当て直しは要りません";
+const NO_RATE_MESSAGE: &str =
+    "この工数の単価がまだ決まっていません。単価を登録してから当て直してください";
+
+/// The rate that applies now is the one the caller confirmed.
+fn confirmed(cost: &cost_domain::time::ApprovedCost, expected: i64) -> bool {
+    cost.rate.as_ref().map(|r| r.value) == Some(expected)
+}
+
+/// The rate changed after the caller confirmed it (`expectedRate`).
+fn rate_moved_error() -> BantoError {
+    BantoError::Validation {
+        field_errors: vec![field_error(
+            "expectedRate",
+            "確認した後に単価が変わりました。一覧を読み直して、もう一度確認してください",
+        )],
+    }
+}
+
+/// A rate was added while a rerate ran: the cost it computed may be stale.
+fn rates_changed_error() -> BantoError {
+    status_error(
+        "当て直しの間に単価が変わりました。一覧を読み直してから、もう一度当て直してください",
+    )
 }
 
 fn pending_correction_error() -> FieldError {
@@ -1304,6 +1391,222 @@ impl TimeEntriesService {
         }
         self.notify_changed();
         self.get(id).await
+    }
+
+    /// Approved entries to rerate (T45): those whose saved rate differs from
+    /// the rate that applies now (the approval's order, `cost_domain::time::
+    /// rerate`), oldest first, each with what would stop it now. Entries
+    /// still without any rate are only counted.
+    pub async fn rerate_candidates(&self) -> Result<RerateList, BantoError> {
+        let sql =
+            format!("{SELECT} WHERE t.status = 'approved' AND {COUNTS} ORDER BY t.work_date, t.id");
+        let rows: Vec<TimeEntry> = on_pool!(&self.db, pool => fetch_all!(pool, sql))?;
+        let settled_sql = "SELECT id FROM projects WHERE status = 'settled'".to_string();
+        let settled: Vec<(i64,)> = on_pool!(&self.db, pool => fetch_all!(pool, settled_sql))?;
+        let closed = crate::closing::closed_months(&self.db).await?;
+        let values: Vec<CalcValue> = CalcBasisService::new(self.db.clone())
+            .value_rows(RATE_ITEM)
+            .await?
+            .iter()
+            .filter_map(domain_row)
+            .collect();
+        let rates = crate::person_rates::domain_rates(&crate::person_rates::load(&self.db).await?);
+        let mut out = RerateList {
+            candidates: Vec::new(),
+            no_rate: 0,
+        };
+        for entry in rows {
+            let Some(work_date) = Date::parse(&entry.work_date) else {
+                continue;
+            };
+            let found = rerate(
+                &values,
+                &rates,
+                entry.user_id,
+                entry.project_id,
+                work_date,
+                entry.minutes,
+                entry.applied_rate,
+            );
+            match found {
+                Rerate::Same => {}
+                // Counted with or without a saved rate (a rate that ended
+                // after approval leaves the entry here too, PR #65 review).
+                Rerate::NoRate => out.no_rate += 1,
+                Rerate::Candidate(cost) => {
+                    let rate = cost.rate.expect("a candidate has a rate");
+                    let blocked = rerate_block(
+                        closed.contains(&crate::closing::month_of(&entry.work_date)),
+                        entry
+                            .project_id
+                            .is_some_and(|p| settled.iter().any(|(s,)| *s == p)),
+                        entry.correction_pending,
+                    )
+                    .map(block_key);
+                    out.candidates.push(RerateCandidate {
+                        new_rate: rate.value,
+                        new_cost: cost.cost.expect("a rate gives a cost"),
+                        source: source_key(&rate.source),
+                        blocked,
+                        entry,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Rerate the approved entry `id` (単価の当て直し, T45): a correction of
+    /// it with the same values and the reason, approved at once by
+    /// `actor_user_id` with the rate that applies now (P6b-2's history: the
+    /// entry stays, replaced). Refused when the rate is unchanged or still
+    /// missing, the month is closed (reopen first), the project is settled,
+    /// a correction waits, or the entry changed since it was read (T13).
+    pub async fn rerate(
+        &self,
+        id: i64,
+        input: RerateInput,
+        actor_user_id: Option<i64>,
+    ) -> Result<TimeEntry, BantoError> {
+        let original = self.get(id).await?;
+        if input.row_version != original.row_version {
+            return Err(stale_version_error());
+        }
+        let reason = clean_optional(&input.reason);
+        let status = TimeStatus::parse(&original.status)
+            .ok_or_else(|| BantoError::Other(format!("不明な状態です: {}", original.status)))?;
+        let target = CorrectionTarget {
+            status,
+            replaced: original.replaced_by_id.is_some(),
+            pending: original.correction_pending,
+        };
+        let mut errors: Vec<FieldError> = match check_correction(target, reason.as_deref()) {
+            Ok(()) => Vec::new(),
+            Err(issues) => issues.iter().map(correction_error).collect(),
+        };
+        if reason
+            .as_deref()
+            .is_some_and(|r| r.chars().count() > MAX_TEXT_LEN)
+        {
+            errors.push(field_error(
+                "reason",
+                format!("{MAX_TEXT_LEN}文字以内で入力してください"),
+            ));
+        }
+        validation(errors)?;
+        if let Some(pid) = original.project_id {
+            self.require_open_project(pid).await?;
+        }
+        let work_date = parse_date("workDate", &original.work_date)?;
+        // The rate rows are append-only: their count and newest id show
+        // whether one was added while this rerate ran (PR #65 review).
+        let fingerprint = self.sql(
+            "SELECT (SELECT COUNT(*) FROM calc_values WHERE item_key = ?), \
+             (SELECT COALESCE(MAX(id), 0) FROM calc_values WHERE item_key = ?), \
+             (SELECT COUNT(*) FROM person_rates WHERE user_id = ?), \
+             (SELECT COALESCE(MAX(id), 0) FROM person_rates WHERE user_id = ?)",
+        );
+        let person = original.user_id;
+        let read: Option<(i64, i64, i64, i64)> = on_pool!(&self.db, pool => fetch_optional!(pool,
+            fingerprint, RATE_ITEM, RATE_ITEM, person, person))?;
+        let read = read.unwrap_or_default();
+        let rows = CalcBasisService::new(self.db.clone())
+            .value_rows(RATE_ITEM)
+            .await?;
+        let values: Vec<CalcValue> = rows.iter().filter_map(domain_row).collect();
+        let person_rows = crate::person_rates::load(&self.db).await?;
+        let rates = crate::person_rates::domain_rates(&person_rows);
+        let found = rerate(
+            &values,
+            &rates,
+            original.user_id,
+            original.project_id,
+            work_date,
+            original.minutes,
+            original.applied_rate,
+        );
+        let cost = match found {
+            Rerate::Candidate(cost) if confirmed(&cost, input.expected_rate) => cost,
+            Rerate::Candidate(_) => return Err(rate_moved_error()),
+            Rerate::Same => return Err(status_error(SAME_RATE_MESSAGE)),
+            Rerate::NoRate => return Err(status_error(NO_RATE_MESSAGE)),
+        };
+        let value_id = cost
+            .rate
+            .as_ref()
+            .and_then(|r| row_of(&rows, &r.source, original.project_id));
+        let person_rate_id =
+            person_rate::applicable(&rates, original.user_id, original.project_id, work_date)
+                .and_then(|hit| crate::person_rates::row_id(&person_rows, hit));
+        let rate = cost.rate.map(|r| r.value);
+        // Re-read in the transaction: approved, not replaced, same version (T13).
+        let still = self.sql(&format!(
+            "SELECT t.id FROM time_entries t WHERE t.id = ? AND t.status = 'approved' \
+             AND t.row_version = ? AND {COUNTS}"
+        ));
+        let touch = self.sql(&format!(
+            "UPDATE time_entries SET row_version = row_version + 1, updated_at = {} \
+             WHERE id = ? AND row_version = ?",
+            self.now()
+        ));
+        let insert = self.sql(&format!(
+            "INSERT INTO time_entries (work_date, user_id, project_id, activity_id, phase_id, \
+             minutes, description, rework_kind, status, submitted_at, corrects_id, \
+             correction_reason, applied_calc_value_id, applied_person_rate_id, applied_rate, \
+             labor_cost, decided_by, decided_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', {now}, ?, ?, ?, ?, ?, ?, ?, {now}) \
+             RETURNING id",
+            now = self.now()
+        ));
+        let settled = settled_check_sql(self.db.dialect());
+        let gate = MonthGate::new(self.db.dialect());
+        let version = original.row_version;
+        // Postgres: hold rate inserts until this commits, so the rate checked
+        // below is the one stored (SQLite already serializes writers).
+        let lock_rates = match self.db.dialect() {
+            Dialect::Postgres => {
+                Some("LOCK TABLE calc_values, person_rates IN SHARE MODE".to_string())
+            }
+            Dialect::Sqlite => None,
+        };
+        let result: Result<i64, BantoError> = async {
+            Ok(in_tx!(&self.db, tx => {
+                let live: Option<(i64,)> = fetch_optional!(&mut *tx, still, id, version)?;
+                if live.is_none() || execute!(&mut *tx, touch, id, version)? == 0 {
+                    return Err(stale_version_error());
+                }
+                if let Some(lock) = &lock_rates {
+                    execute!(&mut *tx, lock)?;
+                }
+                let now: Option<(i64, i64, i64, i64)> = fetch_optional!(&mut *tx, fingerprint,
+                    RATE_ITEM, RATE_ITEM, person, person)?;
+                if now.unwrap_or_default() != read {
+                    return Err(rates_changed_error());
+                }
+                let new_id: i64 = scalar!(&mut *tx, insert, &original.work_date,
+                    original.user_id, original.project_id, original.activity_id,
+                    original.phase_id, original.minutes, &original.description,
+                    &original.rework_kind, id, &reason, value_id, person_rate_id, rate,
+                    cost.cost, actor_user_id)?;
+                refuse_closed!(&mut *tx, gate, &original.work_date, "workDate");
+                if let Some(p) = original.project_id {
+                    refuse_settled!(&mut *tx, settled, p, "projectId", SETTLED_MESSAGE);
+                }
+                new_id
+            }))
+        }
+        .await;
+        let new_id = match result {
+            Ok(v) => v,
+            Err(BantoError::Storage(m)) if is_correction_conflict(&m) => {
+                return Err(BantoError::Validation {
+                    field_errors: vec![pending_correction_error()],
+                });
+            }
+            Err(e) => return Err(e),
+        };
+        self.notify_changed();
+        self.get(new_id).await
     }
 
     /// A project's hours: approved only as actuals, the rest counted apart
@@ -2533,5 +2836,279 @@ mod tests {
             ["minutes"]
         );
         assert_eq!(svc.get(longer.id).await.unwrap().status, "submitted");
+    }
+
+    /// The rerate as the screen sends it, having confirmed 6,000 yen/h.
+    fn rerate_input(e: &TimeEntry, reason: Option<&str>) -> RerateInput {
+        RerateInput {
+            row_version: e.row_version,
+            expected_rate: 6_000,
+            reason: reason.map(Into::into),
+        }
+    }
+
+    #[tokio::test]
+    async fn t45_rerate_replaces_the_entry_with_the_rate_that_applies_now() {
+        use crate::person_rates::{tests::rate as person, PersonRatesService};
+        let (db, svc, p) = setup().await;
+        // Approved with no rate anywhere (原価未確定), and one costed at 5,000.
+        let a = svc
+            .create(2, entry(p, "2026-10-20", 90))
+            .await
+            .unwrap()
+            .entry;
+        let a = submit_and_approve(&svc, 2, a.id).await;
+        assert_eq!(a.labor_cost, None);
+        let before = svc.rerate_candidates().await.unwrap();
+        assert!(before.candidates.is_empty());
+        assert_eq!(before.no_rate, 1, "still without a rate: only counted");
+        set_rate(&db, "emp_rate", "2026-11-01", 5_000).await;
+        let b = svc
+            .create(2, entry(p, "2026-11-09", 60))
+            .await
+            .unwrap()
+            .entry;
+        let b = submit_and_approve(&svc, 2, b.id).await;
+        assert_eq!(b.applied_rate, Some(5_000));
+        assert!(svc.rerate_candidates().await.unwrap().candidates.is_empty());
+        // The person's rate is decided later: both become candidates.
+        let own = PersonRatesService::new(db.clone())
+            .add(person(2, None, "2026-10-01", Some(6_000)), Some(1))
+            .await
+            .unwrap();
+        let list = svc.rerate_candidates().await.unwrap();
+        assert_eq!(list.no_rate, 0);
+        type Row<'a> = (i64, Option<i64>, i64, i64, &'a str, Option<&'a str>);
+        let got: Vec<Row> = list
+            .candidates
+            .iter()
+            .map(|c| {
+                (
+                    c.entry.id,
+                    c.entry.applied_rate,
+                    c.new_rate,
+                    c.new_cost,
+                    c.source,
+                    c.blocked,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (a.id, None, 6_000, 9_000, "person", None),
+                (b.id, Some(5_000), 6_000, 6_000, "person", None),
+            ]
+        );
+        // A reason is required; an old version is refused (T13).
+        assert_eq!(
+            fields(
+                svc.rerate(a.id, rerate_input(&a, None), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["reason"]
+        );
+        // A rate other than the one confirmed is refused (the amount shown).
+        let mut other = rerate_input(&a, Some("単価の決定"));
+        other.expected_rate = 5_000;
+        assert_eq!(
+            fields(svc.rerate(a.id, other, Some(1)).await.unwrap_err()),
+            ["expectedRate"]
+        );
+        let mut stale = rerate_input(&a, Some("単価の決定"));
+        stale.row_version -= 1;
+        assert!(svc.rerate(a.id, stale, Some(1)).await.is_err());
+        let r = svc
+            .rerate(a.id, rerate_input(&a, Some("単価の決定")), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(r.status, "approved");
+        assert_eq!(r.corrects_id, Some(a.id));
+        assert_eq!(r.correction_reason.as_deref(), Some("単価の決定"));
+        assert_eq!((r.applied_rate, r.labor_cost), (Some(6_000), Some(9_000)));
+        assert_eq!(
+            (r.minutes, r.work_date.as_str(), r.project_id),
+            (90, "2026-10-20", Some(p))
+        );
+        assert_eq!(r.user_id, 2, "still the person's entry");
+        let sql = placeholders(
+            db.dialect(),
+            "SELECT applied_person_rate_id, decided_by FROM time_entries WHERE id = ?",
+        );
+        let row: (Option<i64>, Option<i64>) =
+            on_pool!(&db, pool => fetch_optional!(pool, sql, r.id))
+                .unwrap()
+                .unwrap();
+        assert_eq!(row, (Some(own.id), Some(1)));
+        // The original stays as history, replaced; the figures count the new row.
+        let original = svc.get(a.id).await.unwrap();
+        assert_eq!(original.replaced_by_id, Some(r.id));
+        assert_eq!(original.labor_cost, None);
+        let summary = svc.project_summary(p).await.unwrap();
+        assert_eq!(summary.total.approved.count, 2);
+        assert_eq!(summary.total.labor_cost, 9_000 + 5_000);
+        assert_eq!(summary.total.missing_rate.count, 0);
+        // Rerating again is refused: the replaced entry, then the unchanged one.
+        let original = svc.get(a.id).await.unwrap();
+        assert_eq!(
+            fields(
+                svc.rerate(a.id, rerate_input(&original, Some("再")), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["status"]
+        );
+        assert_eq!(
+            fields(
+                svc.rerate(r.id, rerate_input(&r, Some("再")), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["status"],
+            "the rate is the same"
+        );
+        let left: Vec<i64> = svc
+            .rerate_candidates()
+            .await
+            .unwrap()
+            .candidates
+            .iter()
+            .map(|c| c.entry.id)
+            .collect();
+        assert_eq!(left, vec![b.id]);
+    }
+
+    #[tokio::test]
+    async fn t45_closed_months_settled_projects_and_waiting_corrections_block_a_rerate() {
+        use crate::closing::{CloseInput, ClosingService, ReopenInput};
+        use crate::person_rates::{tests::rate as person, PersonRatesService};
+        let (db, svc, p) = setup().await;
+        let oct = svc
+            .create(2, entry(p, "2026-10-05", 60))
+            .await
+            .unwrap()
+            .entry;
+        let oct = submit_and_approve(&svc, 2, oct.id).await;
+        let nov = svc
+            .create(2, entry(p, "2026-11-05", 60))
+            .await
+            .unwrap()
+            .entry;
+        let nov = submit_and_approve(&svc, 2, nov.id).await;
+        let closing = ClosingService::new(db.clone());
+        closing
+            .close("2026-10", CloseInput { row_version: 1 }, Some(1))
+            .await
+            .unwrap();
+        PersonRatesService::new(db.clone())
+            .add(person(2, None, "2026-06-01", Some(6_000)), Some(1))
+            .await
+            .unwrap();
+        // A correction of November waits for approval.
+        svc.correct(2, nov.id, correction(&nov, 30, Some("時間の誤り")))
+            .await
+            .unwrap();
+        let nov = svc.get(nov.id).await.unwrap();
+        let list = svc.rerate_candidates().await.unwrap();
+        let blocked: Vec<(i64, Option<&str>)> = list
+            .candidates
+            .iter()
+            .map(|c| (c.entry.id, c.blocked))
+            .collect();
+        assert_eq!(
+            blocked,
+            vec![
+                (oct.id, Some("closed_month")),
+                (nov.id, Some("correction_pending"))
+            ]
+        );
+        assert_eq!(
+            fields(
+                svc.rerate(oct.id, rerate_input(&oct, Some("単価の決定")), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["workDate"]
+        );
+        assert_eq!(
+            fields(
+                svc.rerate(nov.id, rerate_input(&nov, Some("単価の決定")), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["status"]
+        );
+        assert!(svc.get(oct.id).await.unwrap().replaced_by_id.is_none());
+        // After reopening the month it can be rerated.
+        let m = closing.get("2026-10").await.unwrap();
+        closing
+            .reopen(
+                "2026-10",
+                ReopenInput {
+                    row_version: m.row_version,
+                    reason: "単価の当て直し".into(),
+                },
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let oct = svc.get(oct.id).await.unwrap();
+        let r = svc
+            .rerate(oct.id, rerate_input(&oct, Some("単価の決定")), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(r.labor_cost, Some(6_000));
+        // A settled project's entries are listed as blocked and refused.
+        let sql = placeholders(
+            db.dialect(),
+            "UPDATE projects SET status = 'settled' WHERE id = ?",
+        );
+        on_pool!(&db, pool => execute!(pool, sql, p)).unwrap();
+        let other = PersonRatesService::new(db.clone())
+            .add(person(2, None, "2026-10-01", Some(6_500)), Some(1))
+            .await
+            .unwrap();
+        assert!(other.id > 0);
+        let list = svc.rerate_candidates().await.unwrap();
+        let r_row = list.candidates.iter().find(|c| c.entry.id == r.id).unwrap();
+        assert_eq!(r_row.blocked, Some("settled"));
+        assert_eq!(
+            fields(
+                svc.rerate(r.id, rerate_input(&r, Some("単価の決定")), Some(1))
+                    .await
+                    .unwrap_err()
+            ),
+            ["projectId"]
+        );
+    }
+
+    #[tokio::test]
+    async fn t45_entries_whose_rate_ended_are_counted_as_without_a_rate() {
+        use crate::person_rates::{tests::rate as person, PersonRatesService};
+        let (db, svc, p) = setup().await;
+        let people = PersonRatesService::new(db.clone());
+        people
+            .add(person(2, None, "2026-06-01", Some(6_000)), Some(1))
+            .await
+            .unwrap();
+        let e = svc
+            .create(2, entry(p, "2026-10-05", 60))
+            .await
+            .unwrap()
+            .entry;
+        assert_eq!(
+            submit_and_approve(&svc, 2, e.id).await.applied_rate,
+            Some(6_000)
+        );
+        // The rate ends before the work date: no rate applies now, but the
+        // saved one is kept and the entry is counted, not listed.
+        people
+            .add(person(2, None, "2026-10-01", None), Some(1))
+            .await
+            .unwrap();
+        let list = svc.rerate_candidates().await.unwrap();
+        assert!(list.candidates.is_empty());
+        assert_eq!(list.no_rate, 1);
     }
 }

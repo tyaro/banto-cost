@@ -342,6 +342,61 @@ pub fn counts(status: TimeStatus, is_correction: bool, replaced: bool) -> bool {
     !(is_correction && status == TimeStatus::Returned)
 }
 
+/// 承認済みの工数の単価の当て直し（2026-11-14 ユーザー決定、設計書 10.9、T45）の判定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rerate {
+    /// 今の適用値が保存した単価と違う：この単価と労務原価で当て直せる。
+    Candidate(ApprovedCost),
+    /// 保存した単価と今の適用値が同じ（当て直しは要らない）。
+    Same,
+    /// 今も単価がない。単価を決めてから当て直す（未設定を0円にしない）。
+    NoRate,
+}
+
+/// 承認済みの工数（保存した単価 `saved_rate`）を、今の個人別単価・計算基準で当て直せるか。
+/// 単価は承認と同じ順（`approval_cost`）で決める。今の適用値がない工数は当て直さない
+/// （保存した単価を消して原価未確定に戻すことはしない）。
+pub fn rerate(
+    values: &[CalcValue],
+    rates: &[PersonRate],
+    person: i64,
+    project: Option<i64>,
+    work_date: Date,
+    minutes: Minutes,
+    saved_rate: Option<Yen>,
+) -> Rerate {
+    let cost = approval_cost(values, rates, person, project, work_date, minutes);
+    match &cost.rate {
+        None => Rerate::NoRate,
+        Some(r) if Some(r.value) == saved_rate => Rerate::Same,
+        Some(_) => Rerate::Candidate(cost),
+    }
+}
+
+/// 当て直しの候補でも、今は当て直せない理由（訂正と同じ規則）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RerateBlock {
+    /// 作業日の月が締め済み。月を再開してから当て直す。
+    ClosedMonth,
+    /// 案件が精算完了。
+    Settled,
+    /// 申請中の訂正がある。承認か差戻しを待つ。
+    CorrectionPending,
+}
+
+/// 当て直しを止める理由（最初の1つ）。どれもなければ `None`。
+pub fn rerate_block(closed_month: bool, settled: bool, pending: bool) -> Option<RerateBlock> {
+    if closed_month {
+        Some(RerateBlock::ClosedMonth)
+    } else if settled {
+        Some(RerateBlock::Settled)
+    } else if pending {
+        Some(RerateBlock::CorrectionPending)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,6 +740,75 @@ mod tests {
         assert!(
             counts(TimeStatus::Returned, false, false),
             "通常の差戻しは未申請"
+        );
+    }
+
+    #[test]
+    fn t45_単価が決まった承認済み工数だけを当て直しの候補にする() {
+        let values = [rate("2026-11-01", 5_000, 1)];
+        // 単価がないまま承認した工数（保存単価なし）：個人別単価6,000円で当て直す。
+        let rates = vec![PersonRate {
+            person: 7,
+            project: None,
+            valid_from: d("2026-10-01"),
+            value: Some(6_000),
+            version: 1,
+        }];
+        match rerate(&values, &rates, 7, Some(1), d("2026-10-20"), 90, None) {
+            Rerate::Candidate(c) => {
+                assert_eq!(c.rate.unwrap().value, 6_000);
+                assert_eq!(c.cost, Some(9_000));
+            }
+            other => panic!("{other:?}"),
+        }
+        // 会社標準5,000円で承認した工数も、個人別単価ができたら候補。
+        assert!(matches!(
+            rerate(
+                &values,
+                &rates,
+                7,
+                Some(1),
+                d("2026-11-09"),
+                60,
+                Some(5_000)
+            ),
+            Rerate::Candidate(_)
+        ));
+        // 保存した単価と今の適用値が同じなら候補にしない。
+        assert_eq!(
+            rerate(
+                &values,
+                &rates,
+                7,
+                Some(1),
+                d("2026-11-09"),
+                60,
+                Some(6_000)
+            ),
+            Rerate::Same
+        );
+        // 今も単価がない工数は当て直さない（0円にしない・保存単価を消さない）。
+        assert_eq!(
+            rerate(&values, &[], 8, Some(1), d("2026-10-20"), 60, None),
+            Rerate::NoRate
+        );
+        assert_eq!(
+            rerate(&[], &[], 8, Some(1), d("2026-10-20"), 60, Some(5_000)),
+            Rerate::NoRate
+        );
+    }
+
+    #[test]
+    fn t45_締め済みの月と精算完了と申請中の訂正は当て直せない() {
+        assert_eq!(rerate_block(false, false, false), None);
+        assert_eq!(
+            rerate_block(true, true, true),
+            Some(RerateBlock::ClosedMonth)
+        );
+        assert_eq!(rerate_block(false, true, true), Some(RerateBlock::Settled));
+        assert_eq!(
+            rerate_block(false, false, true),
+            Some(RerateBlock::CorrectionPending)
         );
     }
 }

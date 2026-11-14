@@ -18,6 +18,8 @@
 //! | an entry's corrections | own entry; `EnterCommonTime` |
 //! | pending corrections | `finance.close` (others: empty) |
 //! | project time summary | `ViewProjectAmounts` |
+//! | rerate candidates | `EditRates` + `FinanceClose` (単価の当て直し, T45) |
+//! | rerate an entry | `EditRates` + `ApproveCorrection` with `APPROVAL_POLICY` |
 //!
 //! An entry's rate and labor cost are shown only to `sees_record_costs`
 //! (`finance.rate` + `amount.view`): cost ÷ minutes is the person's rate
@@ -31,8 +33,8 @@ use banto_server::AuthenticatedSession;
 
 use crate::ops;
 use crate::time_entries::{
-    CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntry, TimeEntryInput,
-    TimeEntrySaved, VersionInput,
+    CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, RerateInput, RerateList,
+    TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
 };
 use crate::work_masters::{MasterKind, WorkMaster, WorkMasterInput};
 
@@ -247,6 +249,28 @@ async fn project_time_summary(
     ))
 }
 
+async fn rerates_list(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+) -> Result<Json<RerateList>, ApiError> {
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::time::rerate_candidates(&gate, &state.time_entries).await?,
+    ))
+}
+
+async fn entries_rerate(
+    State(state): State<BusinessState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(id): Path<i64>,
+    Json(input): Json<RerateInput>,
+) -> Result<Json<TimeEntry>, ApiError> {
+    let gate = state.gate(&session).await?;
+    Ok(Json(
+        ops::time::rerate(&gate, &state.time_entries, id, input).await?,
+    ))
+}
+
 /// Reads (session only; the decision is in each handler).
 pub(super) fn time_read_router(
     services: BusinessServices,
@@ -259,6 +283,7 @@ pub(super) fn time_read_router(
         .route("/api/time-entries", get(entries_list))
         .route("/api/time-entries/approvals", get(approvals_list))
         .route("/api/time-entries/corrections", get(corrections_pending))
+        .route("/api/time-entries/rerates", get(rerates_list))
         .route(
             "/api/time-entries/{id}/corrections",
             get(entries_corrections),
@@ -290,6 +315,7 @@ pub(super) fn time_write_router(
         .route("/api/time-entries/{id}/submit", post(entries_submit))
         .route("/api/time-entries/{id}/decide", post(entries_decide))
         .route("/api/time-entries/{id}/correct", post(entries_correct))
+        .route("/api/time-entries/{id}/rerate", post(entries_rerate))
         .with_state(super::projects::state(services, audit.clone()))
         .layer(middleware::from_fn_with_state(
             RoleGuard {

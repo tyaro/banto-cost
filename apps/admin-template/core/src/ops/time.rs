@@ -7,6 +7,9 @@
 //! `approval_projects` (activities with `finance.close`); accounting's
 //! correction queue is `finance.close` (others: empty). A project's time
 //! summary is `ViewProjectAmounts`.
+//! 単価の当て直し (T45) is `EditRates` and `FinanceClose` (listing), then per
+//! entry `ApproveCorrection` under `APPROVAL_POLICY`: a rerate is a
+//! correction approved at once by accounting.
 //!
 //! An entry's rate and labor cost are shown only to `sees_record_costs`
 //! (`time_access::shown`): cost ÷ minutes is the person's rate (spec §4).
@@ -21,8 +24,8 @@ use super::Gate;
 use crate::approval::APPROVAL_POLICY;
 use crate::time_access::{approve_op, enter_op, shown, shown_own, shown_pair, shown_saved};
 use crate::time_entries::{
-    CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, TimeEntriesService,
-    TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
+    CorrectionInput, CorrectionPair, DecisionInput, ProjectTimeSummary, RerateInput, RerateList,
+    TimeEntriesService, TimeEntry, TimeEntryInput, TimeEntrySaved, VersionInput,
 };
 
 const RESOURCE: &str = "time_entries";
@@ -237,4 +240,53 @@ pub async fn project_summary(
     gate.check(Operation::ViewProjectAmounts { project_id }, RESOURCE)
         .await?;
     entries.project_summary(project_id).await
+}
+
+/// 単価の当て直しの候補 (T45): the rates and costs of everyone's approved
+/// entries, so `EditRates` (`finance.rate` + `amount.view`) and
+/// `FinanceClose` (the rerate is a correction accounting approves).
+pub async fn rerate_candidates(
+    gate: &Gate<'_>,
+    entries: &TimeEntriesService,
+) -> Result<RerateList, BantoError> {
+    gate.check(Operation::EditRates, RESOURCE).await?;
+    let subject = gate.check(Operation::FinanceClose, RESOURCE).await?;
+    let mut list = entries.rerate_candidates().await?;
+    for c in &mut list.candidates {
+        c.entry = shown(&subject, c.entry.clone());
+    }
+    Ok(list)
+}
+
+/// Rerate one approved entry (T45): `EditRates`, then `ApproveCorrection`
+/// for the entry's person under `APPROVAL_POLICY` (self-approval allowed and
+/// audited). The audit has the dates and minutes, never the rate or reason.
+pub async fn rerate(
+    gate: &Gate<'_>,
+    entries: &TimeEntriesService,
+    id: i64,
+    input: RerateInput,
+) -> Result<TimeEntry, BantoError> {
+    gate.check(Operation::EditRates, RESOURCE).await?;
+    let entry = entries.get(id).await?;
+    let (subject, allowed) = gate
+        .check_with(
+            Operation::ApproveCorrection {
+                submitted_by: entry.user_id,
+            },
+            APPROVAL_POLICY,
+            RESOURCE,
+        )
+        .await?;
+    let rerated = entries.rerate(id, input, gate.user_id()).await?;
+    let mut detail = rerated.audit_detail();
+    detail["selfApproval"] = json!(allowed.self_approval_exception);
+    gate.record(
+        "rerate",
+        RESOURCE,
+        Some(&rerated.id.to_string()),
+        Some(detail),
+    )
+    .await;
+    Ok(shown(&subject, rerated))
 }

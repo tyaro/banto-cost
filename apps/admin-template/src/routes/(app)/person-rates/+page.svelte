@@ -11,6 +11,10 @@
 	 * Reading and changing need `finance.rate` + `amount.view`; the server
 	 * decides and a `forbidden` read shows the no-access state. No rate is
 	 * 未設定, never 0. Demo mode has no backend.
+	 *
+	 * Below the rates, 単価の当て直し (RerateSection.svelte, T45) lists the
+	 * approved entries whose saved rate differs from the rate now, and reads
+	 * again after a rate is saved.
 	 */
 	import { PageHeader, EmptyState, ErrorState, LoadingState } from '@banto/ui';
 	import { isProviderError } from '@banto/admin-core';
@@ -26,6 +30,7 @@
 	import { canWriteResources } from '#lib/permissions.js';
 	import { guardUnsavedChanges } from '#lib/unsavedChanges.js';
 	import PersonRateForm from '#lib/components/PersonRateForm.svelte';
+	import RerateSection from '#lib/components/RerateSection.svelte';
 
 	const UNIT = 'yen_per_hour';
 	const available = isPipelineAvailable();
@@ -45,9 +50,12 @@
 	let selectedId = $state<number | null>(null);
 	let editing = $state(false);
 	let formPending = $state({ dirty: false, busy: false });
+	let reratePending = $state({ dirty: false, busy: false });
+	/** Bumped after a rate is saved: the rerate candidates change with it. */
+	let rerateKey = $state(0);
 	const guard = guardUnsavedChanges({
-		isDirty: () => editing && formPending.dirty,
-		isSaving: () => formPending.busy
+		isDirty: () => (editing && formPending.dirty) || reratePending.dirty,
+		isSaving: () => formPending.busy || reratePending.busy
 	});
 
 	const selected = $derived(rates?.people.find((p) => p.userId === selectedId) ?? null);
@@ -263,6 +271,7 @@
 							onSaved={() => {
 								editing = false;
 								formPending = { dirty: false, busy: false };
+								rerateKey += 1;
 								void load();
 							}}
 							onCancel={() => {
@@ -275,6 +284,11 @@
 				{/if}
 			</section>
 		{/if}
+		<RerateSection
+			reloadKey={rerateKey}
+			{canWrite}
+			onPendingChange={(pending) => (reratePending = pending)}
+		/>
 		<p class="sr-only" aria-live="polite">{guard.pending ? m['unsaved.notice']() : ''}</p>
 	{/if}
 </div>
