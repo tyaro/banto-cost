@@ -241,8 +241,8 @@ pub struct RerateCandidate {
     pub blocked: Option<&'static str>,
 }
 
-/// The candidates, and how many approved entries still have no rate at all
-/// (they are rerated once a rate is set).
+/// The candidates, and how many approved entries have no rate that applies
+/// now (never costed, or their rate ended after approval).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RerateList {
@@ -462,6 +462,13 @@ fn correction_error(issue: &CorrectionIssue) -> FieldError {
         CorrectionIssue::Pending => pending_correction_error(),
         CorrectionIssue::ReasonRequired => field_error("reason", "訂正の理由を入力してください"),
     }
+}
+
+/// A rate was added while a rerate ran: the cost it computed may be stale.
+fn rates_changed_error() -> BantoError {
+    status_error(
+        "当て直しの間に単価が変わりました。一覧を読み直してから、もう一度当て直してください",
+    )
 }
 
 fn pending_correction_error() -> FieldError {
@@ -1399,11 +1406,9 @@ impl TimeEntriesService {
             );
             match found {
                 Rerate::Same => {}
-                Rerate::NoRate => {
-                    if entry.applied_rate.is_none() {
-                        out.no_rate += 1;
-                    }
-                }
+                // Counted with or without a saved rate (a rate that ended
+                // after approval leaves the entry here too, PR #65 review).
+                Rerate::NoRate => out.no_rate += 1,
                 Rerate::Candidate(cost) => {
                     let rate = cost.rate.expect("a candidate has a rate");
                     let blocked = rerate_block(
@@ -1469,6 +1474,18 @@ impl TimeEntriesService {
             self.require_open_project(pid).await?;
         }
         let work_date = parse_date("workDate", &original.work_date)?;
+        // The rate rows are append-only: their count and newest id show
+        // whether one was added while this rerate ran (PR #65 review).
+        let fingerprint = self.sql(
+            "SELECT (SELECT COUNT(*) FROM calc_values WHERE item_key = ?), \
+             (SELECT COALESCE(MAX(id), 0) FROM calc_values WHERE item_key = ?), \
+             (SELECT COUNT(*) FROM person_rates WHERE user_id = ?), \
+             (SELECT COALESCE(MAX(id), 0) FROM person_rates WHERE user_id = ?)",
+        );
+        let person = original.user_id;
+        let read: Option<(i64, i64, i64, i64)> = on_pool!(&self.db, pool => fetch_optional!(pool,
+            fingerprint, RATE_ITEM, RATE_ITEM, person, person))?;
+        let read = read.unwrap_or_default();
         let rows = CalcBasisService::new(self.db.clone())
             .value_rows(RATE_ITEM)
             .await?;
@@ -1525,11 +1542,27 @@ impl TimeEntriesService {
         let settled = settled_check_sql(self.db.dialect());
         let gate = MonthGate::new(self.db.dialect());
         let version = original.row_version;
+        // Postgres: hold rate inserts until this commits, so the rate checked
+        // below is the one stored (SQLite already serializes writers).
+        let lock_rates = match self.db.dialect() {
+            Dialect::Postgres => {
+                Some("LOCK TABLE calc_values, person_rates IN SHARE MODE".to_string())
+            }
+            Dialect::Sqlite => None,
+        };
         let result: Result<i64, BantoError> = async {
             Ok(in_tx!(&self.db, tx => {
                 let live: Option<(i64,)> = fetch_optional!(&mut *tx, still, id, version)?;
                 if live.is_none() || execute!(&mut *tx, touch, id, version)? == 0 {
                     return Err(stale_version_error());
+                }
+                if let Some(lock) = &lock_rates {
+                    execute!(&mut *tx, lock)?;
+                }
+                let now: Option<(i64, i64, i64, i64)> = fetch_optional!(&mut *tx, fingerprint,
+                    RATE_ITEM, RATE_ITEM, person, person)?;
+                if now.unwrap_or_default() != read {
+                    return Err(rates_changed_error());
                 }
                 let new_id: i64 = scalar!(&mut *tx, insert, &original.work_date,
                     original.user_id, original.project_id, original.activity_id,
@@ -3020,5 +3053,34 @@ mod tests {
             ),
             ["projectId"]
         );
+    }
+
+    #[tokio::test]
+    async fn t45_entries_whose_rate_ended_are_counted_as_without_a_rate() {
+        use crate::person_rates::{tests::rate as person, PersonRatesService};
+        let (db, svc, p) = setup().await;
+        let people = PersonRatesService::new(db.clone());
+        people
+            .add(person(2, None, "2026-06-01", Some(6_000)), Some(1))
+            .await
+            .unwrap();
+        let e = svc
+            .create(2, entry(p, "2026-10-05", 60))
+            .await
+            .unwrap()
+            .entry;
+        assert_eq!(
+            submit_and_approve(&svc, 2, e.id).await.applied_rate,
+            Some(6_000)
+        );
+        // The rate ends before the work date: no rate applies now, but the
+        // saved one is kept and the entry is counted, not listed.
+        people
+            .add(person(2, None, "2026-10-01", None), Some(1))
+            .await
+            .unwrap();
+        let list = svc.rerate_candidates().await.unwrap();
+        assert!(list.candidates.is_empty());
+        assert_eq!(list.no_rate, 1);
     }
 }

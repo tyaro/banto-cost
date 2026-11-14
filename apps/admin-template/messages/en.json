@@ -1893,7 +1893,7 @@
   "rerate.title": "Rerate approved hours",
   "rerate.description": "Approved time entries whose saved rate differs from the rate that applies now (personal rates and the calculation basis). Each picked entry is replaced by an approved correction costed with the current rate; the original stays in the history.",
   "rerate.forbiddenNote": "Rerating needs the rate editing, amount viewing and month closing (accounting) capabilities.",
-  "rerate.noRate": "{count} approved entries still have no rate anywhere. Once a rate is set they are listed here.",
+  "rerate.noRate": "{count} approved entries have no rate that applies now (including entries after a rate ended). Once a rate is set they are listed here.",
   "rerate.empty": "Nothing to rerate.",
   "rerate.pickAll": "Pick every entry that can be rerated",
   "rerate.pickOne": "Pick the entry of {name} on {date}",
